@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+
+# Logs
+logs/
+*.log
+
+# Data & model artifacts (large binaries — regenerate locally)
+*.pdf
+*.faiss
+*.pkl
+vectorstore/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local-only folders (not pushed to repo)
+demo/
+Prompts/
