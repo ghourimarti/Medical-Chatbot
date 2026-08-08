@@ -1,0 +1,42 @@
+# CI shell (S2). S17 extends this with: RAGAS eval gate (blocking), Trivy image scan
+# (fail on HIGH/CRITICAL), gitleaks + pip-audit, ECR push via GitHub OIDC, and the
+# ArgoCD/Argo-Rollouts canary. For now: lint -> type -> unit, on every PR and push to main.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync workspace
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type-check (mypy)
+        run: uv run mypy packages/core/src/medcore packages/eval/src/medeval
+
+      - name: Unit tests (pytest)
+        # Keyless: unit suite + the mock-target eval smoke run here. The RAGAS/demo
+        # baseline needs a provider key and is NOT run in CI (S17 adds a gated smoke).
+        run: uv run pytest -q

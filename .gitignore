@@ -22,6 +22,9 @@ ENV/
 logs/
 *.log
 
+# medeval curation cache (regenerate with extract_corpus.py --build-cache)
+.cache/
+
 # Data & model artifacts (large binaries — regenerate locally)
 *.pdf
 *.faiss

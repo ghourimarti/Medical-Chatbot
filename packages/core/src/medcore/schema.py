@@ -1,0 +1,136 @@
+"""Domain contracts.
+
+DECISION GATE A (locked): an Answer is not a string. `kind` makes "grounded",
+"no answer", "refused", and "degraded" *typed, distinguishable states* — because the
+degradation ladder (D21), the eval harness (D19), and the cache (D10, which must never
+store a refusal) all have to branch on them. A str cannot be branched on safely.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Any, Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+Role = Literal["system", "user", "assistant"]
+
+
+class AnswerKind(StrEnum):
+    GROUNDED = "grounded"
+    NO_ANSWER = "no_answer"
+    REFUSED = "refused"
+    DEGRADED = "degraded"
+
+
+class Message(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    role: Role
+    content: str
+
+
+class RetrievedChunk(BaseModel):
+    """A corpus chunk returned by retrieval. Carries per-stage scores so hybrid fusion
+    (D3) and reranking are observable rather than collapsed into one opaque number."""
+
+    id: str
+    text: str
+    source: str
+    page: int | None = None
+    dense_score: float | None = None
+    sparse_score: float | None = None
+    rerank_score: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def effective_score(self) -> float:
+        for score in (self.rerank_score, self.dense_score, self.sparse_score):
+            if score is not None:
+                return score
+        return 0.0
+
+
+class Citation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    chunk_id: str
+    source: str
+    page: int | None = None
+    snippet: str = ""
+    score: float = 0.0
+
+
+class Usage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
+class StageTimings(BaseModel):
+    """Per-stage latency. Exists because D6 chose owned control flow specifically so every
+    stage is measurable against the Phase-1 budget (retrieval p95 250ms, TTFT p95 2.0s)."""
+
+    condense_ms: float | None = None
+    embed_ms: float | None = None
+    retrieve_ms: float | None = None
+    rerank_ms: float | None = None
+    generate_ms: float | None = None
+    ttft_ms: float | None = None
+    total_ms: float = 0.0
+
+
+class Completion(BaseModel):
+    """What a ModelPort returns for a non-streaming call."""
+
+    text: str
+    model_id: str
+    usage: Usage = Field(default_factory=Usage)
+    finish_reason: str | None = None
+
+
+class Answer(BaseModel):
+    """The API's response contract. Invariant: a GROUNDED answer must cite its sources
+    (D18: output-must-cite). Enforcing it here means an uncited medical claim cannot be
+    constructed at all — the type system carries the safety rule, not a code review."""
+
+    kind: AnswerKind
+    text: str
+    citations: list[Citation] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    model_id: str | None = None
+    usage: Usage = Field(default_factory=Usage)
+    timings: StageTimings = Field(default_factory=StageTimings)
+    cache_hit: bool = False
+
+    @model_validator(mode="after")
+    def _grounded_answers_must_cite(self) -> Self:
+        if self.kind is AnswerKind.GROUNDED:
+            if not self.citations:
+                raise ValueError("a grounded answer must carry at least one citation")
+            if not self.text.strip():
+                raise ValueError("a grounded answer must have text")
+        if self.kind is AnswerKind.REFUSED and self.citations:
+            raise ValueError("a refusal must not cite corpus sources")
+        return self
+
+    @property
+    def is_grounded(self) -> bool:
+        return self.kind is AnswerKind.GROUNDED
+
+    @property
+    def is_cacheable(self) -> bool:
+        """D10: never cache refusals, no-answers, or degraded responses."""
+        return self.kind is AnswerKind.GROUNDED and not self.cache_hit
+
+
+class QueryRequest(BaseModel):
+    """Request-size caps are a security control (D18), not a nicety."""
+
+    question: str = Field(min_length=1, max_length=2000)
+    session_id: str | None = Field(default=None, max_length=128)
+    stream: bool = True

@@ -1,0 +1,20 @@
+# Local dev stack. Grows per step: Qdrant (S3) -> Postgres/Redis (S7/S8) -> LocalStack (S9)
+# -> observability (S11, via a compose profile). Only HOST ports are remapped (11xx block);
+# container-internal ports stay standard so in-cluster manifests (S15) match.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "${QDRANT_HTTP_PORT:-1104}:6333"
+      - "${QDRANT_GRPC_PORT:-1105}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # Qdrant's distroless image has no shell/curl; use its own binary as the probe.
+      test: ["CMD", "/qdrant/qdrant", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qdrant_data:

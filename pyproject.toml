@@ -1,0 +1,60 @@
+[project]
+name = "p5-medical-chatbot"
+version = "0.1.0"
+description = "Production-grade Medical RAG chatbot (P5) — transformation of demo/ per docs/DECISION_LOG_V2.md"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "medcore",
+    "medeval",
+    "medapi",
+]
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/*"]
+
+[tool.uv.sources]
+medcore = { workspace = true }
+medeval = { workspace = true }
+medapi = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["packages/core/src", "packages/eval/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# D6 (v2.1) enforcement: prebuilt orchestration chains are BANNED on the query path.
+# LCEL is composed from self-authored runnables only; RetrievalQA-class opacity is what
+# let demo's k=1 ship unexamined. This makes the ban mechanical, not a review convention.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"langchain.chains.RetrievalQA".msg = "D6: no prebuilt chains — compose self-authored LCEL runnables."
+"langchain.chains.ConversationalRetrievalChain".msg = "D6: no prebuilt chains — use self-authored LCEL."
+"langchain.chains.create_retrieval_chain".msg = "D6: no prebuilt chains — use self-authored LCEL."
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["packages/core/tests", "packages/eval/tests", "apps/api/tests"]
+# importlib mode: lets same-named test files (test_schema.py) coexist across packages
+# without __init__.py shims.
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+markers = [
+    "integration: needs external services (Qdrant); skipped if unreachable",
+]
