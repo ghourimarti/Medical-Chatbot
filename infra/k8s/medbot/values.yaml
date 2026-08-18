@@ -1,0 +1,180 @@
+# Default values — VENDOR-NEUTRAL.
+#
+# The portability rule (docs/DEPLOYMENT_PHASES.md): anything that differs between kind,
+# DOKS, and EKS is a key in this file, never an edit to a template. Three axes vary:
+#   1. storageClass    — "" (kind default) / do-block-storage / gp3
+#   2. service.type    — ClusterIP (kind) / LoadBalancer (cloud)
+#   3. deps.*.enabled  — true (in-cluster, kind) / false + external URL (managed cloud)
+#
+# Phase 8's test of this design is blunt: deploying to EKS must require values changes ONLY.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ""            # "" = local/kind (loaded via `kind load`); set for a real registry
+  pullPolicy: IfNotPresent
+  tag: "0.1.0"
+
+imagePullSecrets: []
+
+# ── Secrets ───────────────────────────────────────────────────────────────────────────
+# PRODUCTION PATH: set existingSecret to a Secret created out-of-band (External Secrets
+# Operator, or the vendor's secret store). The chart then never sees a credential.
+#
+# DEV PATH: leave existingSecret empty and pass values with --set-string. Never commit
+# real values to any values file in git.
+secrets:
+  existingSecret: ""
+  create: true
+  # These MUST be non-empty outside environment=local — medcore.Settings refuses to boot
+  # without them (D17 fail-fast). An empty value here produces an immediate, loud
+  # CrashLoopBackOff rather than a service that silently loses history and rate limiting.
+  groqApiKey: ""
+  sessionSecret: ""
+  databaseUrl: ""
+  redisUrl: ""
+  adminApiKey: ""
+
+# ── Application config (non-secret) ───────────────────────────────────────────────────
+config:
+  environment: dev              # local | dev | staging | prod
+  logLevel: INFO
+  secureCookies: "true"         # required outside local (D17)
+  servingChain: "groq"          # D4b: comma-separated venue chain
+  qdrantCollection: "gale_live" # the ALIAS, never a raw collection (D11)
+  embeddingModelId: "BAAI/bge-large-en-v1.5"
+  rerankerModelId: "BAAI/bge-reranker-base"
+  mlBackend: "torch"            # torch | onnx (S5.9)
+  retrievalTopK: "20"
+  rerankTopK: "4"
+  hybridSearch: "true"
+  dailySpendLimitUsd: "5.0"
+  extra: {}                     # free-form passthrough for any other MEDBOT setting
+
+# ── API tier ──────────────────────────────────────────────────────────────────────────
+api:
+  replicaCount: 2               # >=2 so a PDB can ever be satisfied
+  port: 8000
+  service:
+    type: ClusterIP             # LoadBalancer in cloud overlays
+    port: 80
+    annotations: {}
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }     # NO cpu limit: throttling an async service adds tail latency
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Measured p50 ~1.1s end-to-end (S6); probes are sized well above that so a slow
+  # dependency does not get misread as a dead pod.
+  probes:
+    liveness: { path: /healthz, initialDelaySeconds: 10, periodSeconds: 20, timeoutSeconds: 5, failureThreshold: 3 }
+    readiness: { path: /readyz, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 3 }
+    startup: { path: /healthz, periodSeconds: 5, failureThreshold: 24 }   # 120s budget
+
+# ── ML tier (embeddings + reranking) ──────────────────────────────────────────────────
+mlService:
+  enabled: true
+  replicaCount: 1
+  port: 8001
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits: { memory: 4Gi }
+  autoscaling:
+    enabled: false              # CPU-bound; scale deliberately, not reactively
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 80
+  modelCache:
+    enabled: true
+    size: 8Gi
+    storageClass: ""            # "" = cluster default
+  # Cold start measured at ~60s (S5): models download and warm before /readyz turns green.
+  # WITHOUT a startupProbe the readiness failures would restart the pod mid-warmup and the
+  # deployment would never converge — a genuine footgun for any model-serving container.
+  probes:
+    startup: { path: /readyz, periodSeconds: 10, failureThreshold: 60 }  # 600s budget
+    readiness: { path: /readyz, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 3 }
+    liveness: { path: /healthz, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3 }
+
+# ── Ingestion worker (SQS consumer, D11) ──────────────────────────────────────────────
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 2Gi }
+  # Long-poll SQS + a 900s visibility timeout means graceful shutdown must outlast a
+  # single in-flight ingestion, or a redeploy makes a job invisible until it times out.
+  terminationGracePeriodSeconds: 60
+
+# ── In-cluster dependencies ───────────────────────────────────────────────────────────
+# enabled=true is the kind/dev path. In cloud overlays these flip to false and the app
+# points at managed services — the single biggest portability lever in this chart.
+deps:
+  qdrant:
+    enabled: true
+    image: qdrant/qdrant:v1.12.4
+    storage: 10Gi
+    storageClass: ""
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { memory: 2Gi }
+  postgres:
+    enabled: true
+    image: postgres:16-alpine
+    storage: 5Gi
+    storageClass: ""
+    database: medbot
+    username: medbot
+    password: medbot           # dev only; cloud uses a managed instance + secret
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
+  redis:
+    enabled: true
+    image: redis:7-alpine
+    maxmemory: 256mb
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { memory: 512Mi }
+
+# ── Ingress (cloud only; kind uses port-forward) ──────────────────────────────────────
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: ""
+  tls:
+    enabled: false
+    secretName: ""
+
+# ── Network policy (D18): default-deny, then allow only what is needed ────────────────
+networkPolicy:
+  enabled: true
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}              # IRSA role ARN goes here on EKS (Phase 8)
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+  seccompProfile: { type: RuntimeDefault }
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false   # HF cache and /tmp are written at runtime
+  capabilities: { drop: ["ALL"] }
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

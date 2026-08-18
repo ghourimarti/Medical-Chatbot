@@ -1,0 +1,46 @@
+{{- if .Values.worker.enabled }}
+{{- $c := dict "root" . "component" "worker" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "medbot.fullname" . }}-worker
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels: {{- include "medbot.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "medbot.labels" . | nindent 8 }}
+        {{- include "medbot.selectorLabels" $c | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "medbot.serviceAccountName" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "medbot.image" (dict "root" . "name" "medbot-worker") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- include "medbot.commonEnv" . | nindent 10 }}
+          env:
+            - name: HF_HOME
+              value: /models
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+          # NO HTTP probes: the worker serves no port. Liveness is the process itself —
+          # an SQS consumer that dies gets restarted by the Deployment controller, and
+          # unacked messages return to the queue after the visibility timeout (D11).
+          # Inventing a health endpoint purely to satisfy a probe would add a surface
+          # that exists only for Kubernetes' benefit.
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          emptyDir: {}
+      # Long-poll (20s) + in-flight ingestion. Cutting the process short mid-batch leaves
+      # a message invisible until its 900s visibility timeout expires, which looks like a
+      # stalled queue. 60s lets the current poll drain cleanly.
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+{{- end }}

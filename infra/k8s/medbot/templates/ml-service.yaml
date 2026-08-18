@@ -1,0 +1,106 @@
+{{- if .Values.mlService.enabled }}
+{{- $c := dict "root" . "component" "ml" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "medbot.fullname" . }}-ml
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.mlService.autoscaling.enabled }}
+  replicas: {{ .Values.mlService.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "medbot.selectorLabels" $c | nindent 6 }}
+  strategy:
+    # Recreate, not RollingUpdate: each pod holds a multi-GB model in memory and takes
+    # ~60s to warm. A rolling update would briefly double that footprint, which on a
+    # small node pool means the new pod is unschedulable and the rollout wedges.
+    type: Recreate
+  template:
+    metadata:
+      labels: {{- include "medbot.labels" . | nindent 8 }}
+        {{- include "medbot.selectorLabels" $c | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "medbot.serviceAccountName" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ml-service
+          image: {{ include "medbot.image" (dict "root" . "name" "medbot-ml") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mlService.port }}
+          {{- include "medbot.commonEnv" . | nindent 10 }}
+          env:
+            - name: HF_HOME
+              value: /models
+          resources: {{- toYaml .Values.mlService.resources | nindent 12 }}
+          {{- with .Values.mlService.probes.startup }}
+          # DECISION GATE (S15): model warmup measured at ~60s cold, and first boot also
+          # downloads weights. Without a generous startupProbe budget, readiness failures
+          # restart the pod mid-download and the deployment never converges — the classic
+          # model-serving footgun.
+          startupProbe:
+            httpGet: { path: {{ .path }}, port: http }
+            periodSeconds: {{ .periodSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- with .Values.mlService.probes.readiness }}
+          readinessProbe:
+            httpGet: { path: {{ .path }}, port: http }
+            periodSeconds: {{ .periodSeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- with .Values.mlService.probes.liveness }}
+          livenessProbe:
+            httpGet: { path: {{ .path }}, port: http }
+            periodSeconds: {{ .periodSeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          {{- if .Values.mlService.modelCache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "medbot.fullname" . }}-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if .Values.mlService.modelCache.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "medbot.fullname" . }}-models
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.mlService.modelCache.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mlService.modelCache.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medbot.fullname" . }}-ml
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.mlService.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
+{{- end }}

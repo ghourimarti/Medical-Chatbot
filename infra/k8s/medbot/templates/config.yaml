@@ -1,0 +1,60 @@
+{{/* Non-secret configuration. Safe to read with `kubectl describe configmap`. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "medbot.fullname" . }}-config
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+data:
+  ENVIRONMENT: {{ .Values.config.environment | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  SECURE_COOKIES: {{ .Values.config.secureCookies | quote }}
+  SERVING_CHAIN: {{ .Values.config.servingChain | quote }}
+  QDRANT_COLLECTION: {{ .Values.config.qdrantCollection | quote }}
+  EMBEDDING_MODEL_ID: {{ .Values.config.embeddingModelId | quote }}
+  RERANKER_MODEL_ID: {{ .Values.config.rerankerModelId | quote }}
+  ML_BACKEND: {{ .Values.config.mlBackend | quote }}
+  RETRIEVAL_TOP_K: {{ .Values.config.retrievalTopK | quote }}
+  RERANK_TOP_K: {{ .Values.config.rerankTopK | quote }}
+  HYBRID_SEARCH: {{ .Values.config.hybridSearch | quote }}
+  DAILY_SPEND_LIMIT_USD: {{ .Values.config.dailySpendLimitUsd | quote }}
+  {{- with (include "medbot.qdrantUrl" .) }}
+  QDRANT_URL: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.mlService.enabled }}
+  ML_SERVICE_URL: {{ printf "http://%s-ml:8001" (include "medbot.fullname" .) | quote }}
+  {{- end }}
+  {{- range $k, $v := .Values.config.extra }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- if .Values.secrets.create }}
+---
+{{/* Dev-path Secret. In cloud, set secrets.existingSecret and let External Secrets (or the
+     vendor store) own this object so no credential passes through Helm values at all. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "medbot.fullname" . }}-secrets
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  GROQ_API_KEY: {{ .Values.secrets.groqApiKey | quote }}
+  SESSION_SECRET: {{ .Values.secrets.sessionSecret | quote }}
+  {{- if .Values.secrets.adminApiKey }}
+  ADMIN_API_KEY: {{ .Values.secrets.adminApiKey | quote }}
+  {{- end }}
+  {{/* In-cluster deps win when enabled; otherwise the managed URL from values is used.
+       Precedence is explicit here so it cannot be ambiguous at deploy time. */}}
+  DATABASE_URL: {{ default .Values.secrets.databaseUrl (include "medbot.postgresUrl" .) | quote }}
+  REDIS_URL: {{ default .Values.secrets.redisUrl (include "medbot.redisUrl" .) | quote }}
+{{- end }}
+{{- if .Values.serviceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "medbot.serviceAccountName" . }}
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

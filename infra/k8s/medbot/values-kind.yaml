@@ -1,0 +1,71 @@
+# kind overlay — Phase 6. Cost: $0. Question answered: "are my manifests correct?"
+#
+# What kind CANNOT validate, and therefore what Phase 7 must (docs/DEPLOYMENT_PHASES.md):
+#   * type: LoadBalancer          — kind has no cloud LB; we use ClusterIP + port-forward
+#   * real StorageClasses         — kind uses local-path (hostPath under the hood)
+#   * NetworkPolicy enforcement   — kindnet accepts the objects but does not enforce them
+#   * cloud IAM / IRSA            — no equivalent exists
+#   * capacity / autoscaling      — one machine, one kernel, one failure domain
+#
+# Everything else — probes, HPA objects, PDBs, ConfigMap/Secret wiring, RBAC, rollout
+# behaviour, image pull, service discovery — is genuinely exercised here.
+
+# Avoids the doubled `medbot-medbot-` prefix that Helm produces when the release name
+# equals the chart name. Object names are referenced by NetworkPolicies and Service DNS,
+# so keeping them short and predictable is worth the one line.
+fullnameOverride: medbot
+
+config:
+  environment: dev              # NOT local: exercises the D17 fail-fast validators
+  secureCookies: "false"        # no TLS in kind; 'dev' allows it, prod does not
+
+image:
+  registry: ""                  # images are side-loaded with `kind load docker-image`
+  pullPolicy: Never             # never reach out to a registry for a locally built tag
+  tag: "0.1.0"
+
+api:
+  replicaCount: 2
+  service:
+    type: ClusterIP             # LoadBalancer would stay <pending> forever in kind
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+  autoscaling:
+    enabled: true               # requires metrics-server; see the S15 README
+    minReplicas: 2
+    maxReplicas: 5
+
+mlService:
+  enabled: true
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 3Gi }
+  modelCache:
+    enabled: true
+    size: 6Gi
+    storageClass: standard      # kind's built-in local-path provisioner
+
+worker:
+  enabled: true
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { memory: 1536Mi }
+
+deps:
+  qdrant:
+    enabled: true
+    storage: 4Gi
+    storageClass: standard
+  postgres:
+    enabled: true
+    storage: 2Gi
+    storageClass: standard
+  redis:
+    enabled: true
+
+ingress:
+  enabled: false                # port-forward instead
+
+networkPolicy:
+  enabled: true                 # objects apply; kindnet does not enforce (see header)

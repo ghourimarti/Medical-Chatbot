@@ -1,0 +1,175 @@
+{{/*
+In-cluster dependencies. This file is the single biggest portability lever in the chart:
+  kind/dev   -> deps.*.enabled = true  (StatefulSets here, zero external cost)
+  DOKS/EKS   -> deps.*.enabled = false (managed Postgres/Redis; URLs come from the Secret)
+
+Nothing in the application changes between those two worlds — only values.
+*/}}
+
+{{- if .Values.deps.qdrant.enabled }}
+{{- $c := dict "root" . "component" "qdrant" -}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "medbot.fullname" . }}-qdrant
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "medbot.fullname" . }}-qdrant
+  replicas: 1
+  selector:
+    matchLabels: {{- include "medbot.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "medbot.labels" . | nindent 8 }}
+        {{- include "medbot.selectorLabels" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: qdrant
+          image: {{ .Values.deps.qdrant.image }}
+          ports:
+            - { name: http, containerPort: 6333 }
+            - { name: grpc, containerPort: 6334 }
+          resources: {{- toYaml .Values.deps.qdrant.resources | nindent 12 }}
+          # Qdrant's image is distroless — no shell, no curl. Its own binary is the only
+          # available probe, which is why this is exec and not httpGet.
+          readinessProbe:
+            exec: { command: ["/qdrant/qdrant", "--version"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.deps.qdrant.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.deps.qdrant.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medbot.fullname" . }}-qdrant
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { port: 6333, targetPort: http, name: http }
+    - { port: 6334, targetPort: grpc, name: grpc }
+  selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
+{{- end }}
+
+{{- if .Values.deps.postgres.enabled }}
+{{- $c := dict "root" . "component" "postgres" -}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "medbot.fullname" . }}-postgres
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "medbot.fullname" . }}-postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "medbot.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "medbot.labels" . | nindent 8 }}
+        {{- include "medbot.selectorLabels" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.deps.postgres.image }}
+          ports:
+            - { name: pg, containerPort: 5432 }
+          env:
+            - { name: POSTGRES_DB, value: {{ .Values.deps.postgres.database | quote }} }
+            - { name: POSTGRES_USER, value: {{ .Values.deps.postgres.username | quote }} }
+            - { name: POSTGRES_PASSWORD, value: {{ .Values.deps.postgres.password | quote }} }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          resources: {{- toYaml .Values.deps.postgres.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.deps.postgres.username | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.deps.postgres.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.deps.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medbot.fullname" . }}-postgres
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { port: 5432, targetPort: pg, name: pg }
+  selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
+{{- end }}
+
+{{- if .Values.deps.redis.enabled }}
+{{- $c := dict "root" . "component" "redis" -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "medbot.fullname" . }}-redis
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "medbot.selectorLabels" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "medbot.labels" . | nindent 8 }}
+        {{- include "medbot.selectorLabels" $c | nindent 8 }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.deps.redis.image }}
+          # No persistence by design (P5.4.9): every Redis key here is a cache entry or a
+          # rate-limit counter, both reconstructible. Backing up derived state would add
+          # operational burden for no recovery value.
+          args:
+            - redis-server
+            - --maxmemory
+            - {{ .Values.deps.redis.maxmemory }}
+            - --maxmemory-policy
+            - allkeys-lru
+            - --save
+            - ""
+          ports:
+            - { name: redis, containerPort: 6379 }
+          resources: {{- toYaml .Values.deps.redis.resources | nindent 12 }}
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medbot.fullname" . }}-redis
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { port: 6379, targetPort: redis, name: redis }
+  selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
+{{- end }}

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: medbot
+description: >
+  Production-grade medical RAG chatbot — api, ml-service, and ingestion worker.
+  Vendor-portable: the same chart deploys to kind (Phase 6), DigitalOcean DOKS
+  (Phase 7), and AWS EKS (Phase 8). Only values-<vendor>.yaml differs.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - rag
+  - llm
+  - medical
+maintainers:
+  - name: P5 Medical Chatbot

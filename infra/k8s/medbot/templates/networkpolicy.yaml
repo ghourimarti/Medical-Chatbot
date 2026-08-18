@@ -1,0 +1,79 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Default-deny, then allow only what is needed (D18).
+
+NOTE for kind (Phase 6): kind's default CNI (kindnet) does NOT enforce NetworkPolicy.
+These objects will apply cleanly and do nothing. That is worth stating plainly rather than
+letting a green `kubectl apply` imply enforcement — the policies are genuinely enforced on
+DOKS (Cilium) and EKS (VPC CNI / Calico), which is Phase 7/8's job to verify.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medbot.fullname" . }}-default-deny
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medbot.fullname" . }}-api-ingress
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "medbot.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    # Public entry point: the ingress controller, plus anything in-namespace (probes,
+    # port-forward, Prometheus scraping /metrics).
+    - ports:
+        - port: {{ .Values.api.port }}
+---
+{{- if .Values.mlService.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medbot.fullname" . }}-ml-ingress
+  labels: {{- include "medbot.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "medbot.selectorLabels" (dict "root" . "component" "ml") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    # ml-service is INTERNAL ONLY — reachable from the api and worker, never from outside.
+    # It runs no auth of its own, so network scope is the control.
+    - from:
+        - podSelector:
+            matchLabels: {{- include "medbot.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "medbot.selectorLabels" (dict "root" . "component" "worker") | nindent 14 }}
+      ports:
+        - port: {{ .Values.mlService.port }}
+{{- end }}
+---
+{{- range $name, $port := dict "qdrant" 6333 "postgres" 5432 "redis" 6379 }}
+{{- if (index $.Values.deps $name).enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medbot.fullname" $ }}-{{ $name }}-ingress
+  labels: {{- include "medbot.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "medbot.selectorLabels" (dict "root" $ "component" $name) | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    # Data tier: application pods only. Never exposed beyond the namespace.
+    - from:
+        - podSelector:
+            matchLabels: {{- include "medbot.selectorLabels" (dict "root" $ "component" "api") | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "medbot.selectorLabels" (dict "root" $ "component" "worker") | nindent 14 }}
+      ports:
+        - port: {{ $port }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

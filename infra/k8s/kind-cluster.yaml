@@ -1,0 +1,31 @@
+# kind cluster for Phase 6 validation ($0).
+#
+# THREE NODES, deliberately. A single-node cluster silently makes several things
+# untestable: a PodDisruptionBudget is trivially satisfiable, anti-affinity has nowhere
+# to place a second replica, and `kubectl drain` has nowhere to evict to. Those are
+# exactly the behaviours P6.5 exists to exercise, so the extra two containers buy real
+# fidelity rather than decoration.
+#
+# What this still CANNOT validate (see values-kind.yaml): cloud LoadBalancers, real
+# StorageClasses, NetworkPolicy enforcement (kindnet ignores it), cloud IAM, or capacity.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: medbot
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # Reserved for ingress-nginx if Phase 6 grows an ingress path. Harmless unused.
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP
+  - role: worker
+  - role: worker
