@@ -1,0 +1,40 @@
+[
+  {
+    "store": "postgres",
+    "role": "system-of-record",
+    "rows_before": {
+      "sessions": "2",
+      "messages": "6"
+    },
+    "backup_seconds": 0.17,
+    "backup_bytes": "8652",
+    "restore_seconds": 0.33,
+    "rows_after": {
+      "sessions": "2",
+      "messages": "6"
+    },
+    "partitions_restored": "6",
+    "verified": true,
+    "rto_seconds": 0.5
+  },
+  {
+    "store": "qdrant",
+    "role": "derived",
+    "points_before": 7080,
+    "snapshot_seconds": 1.23,
+    "snapshot_bytes": 78171136,
+    "restore_seconds": 2.23,
+    "points_after": 7080,
+    "verified": true,
+    "rto_seconds": 3.46
+  },
+  {
+    "store": "redis",
+    "role": "derived-ephemeral",
+    "backup_strategy": "none-by-design",
+    "rpo_seconds": 0,
+    "rto_seconds": 0,
+    "verified": true,
+    "keys": "90919"
+  }
+]

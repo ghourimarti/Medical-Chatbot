@@ -1,0 +1,18 @@
+{
+  "label": "local-vllm",
+  "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+  "base_url": "http://localhost:1110/v1",
+  "requests": 484,
+  "failed_rate": 0,
+  "latency_ms": {
+    "med": 510.80525,
+    "p95": 901.8382549999999,
+    "p99": 1033.9485710000001
+  },
+  "tokens_per_second": {
+    "avg": 57.962655980428075,
+    "med": 58.356873822975516,
+    "p95": 65.18181776447472
+  },
+  "completion_tokens_total": 14537
+}

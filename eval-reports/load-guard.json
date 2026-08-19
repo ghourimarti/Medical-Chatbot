@@ -1,0 +1,19 @@
+{
+  "tier": "guard",
+  "target_peak_rps": 40,
+  "achieved_rps": 19.61835394319755,
+  "requests": 1177,
+  "failed_rate": 0,
+  "rate_limited": 0,
+  "latency_ms": {
+    "med": 5.5077,
+    "p95": 10.481240000000007,
+    "p99": 17.83978
+  },
+  "answers": {
+    "grounded": 0,
+    "refused": 1177,
+    "degraded": 0
+  },
+  "cache_hit_rate": 0
+}

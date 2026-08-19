@@ -1,0 +1,50 @@
+[
+  {
+    "name": "provider",
+    "container": "sglang-local",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 2050.442900013877,
+      "detail": "citations=4 cache_hit=True",
+      "question": "What causes kidney stones?"
+    },
+    "during": [
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 5545.687999983784,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/service-degraded\",\"title\":\"Service Degraded\",\"status\":503,\"detail\":\"Answers are limited right now. Please try again shortly.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 5604.353600007016,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/service-degraded\",\"title\":\"Service Degraded\",\"status\":503,\"detail\":\"Answers are limited right now. Please try again shortly.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 5782.842499989783,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/service-degraded\",\"title\":\"Service Degraded\",\"status\":503,\"detail\":\"Answers are limited right now. Please try again shortly.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 2057.565600000089,
+      "detail": "citations=4 cache_hit=True",
+      "question": "What is the treatment for gout?"
+    },
+    "recovery_seconds": 7.520577500021318,
+    "notes": []
+  }
+]

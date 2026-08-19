@@ -1,0 +1,57 @@
+# OpenTelemetry Collector (D13, S15.6).
+#
+# THIS FILE IS WHERE TAIL SAMPLING LIVES, and that placement is not arbitrary. The SDK can
+# only HEAD-sample: it decides at span creation, before the request outcome is known. So
+# "keep 5% of traffic BUT 100% of errors and slow requests" is impossible in the app — by
+# the time you know a request was slow, the sampling decision is long made.
+#
+# The Collector buffers whole traces and decides after they complete, which is the only
+# place that policy can actually be implemented.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Bound memory before anything else: an observability component must never be the thing
+  # that OOMs the node it is meant to be observing.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+  tail_sampling:
+    # Wait for the trace to finish before judging it. Longer than our p99 (~1.1s measured
+    # in S6) so a slow-but-successful request is not truncated mid-flight.
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      - name: keep-all-errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      # 2s is deliberately above the measured p99 of ~1.1s: this captures the tail that
+      # dashboards average away, which is exactly what you need a trace for.
+      - name: keep-all-slow
+        type: latency
+        latency: { threshold_ms: 2000 }
+      - name: sample-the-rest
+        type: probabilistic
+        probabilistic: { sampling_percentage: 5 }
+
+exporters:
+  debug:
+    verbosity: detailed   # local verification; production exports to Tempo/Jaeger instead
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [debug]

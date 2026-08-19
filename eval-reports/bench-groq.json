@@ -1,0 +1,18 @@
+{
+  "label": "groq",
+  "model": "llama-3.1-8b-instant",
+  "base_url": "https://api.groq.com/openai/v1",
+  "requests": 169,
+  "failed_rate": 0.6686390532544378,
+  "latency_ms": {
+    "med": 64.9274,
+    "p95": 137.80867999999998,
+    "p99": 175.91545999999977
+  },
+  "tokens_per_second": {
+    "avg": 204.30221657740807,
+    "med": 200,
+    "p95": 308.3538083538084
+  },
+  "completion_tokens_total": 1536
+}

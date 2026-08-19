@@ -1,0 +1,50 @@
+[
+  {
+    "name": "qdrant",
+    "container": "p5-medical-chatbot-qdrant-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5393.794700008584,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes kidney stones?"
+    },
+    "during": [
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 4604.362699988997,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/retrieval-unavailable\",\"title\":\"Retrieval Unavailable\",\"status\":503,\"detail\":\"Knowledge retrieval is temporarily unavailable.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 4567.112799995812,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/retrieval-unavailable\",\"title\":\"Retrieval Unavailable\",\"status\":503,\"detail\":\"Knowledge retrieval is temporarily unavailable.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 4691.471300000558,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/retrieval-unavailable\",\"title\":\"Retrieval Unavailable\",\"status\":503,\"detail\":\"Knowledge retrieval is temporarily unavailable.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "no_answer",
+      "latency_ms": 4276.908400002867,
+      "detail": "citations=0 cache_hit=False",
+      "question": "How is hepatitis B transmitted?"
+    },
+    "recovery_seconds": 4.2769473000080325,
+    "notes": []
+  }
+]

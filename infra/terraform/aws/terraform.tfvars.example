@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and adjust.
+environment = "dev"
+region      = "us-east-1"
+
+# GPU pool stays at 0 until you actually need a benchmark window (S14/P8.6).
+# A forgotten g6.xlarge is ~$600/mo — measured in S3b as the biggest waste vector here.
+gpu_desired_size = 0

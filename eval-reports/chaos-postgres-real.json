@@ -1,0 +1,50 @@
+[
+  {
+    "name": "postgres",
+    "container": "p5-medical-chatbot-postgres-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5074.177099973895,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes kidney stones?"
+    },
+    "during": [
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "no_answer",
+        "latency_ms": 8567.02619997668,
+        "detail": "citations=0 cache_hit=False",
+        "question": "How is epilepsy diagnosed?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 8552.90289997356,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What is rheumatoid arthritis?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 8939.37070001266,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What are the signs of hypothyroidism?"
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "no_answer",
+      "latency_ms": 4500.268099975074,
+      "detail": "citations=0 cache_hit=False",
+      "question": "How is hepatitis B transmitted?"
+    },
+    "recovery_seconds": 4.500297500024317,
+    "notes": []
+  }
+]

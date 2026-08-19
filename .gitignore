@@ -40,3 +40,9 @@ Thumbs.db
 # Local-only folders (not pushed to repo)
 demo/
 Prompts/
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfstate
+*.tfstate.*

@@ -1,0 +1,200 @@
+# SLO burn-rate alerting (D13, Phase-1 NFR: 99.9% => 43.8 min error budget/month).
+#
+# WHY BURN RATE, NOT A THRESHOLD: "alert if error rate > 1%" either pages constantly
+# during a harmless blip or stays silent through a slow bleed that consumes the month's
+# budget. Burn rate asks the only question that matters — "at this rate, when do we run
+# out of budget?" — and pages proportionally.
+#
+#   fast burn: 14.4x for 1h   => the whole month's budget gone in ~2 days  -> PAGE
+#   slow burn:  6.0x for 6h   => budget gone in ~5 days                    -> TICKET
+#
+# The multi-window pairing (short AND long) suppresses the false pages a single window
+# produces on a brief spike. Source: Google SRE Workbook, ch. 5.
+groups:
+  - name: medbot-slo
+    interval: 30s
+    rules:
+      # --- availability SLO -------------------------------------------------------
+      - record: medbot:request_error_ratio_rate5m
+        expr: |
+          sum(rate(medbot_answers_total{kind="degraded"}[5m]))
+            + sum(rate(medbot_errors_total{degradable="false", status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(medbot_answers_total[5m])), 0.001)
+
+      - alert: MedbotErrorBudgetFastBurn
+        expr: medbot:request_error_ratio_rate5m > (14.4 * 0.001)
+        for: 5m
+        labels: {severity: page, slo: availability}
+        annotations:
+          summary: "Fast error-budget burn (14.4x)"
+          description: >
+            At this rate the entire monthly 99.9% budget (43.8 min) is consumed in ~2 days.
+          runbook: docs/RUNBOOKS.md#triage-is-this-actually-an-incident
+
+      - alert: MedbotErrorBudgetSlowBurn
+        expr: medbot:request_error_ratio_rate5m > (6 * 0.001)
+        for: 6h
+        labels: {severity: ticket, slo: availability}
+        annotations:
+          summary: "Slow error-budget burn (6x)"
+
+      # --- latency SLO (NFR: TTFT p95 <= 2.0s) ------------------------------------
+      - alert: MedbotTTFTBreach
+        expr: |
+          histogram_quantile(0.95, sum(rate(medbot_ttft_seconds_bucket[10m])) by (le)) > 2.0
+        for: 10m
+        labels: {severity: page, slo: latency}
+        annotations:
+          summary: "TTFT p95 above the 2.0s NFR"
+
+      - alert: MedbotRetrievalSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(medbot_stage_duration_seconds_bucket{stage=~"embed|retrieve|rerank"}[10m]))
+              by (le)
+          ) > 0.25
+        for: 15m
+        labels: {severity: ticket, slo: latency}
+        annotations:
+          summary: "Retrieval path p95 above the 250ms NFR"
+          description: "Check reranker candidate count and ml-service saturation (S6.7)."
+
+      # --- QUALITY signals: the ones a generic web stack would never have -----------
+      - alert: MedbotNoAnswerRateSpike
+        expr: |
+          sum(rate(medbot_answers_total{kind="no_answer"}[15m]))
+          / clamp_min(sum(rate(medbot_answers_total[15m])), 0.001) > 0.35
+        for: 15m
+        labels: {severity: ticket, slo: quality}
+        annotations:
+          summary: "Abstention rate above 35%"
+          description: >
+            The cheapest retrieval-regression proxy: a corpus/index/embedding problem shows
+            up as mass abstention long before anyone reports a bad answer. S6 saw exactly
+            this at 0.617 answered when the index held 21% of the corpus.
+
+      - alert: MedbotDegradedMode
+        expr: sum(rate(medbot_answers_total{kind="degraded"}[5m])) > 0
+        for: 2m
+        labels: {severity: page, slo: quality}
+        annotations:
+          summary: "Serving degraded answers — all venues unhealthy (D21)"
+
+      # --- venue health (D4b) ------------------------------------------------------
+      - alert: MedbotAllVenueCircuitsOpen
+        expr: min(medbot_venue_circuit_state) == 2
+        for: 1m
+        labels: {severity: page, slo: availability}
+        annotations:
+          summary: "Every serving venue circuit is OPEN — cache-only mode imminent"
+
+      # --- cost (D20) --------------------------------------------------------------
+      - alert: MedbotCostPerQueryHigh
+        expr: |
+          histogram_quantile(0.95, sum(rate(medbot_request_cost_usd_bucket[30m])) by (le)) > 0.001
+        for: 30m
+        labels: {severity: ticket, slo: cost}
+        annotations:
+          summary: "p95 cost/query above the $0.001 NFR"
+          description: "Check cache hit rate and escalation-tier routing before spend compounds."
+
+      - alert: MedbotCacheHitRateCollapsed
+        expr: |
+          sum(rate(medbot_cache_events_total{result="hit"}[30m]))
+          / clamp_min(sum(rate(medbot_cache_events_total[30m])), 0.001) < 0.10
+        for: 30m
+        labels: {severity: ticket, slo: cost}
+        annotations:
+          summary: "Cache hit rate below 10%"
+          description: >
+            Usually a version-key bump (prompt/corpus/model) invalidating everything at
+            once — expected briefly after a deploy, a problem if it persists.
+
+      # ===========================================================================
+      # PHASE-5 RULES. Every threshold below is a number a drill or load test
+      # actually produced, not an estimate. Where a measurement exists, the alert
+      # cites it — a threshold nobody can trace is a threshold nobody will trust at
+      # 3am, and the first thing an on-call engineer does with an untrusted alert is
+      # silence it.
+      # ===========================================================================
+
+      # --- infra dependency breakers (P5.3, P5.4) ---------------------------------
+      # These exist BECAUSE the fixes work. The breakers make an outage cheap (~0ms
+      # per call instead of a full timeout), which removes the latency symptom an
+      # operator would otherwise have noticed. The system now degrades quietly and
+      # correctly — and silence is exactly what must not go unmonitored.
+      - alert: MedbotRedisCircuitOpen
+        expr: medbot_dependency_circuit_state{dependency="redis"} == 2
+        for: 2m
+        labels: {severity: page, slo: cost}
+        annotations:
+          summary: "Redis breaker OPEN — cache disabled, quotas are per-replica"
+          description: >
+            Answers are still correct. Two real consequences: every request is a cache
+            miss (P5.2 measured 13ms hit vs 1835ms miss, and cost rises with it), and
+            rate limits fall back to in-process counters, so the effective quota becomes
+            N x configured across N replicas.
+          runbook: docs/RUNBOOKS.md#redis-outage
+
+      - alert: MedbotPostgresCircuitOpen
+        expr: medbot_dependency_circuit_state{dependency="postgres"} == 2
+        for: 2m
+        labels: {severity: page, slo: availability}
+        annotations:
+          summary: "Postgres breaker OPEN — chat history and audit trail are NOT being written"
+          description: >
+            Answers are still served (P5.4 drill). But history writes are dropped silently,
+            which means the audit trail has a hole for the duration — a compliance issue,
+            not just a UX one. Data written during this window is unrecoverable.
+          runbook: docs/RUNBOOKS.md#postgres-outage
+
+      # --- index integrity (P5.3 finding) -----------------------------------------
+      # Zero retrieval candidates is a FAULT, not an abstention: a vector search over a
+      # populated collection always returns its nearest neighbours. Before P5.3 this
+      # returned "I don't have reliable information" with a 200 — a broken index that
+      # looked perfectly healthy while answering every question wrongly.
+      - alert: MedbotRetrievalUnavailable
+        expr: sum(rate(medbot_errors_total{error_type="retrieval-unavailable"}[5m])) > 0
+        for: 2m
+        labels: {severity: page, slo: availability}
+        annotations:
+          summary: "Retrieval unavailable — Qdrant down, or the index/alias resolves to nothing"
+          description: >
+            Check the alias first: `gale_live` pointing at a dropped or empty collection
+            produces this even with Qdrant perfectly healthy.
+          runbook: docs/RUNBOOKS.md#qdrant-outage
+
+      # --- abuse (P5.2 finding) ----------------------------------------------------
+      # Session-only rate limiting was bypassable by simply not sending the cookie
+      # (measured: 0/30 requests limited). Now that the IP bucket exists, a spike in
+      # ip_* rejections is the actual abuse signal.
+      - alert: MedbotAbuseSuspected
+        expr: sum(rate(medbot_rate_limited_total{scope=~"ip_.*"}[10m])) > 5
+        for: 10m
+        labels: {severity: ticket, slo: security}
+        annotations:
+          summary: "Sustained per-IP quota rejections — scripted abuse likely"
+          description: >
+            Per-IP limits are sized for carrier-grade NAT (300/min), so sustained
+            rejections mean a single address well beyond shared-user behaviour.
+          runbook: docs/RUNBOOKS.md#abuse-spike
+
+      # --- saturation (P5.2 measurements) ------------------------------------------
+      # Measured saturation on one worker: ~310 RPS on the cache path, ~2 RPS through
+      # the full pipeline (54% of which is CPU reranking). Past saturation the system
+      # queues rather than failing, so LATENCY is the leading indicator and errors are
+      # a lagging one — alert on the former.
+      - alert: MedbotApproachingSaturation
+        expr: |
+          histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[10m])) by (le))
+            > 3.0
+        for: 10m
+        labels: {severity: ticket, slo: latency}
+        annotations:
+          summary: "p95 request latency above 3s — queueing, likely saturation"
+          description: >
+            P5.2: throughput plateaus and latency grows while the failure rate stays 0%.
+            Scale out before this becomes a timeout cliff; check rerank stage share first.
+          runbook: docs/RUNBOOKS.md#saturation

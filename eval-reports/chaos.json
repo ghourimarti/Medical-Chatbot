@@ -1,0 +1,194 @@
+[
+  {
+    "name": "redis",
+    "container": "p5-medical-chatbot-redis-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 4339.669599983608,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes kidney stones?"
+    },
+    "during": [
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "no_answer",
+        "latency_ms": 12447.443700017175,
+        "detail": "citations=0 cache_hit=False",
+        "question": "How is epilepsy diagnosed?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 4661.217499990016,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What is rheumatoid arthritis?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 6822.332899988396,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What are the signs of hypothyroidism?"
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "no_answer",
+      "latency_ms": 4128.1151000002865,
+      "detail": "citations=0 cache_hit=False",
+      "question": "How is hepatitis B transmitted?"
+    },
+    "recovery_seconds": 4.12814809998963,
+    "notes": []
+  },
+  {
+    "name": "qdrant",
+    "container": "p5-medical-chatbot-qdrant-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 4816.680499992799,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What is the treatment for gout?"
+    },
+    "during": [
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 4481.176100001903,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/retrieval-unavailable\",\"title\":\"Retrieval Unavailable\",\"status\":503,\"detail\":\"Knowledge retrieval is temporarily unavailable.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 4607.249499997124,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/retrieval-unavailable\",\"title\":\"Retrieval Unavailable\",\"status\":503,\"detail\":\"Knowledge retrieval is temporarily unavailable.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 4588.841799995862,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/retrieval-unavailable\",\"title\":\"Retrieval Unavailable\",\"status\":503,\"detail\":\"Knowledge retrieval is temporarily unavailable.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5121.925399987958,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What is celiac disease?"
+    },
+    "recovery_seconds": 5.12198470000294,
+    "notes": []
+  },
+  {
+    "name": "postgres",
+    "container": "p5-medical-chatbot-postgres-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 6031.423499982338,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes cataracts?"
+    },
+    "during": [
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "no_answer",
+        "latency_ms": 4561.132300004829,
+        "detail": "citations=0 cache_hit=False",
+        "question": "What are the symptoms of shingles?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "no_answer",
+        "latency_ms": 4060.2917000069283,
+        "detail": "citations=0 cache_hit=False",
+        "question": "How is psoriasis treated?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 5092.188099981286,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What is sickle cell anemia?"
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 4631.948599999305,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes gallstones?"
+    },
+    "recovery_seconds": 4.631993700022576,
+    "notes": []
+  },
+  {
+    "name": "provider",
+    "container": "sglang-local",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 4624.958300002618,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What are the symptoms of meningitis?"
+    },
+    "during": [
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 5722.160100005567,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/service-degraded\",\"title\":\"Service Degraded\",\"status\":503,\"detail\":\"Answers are limited right now. Please try again shortly.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 5711.990299983881,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/service-degraded\",\"title\":\"Service Degraded\",\"status\":503,\"detail\":\"Answers are limited right now. Please try again shortly.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 503,
+        "kind": null,
+        "latency_ms": 5670.158099994296,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/service-degraded\",\"title\":\"Service Degraded\",\"status\":503,\"detail\":\"Answers are limited right now. Please try again shortly.\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 4932.619400002295,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes kidney stones?"
+    },
+    "recovery_seconds": 64.81555229998776,
+    "notes": []
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "label": "local-sglang",
+  "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+  "base_url": "http://localhost:1111/v1",
+  "requests": 485,
+  "failed_rate": 0,
+  "latency_ms": {
+    "med": 527.8775,
+    "p95": 735.3979799999998,
+    "p99": 2503.7474759999823
+  },
+  "tokens_per_second": {
+    "avg": 51.83124155691496,
+    "med": 51.470588235294116,
+    "p95": 63.29113924050633
+  },
+  "completion_tokens_total": 11657
+}

@@ -1,0 +1,98 @@
+[
+  {
+    "name": "qdrant",
+    "container": "p5-medical-chatbot-qdrant-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5212.029099988285,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What causes kidney stones?"
+    },
+    "during": [
+      {
+        "ok": false,
+        "status": 500,
+        "kind": null,
+        "latency_ms": 4749.648600001819,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/internal-error\",\"title\":\"Internal Server Error\",\"status\":500,\"detail\":\"An unexpected error occurred. Reference: 68d11860da08\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 500,
+        "kind": null,
+        "latency_ms": 4714.24780000234,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/internal-error\",\"title\":\"Internal Server Error\",\"status\":500,\"detail\":\"An unexpected error occurred. Reference: 7d77434daf51\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      },
+      {
+        "ok": false,
+        "status": 500,
+        "kind": null,
+        "latency_ms": 4885.135299991816,
+        "detail": "{\"type\":\"https://p5-medical-chatbot/problems/internal-error\",\"title\":\"Internal Server Error\",\"status\":500,\"detail\":\"An unexpected error occurred. Reference: 533194302b99\",\"instance\":\"/api/v1/query\"}",
+        "question": ""
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "no_answer",
+      "latency_ms": 4655.381199991098,
+      "detail": "citations=0 cache_hit=False",
+      "question": "How is hepatitis B transmitted?"
+    },
+    "recovery_seconds": 4.655417600006331,
+    "notes": []
+  },
+  {
+    "name": "postgres",
+    "container": "p5-medical-chatbot-postgres-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5206.787799979793,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What is the treatment for gout?"
+    },
+    "during": [
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 4599.355399986962,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What causes migraine headaches?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 5196.121899993159,
+        "detail": "citations=4 cache_hit=False",
+        "question": "What are the symptoms of Lyme disease?"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 4761.757800006308,
+        "detail": "citations=4 cache_hit=False",
+        "question": "How is osteoporosis prevented?"
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5052.071800018894,
+      "detail": "citations=4 cache_hit=False",
+      "question": "What is celiac disease?"
+    },
+    "recovery_seconds": 5.05212659999961,
+    "notes": []
+  }
+]

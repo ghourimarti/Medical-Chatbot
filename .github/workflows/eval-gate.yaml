@@ -1,0 +1,86 @@
+# Quality gate (D19, S6.11). From S6 onward the thresholds BLOCK, they do not advise.
+#
+# Why this is NOT wired to every PR yet — an honest constraint, not an oversight:
+#   1. A meaningful run needs the FULL 7,080-chunk index. S6 proved that evaluating
+#      against a truncated index produces false abstentions and a meaningless score
+#      (answered 0.617 vs 0.983). A CI job that re-indexes a subset would fail for the
+#      wrong reason every time.
+#   2. One full RAGAS run ≈ one day of Groq's free-tier judge quota (measured in S6).
+#      Running it per-PR would exhaust quota by the second push of the day.
+#
+# Therefore: manual + nightly against a provisioned environment now; per-PR smoke lands in
+# S17 once S9's ingestion pipeline can restore a Qdrant snapshot cheaply.
+name: eval-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: "Number of cases (blank = full golden set)"
+        required: false
+        default: "20"
+  schedule:
+    - cron: "0 3 * * *" # nightly, off-peak for provider quota
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        ports:
+          - 6333:6333
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --frozen
+
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('uv.lock') }}
+
+      - name: Build index
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: http://localhost:6333
+          QDRANT_COLLECTION: gale_ci
+        # No --limit: S6 proved a truncated index makes the gate measure the wrong thing.
+        run: uv run medapi-reindex --collection gale_ci
+
+      - name: Run evaluation
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: http://localhost:6333
+          QDRANT_COLLECTION: gale_ci
+        run: |
+          SMOKE="${{ github.event.inputs.smoke }}"
+          if [ -n "$SMOKE" ]; then
+            uv run medeval run --target pipeline --smoke "$SMOKE"
+          else
+            uv run medeval run --target pipeline
+          fi
+
+      - name: Enforce thresholds (BLOCKING)
+        # `compare --gate` exits non-zero when any D19 threshold is unmet. This step is
+        # what makes the numbers a gate rather than a dashboard.
+        run: |
+          uv run medeval compare \
+            --before demo --after pipeline \
+            --out eval-reports/delta.md --gate
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: eval-reports/

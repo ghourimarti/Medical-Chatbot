@@ -1,0 +1,19 @@
+{
+  "tier": "cache",
+  "target_peak_rps": 1500,
+  "achieved_rps": 310.4806439120938,
+  "requests": 31071,
+  "failed_rate": 0,
+  "rate_limited": 0,
+  "latency_ms": {
+    "med": 338.5262,
+    "p95": 1470.6395,
+    "p99": 4113.89941
+  },
+  "answers": {
+    "grounded": 31070,
+    "refused": 0,
+    "degraded": 0
+  },
+  "cache_hit_rate": 0.9999356292243321
+}

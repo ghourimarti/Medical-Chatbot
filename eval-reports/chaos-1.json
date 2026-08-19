@@ -1,0 +1,88 @@
+[
+  {
+    "name": "redis",
+    "container": "p5-medical-chatbot-redis-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 2065.0758999981917,
+      "detail": "citations=4 cache_hit=True"
+    },
+    "during": [
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 18418.384799995692,
+        "detail": "citations=4 cache_hit=False"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 20415.47319997335,
+        "detail": "citations=4 cache_hit=False"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 20182.68190001254,
+        "detail": "citations=4 cache_hit=False"
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 5088.483100000303,
+      "detail": "citations=4 cache_hit=False"
+    },
+    "recovery_seconds": 5.088518800010206,
+    "notes": []
+  },
+  {
+    "name": "qdrant",
+    "container": "p5-medical-chatbot-qdrant-1",
+    "steady": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 2059.765400015749,
+      "detail": "citations=4 cache_hit=True"
+    },
+    "during": [
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 2058.6456999881193,
+        "detail": "citations=4 cache_hit=True"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 2053.3314000058454,
+        "detail": "citations=4 cache_hit=True"
+      },
+      {
+        "ok": true,
+        "status": 200,
+        "kind": "grounded",
+        "latency_ms": 2067.072699981509,
+        "detail": "citations=4 cache_hit=True"
+      }
+    ],
+    "recovered": {
+      "ok": true,
+      "status": 200,
+      "kind": "grounded",
+      "latency_ms": 2050.103300018236,
+      "detail": "citations=4 cache_hit=True"
+    },
+    "recovery_seconds": 2.050141600018833,
+    "notes": []
+  }
+]
