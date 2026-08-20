@@ -91,7 +91,27 @@
 **Verify:** eval safety run green; attempt injections manually and via suite.
 **DoD:** OWASP-LLM-Top-10 mapping documented; safety gates blocking in CI.
 
-### S13 — vLLM + SGLang serving integration  `[D4, D12]` · 1.5–2 sessions
+### S13 — Multi-venue serving: 4 venues + 2 engines + failover chain  `[D4, D4b, D12]` · 2.5–3 sessions
+*(expanded in v1.1 to make Decision 4b explicit — it was previously implied by one line)*
+
+**Sub-steps, each independently shippable:**
+| # | Sub-step | Venue/engine | Gate |
+|---|---|---|---|
+| **S13.1** | `OpenAICompatModel` adapter — one class, configurable `base_url`, serves ALL venues | — | contract tests vs recorded fixtures |
+| **S13.2** | Venue registry + `SERVING_PRIMARY` / `SERVING_FALLBACK_CHAIN` config | — | config tests; unknown venue fails fast |
+| **S13.3** | **Venue 1 — `local`** (RTX 3060, vLLM, INT4) | local | ✅ already proven in S3b |
+| **S13.4** | **Venue 4 — `groq`** (hosted floor) | hosted | ✅ already proven in S3b; port the existing GroqModel behind S13.1 |
+| **S13.5** | **Venue 2 — `runpod`** (non-AWS cloud GPU, native Linux, L4/A10) | cloud | benchmark parity run; teardown documented |
+| **S13.6** | **Venue 3 — `aws`** (g6 spot, needs quota approval) | cloud | Terraform-launched in S16; benchmark parity |
+| **S13.7** | **SGLang** as second engine on any GPU venue | engine | same model, same GPU, A/B swap by config |
+| **S13.8** | Failover chain + per-leg circuit breakers + health checks | all | **staged kill test**: kill vLLM→SGLang; kill GPU venue→cloud; kill all→hosted; kill hosted→cache |
+| **S13.9** | Per-leg eval parity (D4: venues may quantize differently ⇒ answers can drift) | all | RAGAS per venue; drift documented |
+
+**DoD:** `SERVING_PRIMARY=<venue>` switches the active venue with no code change; the failover
+chain is proven by demonstration, not diagram; every venue has measured TTFT/tok-s in
+`docs/gpu-venue.md`.
+
+### S13-old — vLLM + SGLang serving integration  `[D4, D12]` *(superseded by S13.1–S13.9)*
 **What changes:** `ModelPort` adapters for vLLM + SGLang (OpenAI-compatible endpoints); Llama-3.1-8B AWQ served on S3b's venue; prompts harmonized + eval'd per leg; failover chain wired: **vLLM → SGLang → hosted (Groq/Bedrock) → cache → degraded** with per-leg circuit breakers; escalation router (confidence/length → hosted 70B).
 **Tests:** adapter contract tests (recorded fixtures), breaker state-machine unit tests, chain integration (kill vLLM → SGLang; kill both → hosted) with stub servers.
 **Verify:** end-to-end query answered by local vLLM; staged kills walk the chain live; eval parity run (vLLM 8B vs Groq 8B answers).
@@ -128,6 +148,62 @@
 **DoD:** Eval is a system, not a script; semantic cache earns its enablement with evidence.
 
 ---
+
+## Reordering log
+
+**v1.2 — S10 (Next.js frontend) deferred; S13 (multi-venue serving) pulled forward.**
+Rationale: S10 is a separate deployable behind a stable API contract (frozen in S4), so
+nothing downstream depends on it — deferring costs nothing and blocks nothing. S13, by
+contrast, is where D4b's four-venue design becomes real, and two of its venues (`local`,
+`groq`) are already measured and waiting to be wired. `demo/` therefore remains the
+reference UI until S10 lands.
+
+## Parallel execution tracks (added v1.1)
+
+The plan is written as one ordered list, but the *dependency graph* is not a straight line.
+Several steps touch disjoint subsystems and can run concurrently. What follows is honest
+about which kind of parallelism each track actually is.
+
+```
+TRACK A — retrieval quality (strictly sequential; each gates the next)
+   S5 ml-service ──► S6 hybrid+rerank+EVAL DELTA ──► S12 security/safety gates
+
+TRACK B — state & infrastructure (independent of Track A; no shared files)
+   S7 Postgres ──► S8 Redis ──► S9 worker/SQS
+
+TRACK C — serving venues (D4b; mostly background/waiting)
+   S3b spike ✅ ──► S13.1-13.4 (adapter + local + groq: no new infra)
+                └─► S13.5 runpod ─┐
+                └─► S13.6 aws ────┴─► S13.7 SGLang ─► S13.8 failover ─► S14 benchmark
+
+TRACK D — user-side async (zero agent time; start early, they have lead time)
+   AWS G-instance quota request (24-48h)  ·  RunPod account + credits
+   HF license acceptance for Llama-3.1 ✅ done
+
+TRACK E — platform (needs the app broadly stable; starts after Track A+B land)
+   S15 kind ──► S16 terraform plan ──► S17 CI/CD
+```
+
+**Three genuinely different kinds of "parallel" — worth distinguishing:**
+1. **True background** — long downloads, cloud provisioning, quota approvals. These run
+   unattended while foreground work continues. *(S3b's 90-minute download ran alongside all
+   of S4 — that is this kind, and it worked.)*
+2. **Track interleaving** — Track A and Track B touch disjoint modules, so their steps can be
+   reordered or alternated freely without merge pain. This is scheduling flexibility, not
+   simultaneous execution.
+3. **User-side async** — Track D costs zero implementation time and has multi-day latency, so
+   it must be *started first* even though it *finishes last*.
+
+**Rule that keeps this safe:** the invariant is unchanged — every commit boundary leaves a
+working system. Parallel tracks may interleave, but two half-finished steps must never be
+committed together. One step per commit still holds.
+
+**Recommended interleave for the next stretch:**
+| Foreground (agent) | Background / user-side |
+|---|---|
+| S5 → S6 (Track A) | AWS quota request; RunPod account (Track D) |
+| S7 → S8 (Track B) | Any cloud venue provisioning that lands |
+| S13.1–13.4 (adapter, local+groq already proven) | RunPod/AWS instances spin up on demand |
 
 ## Sequencing rationale (risk front-load map)
 

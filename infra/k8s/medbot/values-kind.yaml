@@ -17,7 +17,13 @@ fullnameOverride: medbot
 
 config:
   environment: dev              # NOT local: exercises the D17 fail-fast validators
-  secureCookies: "false"        # no TLS in kind; 'dev' allows it, prod does not
+  # MUST be true. The D17 validator requires secure cookies in EVERY non-local
+  # environment, not just prod — an earlier "false" here (with a comment wrongly claiming
+  # dev was exempt) put every pod into CrashLoopBackOff at startup. That is the validator
+  # working: a misconfiguration became a loud deploy-time failure instead of a service
+  # quietly issuing insecure session cookies. Harmless for local testing because browsers
+  # treat localhost as a secure context and curl ignores the flag entirely.
+  secureCookies: "true"
 
 image:
   registry: ""                  # images are side-loaded with `kind load docker-image`
@@ -47,7 +53,16 @@ mlService:
     storageClass: standard      # kind's built-in local-path provisioner
 
 worker:
-  enabled: true
+  # DISABLED in kind, deliberately. The worker is an SQS consumer (D11) and kind has no
+  # queue, so it fails fast with "SQS_QUEUE_URL is not set" — which is the CORRECT
+  # behaviour: a deployed consumer with no queue is a misconfiguration, not something to
+  # paper over by idling. Deploying it here would produce a permanent CrashLoopBackOff
+  # that trains you to ignore red pods.
+  #
+  # Its manifest is still validated by `helm template`, its ingestion path by
+  # `make reindex` (--direct mode, bypasses SQS), and its full queue-driven path by real
+  # SQS in Phase 7/8. Set true here only after adding LocalStack as an in-cluster dep.
+  enabled: false
   resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { memory: 1536Mi }

@@ -12,10 +12,19 @@ follow, and the type system already carries two of them:
      bumping any version makes every stale entry unreachable atomically.
   3. FAIL-OPEN. Redis down means slower and more expensive, never wrong or unavailable.
 
-The semantic cache is implemented but ships DISABLED. D10 requires it to clear a double
-guard (cosine >= 0.97 AND identical top-3 chunk ids) and prove zero false hits on the
-golden set before enablement — "aspirin dose adult" and "aspirin dose child" sit far closer
-than 0.95 in embedding space.
+There is NO semantic cache. Only the two exact-match layers below ship, and S19.4 decided
+against building the third — see docs/SEMANTIC_CACHE.md for the measurements.
+
+(An earlier version of this docstring claimed the semantic cache "is implemented but ships
+DISABLED". It never was: `semantic_cache_enabled` and `semantic_cache_threshold` exist in
+Settings and are referenced nowhere else in the codebase. Corrected in S19.4 — a comment
+that overstates what exists is worse than no comment, because it stops anyone looking.)
+
+The same docstring also justified D10's guard by asserting that "aspirin dose adult" and
+"aspirin dose child" sit closer than 0.95 in embedding space. Measured with the production
+embedder (bge-large-en-v1.5, query prefix, L2-normalised): **0.8235**. The premise was
+wrong, and the real obstacle turned out to be the opposite of the one feared — see
+`packages/eval/tools/semantic_cache_probe.py`.
 """
 
 from __future__ import annotations

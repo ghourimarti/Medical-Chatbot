@@ -61,6 +61,12 @@ class CaseResult(BaseModel):
     n_contexts: int
     latency_ms: float
     error: str | None = None
+    # Retrieved passages, persisted so JUDGE metrics can be recomputed offline.
+    # Learned in S6.10: a throttled judge returned NaN for all 60 faithfulness scores, and
+    # without contexts the only remedy was a full 30-minute re-run against a rate-limited
+    # provider. Storing them (~180KB for 90 cases) makes judge metrics re-scorable from a
+    # saved report — the same reason deterministic metrics already are.
+    contexts: list[str] = Field(default_factory=list)
 
 
 class EvalReport(BaseModel):
@@ -74,3 +80,13 @@ class EvalReport(BaseModel):
     aggregates: dict[str, float]
     per_case: list[CaseResult]
     notes: list[str] = Field(default_factory=list)
+    # How many cases actually contributed to each aggregate (S6.12a).
+    # Found while unblocking S6.12: the pipeline report published
+    # `answer_relevancy: 0.9537` computed from ONE of 60 qa cases, and the demo baseline
+    # published `faithfulness: 0.6634` from 23 of 60 — a throttled judge returns NaN,
+    # NaNs are dropped before the mean, and the survivors are averaged into a number that
+    # looks exactly like a full-sample result. Same silent-wrongness class as P5.5.4
+    # (a metric declared but never emitted). An aggregate without its n is not a
+    # measurement, it is an anecdote; reports now carry the n so thin coverage is
+    # impossible to publish by accident.
+    coverage: dict[str, int] = Field(default_factory=dict)

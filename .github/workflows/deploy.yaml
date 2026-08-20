@@ -1,0 +1,103 @@
+# Promotion pipeline (D16 — S17.6, S17.7).
+#
+# ⚠️ STATUS: WRITTEN, NEVER EXERCISED. There is no cluster to deploy to yet, and the vendor
+# is still undecided (P7.1). This file therefore encodes the part that is vendor-INDEPENDENT
+# — which gates must pass before code is allowed to move, and who has to say yes — and
+# leaves exactly one step per environment marked for Phase 7 to fill in.
+#
+# Writing the apply step now would mean guessing DOKS vs EKS auth, registry, and secret
+# plumbing, and then rewriting it. Writing the GATES now is not speculative: they are
+# derived from measurements already taken, and they are the part that is easy to skip under
+# deadline pressure and expensive to retrofit.
+#
+# The promotion contract:
+#
+#   dev      auto on green main. No approval. Exists to prove the artifact deploys at all.
+#   staging  requires: images published + eval gate green + load smoke green.
+#            Production-like data volume; this is where P7.9's load test runs.
+#   prod     requires: staging smoke green + MANUAL approval (GitHub Environment reviewer)
+#            + a rollback target that already exists (never `latest` — S16 recorded that
+#            the demo's `:latest`-only tagging made rollback impossible: there was no
+#            earlier tag to roll back TO).
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+      image_tag:
+        description: "Image tag to deploy (sha-... or vX.Y.Z — never 'latest')"
+        required: true
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false # never interrupt a deploy mid-rollout
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  preflight:
+    name: promotion gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject mutable tags
+        # A deploy you cannot reproduce is a deploy you cannot roll back.
+        run: |
+          tag='${{ github.event.inputs.image_tag }}'
+          case "$tag" in
+            latest|main|"") echo "refusing mutable tag '$tag'"; exit 1 ;;
+          esac
+          echo "tag '$tag' is immutable"
+
+      - name: Require a rollback target
+        # Promoting to prod when nothing is currently deployed means there is nothing to
+        # roll back to. That is acceptable for a first deploy and must be deliberate.
+        if: github.event.inputs.environment == 'prod'
+        run: |
+          echo "TODO(P7): assert the current prod revision exists and record it as the"
+          echo "rollback target before the new one is applied."
+
+  deploy:
+    name: deploy → ${{ github.event.inputs.environment }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # GitHub Environments carry the approval requirement and the per-env secrets. `prod`
+    # is configured with a required reviewer — that gate lives in repo settings, not here,
+    # so it cannot be bypassed by editing this file in the same PR that deploys.
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply
+        run: |
+          echo "TODO(P7): helm upgrade --install medbot infra/k8s/medbot \\"
+          echo "  -f infra/k8s/medbot/values-${{ github.event.inputs.environment }}.yaml \\"
+          echo "  --set image.tag=${{ github.event.inputs.image_tag }} --wait --atomic"
+          echo ""
+          echo "--atomic matters: it rolls back automatically if the release does not"
+          echo "become healthy, so a failed deploy leaves the previous revision serving."
+          echo "P6.5.5 measured that shape locally — a broken image under load cost 0 of"
+          echo "90 requests because maxUnavailable:0 kept the old pods in the Service."
+
+      - name: Post-deploy smoke
+        run: |
+          echo "TODO(P7): curl /readyz and assert BOTH checks, not just a 200."
+          echo "P6.5.4: readiness that only consults one dependency reports Ready while"
+          echo "every query fails. The smoke must assert vector_store AND embedder."
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "TODO(P7): helm rollback medbot --wait"
+          echo "Verified locally in P6.5.5: rollout undo restored service with zero"
+          echo "failed requests."

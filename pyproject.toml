@@ -8,15 +8,33 @@ dependencies = [
     "medcore",
     "medeval",
     "medapi",
+    "medml",
+    "medworker",
 ]
 
 [tool.uv.workspace]
 members = ["packages/*", "apps/*"]
 
+# P6.1a — CPU-only torch. sentence-transformers pulls torch, and torch's default
+# resolution on Linux drags in 16 nvidia-*/triton wheels (~3.4 GB) for CUDA kernels that
+# no CPU service can ever execute. It is invisible on Windows (those wheels are
+# linux-only), so the weight only appears in the images — which is where it hurts: three
+# images x ~3.4 GB is what puts a CI runner over its ~14 GB disk (blocks S17.1).
+#
+# `explicit = true` means nothing resolves from this index unless it is named below, so
+# the CPU pin cannot silently capture unrelated packages.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 medcore = { workspace = true }
 medeval = { workspace = true }
 medapi = { workspace = true }
+medml = { workspace = true }
+medworker = { workspace = true }
+torch = { index = "pytorch-cpu" }
 
 [dependency-groups]
 dev = [
@@ -50,7 +68,13 @@ no_implicit_optional = true
 warn_unused_ignores = false
 
 [tool.pytest.ini_options]
-testpaths = ["packages/core/tests", "packages/eval/tests", "apps/api/tests"]
+testpaths = [
+    "packages/core/tests",
+    "packages/eval/tests",
+    "apps/api/tests",
+    "apps/ml-service/tests",
+    "apps/worker/tests",
+]
 # importlib mode: lets same-named test files (test_schema.py) coexist across packages
 # without __init__.py shims.
 addopts = "--import-mode=importlib"

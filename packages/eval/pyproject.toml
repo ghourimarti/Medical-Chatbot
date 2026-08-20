@@ -10,12 +10,17 @@ dependencies = [
     "langchain-community>=0.3,<0.4",
     "langchain-groq<1",
     "langchain-huggingface<1",
+    "medapi",
     "pandas>=3.0.3",
     "pydantic>=2.8",
-    "pypdf>=6.14.2",
+    "pypdf>=6.15.0",
     "python-dotenv>=1.0",
     "ragas>=0.4.3",
     "sentence-transformers>=5.6.0",
+    # Declared explicitly (not just pulled via sentence-transformers) so the
+    # workspace CPU-index pin in the root pyproject binds — a transitive requirement
+    # does not pick up a [tool.uv.sources] override (P6.1a).
+    "torch>=2.0",
 ]
 
 [project.scripts]
@@ -27,3 +32,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/medeval"]
+
+[tool.uv.sources]
+medapi = { workspace = true }

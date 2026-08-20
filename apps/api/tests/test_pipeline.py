@@ -9,6 +9,7 @@ from medapi.pipeline.context import build_context
 from medapi.pipeline.rag import RagPipeline
 
 from medcore.config import Settings
+from medcore.errors import RetrievalError
 from medcore.schema import AnswerKind, Completion, Message, RetrievedChunk
 
 
@@ -111,12 +112,35 @@ async def test_model_abstention_is_relabeled_not_grounded() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_answer_when_store_empty() -> None:
+async def test_empty_store_is_a_FAULT_not_an_abstention() -> None:
+    """P5.3. This previously returned NO_ANSWER, and that was the most dangerous bug here.
+
+    A vector search over a populated collection always returns its nearest neighbours,
+    however irrelevant — so zero candidates cannot mean "the corpus has no match". It means
+    the index is empty, missing, or the alias resolves to nothing.
+
+    Reporting that as "I don't have reliable information on that in my reference material"
+    makes a broken index look like a truthful answer: every request 200s, no alert fires,
+    and every user is confidently misinformed. It must be a typed, retryable 503.
+    """
     pipe = RagPipeline(
         settings=_settings(), embedder=StubEmbedder(), store=StubStore([]), model=StubModel()
     )
+    with pytest.raises(RetrievalError):
+        await pipe.answer("anything")
+
+
+@pytest.mark.asyncio
+async def test_low_scoring_chunks_ARE_a_genuine_abstention() -> None:
+    """The other half of the split: retrieval worked, nothing cleared the floor. That is a
+    correct no-answer and must NOT become an error."""
+    weak = _chunk(0.01)
+    pipe = RagPipeline(
+        settings=_settings(), embedder=StubEmbedder(), store=StubStore([weak]), model=StubModel()
+    )
     ans = await pipe.answer("anything")
     assert ans.kind is AnswerKind.NO_ANSWER
+    assert not ans.citations
 
 
 def test_build_context_numbers_and_budgets() -> None:

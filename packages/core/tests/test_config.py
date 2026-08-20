@@ -41,7 +41,95 @@ def test_secret_is_not_exposed_in_repr() -> None:
     assert s.groq_api_key.get_secret_value() == "gsk_super_secret"
 
 
+def test_dev_session_secret_is_refused_outside_local() -> None:
+    """A default secret that works everywhere is a default secret that reaches production.
+    Local stays frictionless; every other environment must supply a real value (D9/D17)."""
+    assert _settings(environment="local").session_secret.get_secret_value()  # local is fine
+    for env in ("dev", "staging", "prod"):
+        with pytest.raises(ValidationError, match="SESSION_SECRET must be set"):
+            _settings(environment=env, secure_cookies=True)
+
+
+def test_insecure_cookies_are_refused_outside_local() -> None:
+    with pytest.raises(ValidationError, match="SECURE_COOKIES must be true"):
+        _settings(environment="prod", session_secret="a-real-secret", secure_cookies=False)
+
+
+def test_real_secret_and_secure_cookies_pass_in_prod() -> None:
+    s = _settings(
+        environment="prod",
+        session_secret="a-real-secret",
+        secure_cookies=True,
+        redis_url="redis://prod-cache:6379/0",
+        database_url="postgresql+asyncpg://u:p@prod-db:5432/medbot",
+    )
+    assert s.is_production
+
+
+def test_missing_redis_is_rejected_outside_local() -> None:
+    """P5.2. An empty REDIS_URL is a valid local convenience but a silent production
+    hazard: caching turns off and quotas fall back to PER-REPLICA in-process counters, so
+    the effective limit becomes N x the configured one. Failing at startup beats
+    discovering it from a bill or an abuse incident."""
+    with pytest.raises(ValidationError, match="REDIS_URL"):
+        _settings(
+            environment="prod",
+            session_secret="a-real-secret",
+            secure_cookies=True,
+            redis_url="",
+            database_url="postgresql+asyncpg://u:p@prod-db:5432/medbot",
+        )
+
+
+def test_local_still_runs_without_redis() -> None:
+    """The guard must not make local development require infrastructure."""
+    assert _settings(environment="local", redis_url="", database_url="").redis_url == ""
+
+
+def test_missing_database_is_rejected_outside_local() -> None:
+    """P5.4. Same silent-degradation class as REDIS_URL: an empty DATABASE_URL disables
+    history and the service still answers perfectly, so nothing looks wrong. But Postgres
+    is the only system of record — without it there is no audit trail and no GDPR deletion
+    (D1, D9). Discovered when a chaos drill stopped a database the app was not using."""
+    with pytest.raises(ValidationError, match="DATABASE_URL"):
+        _settings(
+            environment="prod",
+            session_secret="a-real-secret",
+            secure_cookies=True,
+            redis_url="redis://prod-cache:6379/0",
+            database_url="",
+        )
+
+
 def test_settings_are_frozen() -> None:
     s = _settings()
     with pytest.raises(ValidationError):
         s.retrieval_top_k = 99  # type: ignore[misc]
+
+
+def test_cache_namespace_includes_the_collection() -> None:
+    """P5.5. Found by accident: pointing the service at a different, EMPTY collection still
+    returned fully cited answers, because the cache key never mentioned which index had
+    produced them. Version-key composition only worked if an operator remembered to bump
+    INDEX_VERSION alongside the collection — a convention whose failure mode is silent and
+    wrong. Now the invalidation is automatic."""
+    a = _settings(qdrant_collection="gale_v1")
+    b = _settings(qdrant_collection="gale_v2")
+    assert a.cache_namespace != b.cache_namespace
+    assert "gale_v1" in a.cache_namespace
+
+def test_retired_serving_vars_are_rejected_not_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P6.4.3. `extra="ignore"` makes a RENAMED setting fail silently: SERVING_PRIMARY=local
+    reads like it selects the GPU venue and does nothing, so the symptom ("my vLLM box is
+    idle") appears far from the cause. Renamed vars must be an error, not a no-op."""
+    for retired in ("SERVING_PRIMARY", "SERVING_FALLBACK_CHAIN"):
+        monkeypatch.setenv(retired, "local")
+        with pytest.raises(ValidationError, match="retired serving env var"):
+            _settings()
+        monkeypatch.delenv(retired)
+
+
+def test_serving_chain_is_the_supported_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SERVING_PRIMARY", raising=False)
+    monkeypatch.delenv("SERVING_FALLBACK_CHAIN", raising=False)
+    assert _settings(serving_chain="local,groq").serving_chain == "local,groq"

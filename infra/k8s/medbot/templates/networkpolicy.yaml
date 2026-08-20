@@ -51,7 +51,7 @@ spec:
             matchLabels: {{- include "medbot.selectorLabels" (dict "root" . "component" "worker") | nindent 14 }}
       ports:
         - port: {{ .Values.mlService.port }}
-{{- end }}
+{{ end }}
 ---
 {{- range $name, $port := dict "qdrant" 6333 "postgres" 5432 "redis" 6379 }}
 {{- if (index $.Values.deps $name).enabled }}
@@ -74,6 +74,6 @@ spec:
       ports:
         - port: {{ $port }}
 ---
-{{- end }}
-{{- end }}
-{{- end }}
+{{ end }}
+{{ end }}
+{{ end }}

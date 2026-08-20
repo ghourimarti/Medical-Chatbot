@@ -8,11 +8,22 @@
 #
 # What this still CANNOT validate (see values-kind.yaml): cloud LoadBalancers, real
 # StorageClasses, NetworkPolicy enforcement (kindnet ignores it), cloud IAM, or capacity.
+#
+# ⚠ KUBERNETES VERSION IS PINNED, and the reason is a real environment constraint.
+# Docker Desktop here runs **cgroup v1**, and Kubernetes >= 1.32 refuses to start on it:
+#   "kubelet is configured to not run on a host using cgroup v1"
+# That is a hard refusal from the kubelet, not a timeout. v1.31 is the last line that
+# still permits cgroup v1, so it is pinned below to unblock local validation.
+#
+# This is a FIDELITY COMPROMISE and is recorded as one: every managed cluster we target
+# (DOKS, EKS, GKE) runs cgroup v2 with current Kubernetes. To remove the compromise,
+# enable cgroup v2 in WSL2 (see docs/DEPLOYMENT_PHASES.md) and drop the `image:` pins.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: medbot
 nodes:
   - role: control-plane
+    image: kindest/node:v1.31.6
     kubeadmConfigPatches:
       - |
         kind: InitConfiguration
@@ -28,4 +39,6 @@ nodes:
         hostPort: 8443
         protocol: TCP
   - role: worker
+    image: kindest/node:v1.31.6
   - role: worker
+    image: kindest/node:v1.31.6

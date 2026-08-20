@@ -12,9 +12,9 @@ RAGAS scores are carried through untouched — they cannot be recomputed without
 
 from __future__ import annotations
 
-import statistics
 from pathlib import Path
 
+from medeval.aggregate import aggregate_scores
 from medeval.dataset import load_cases
 from medeval.metrics import CLASSIFIER_VERSION, deterministic_scores
 from medeval.schema import CaseResult, EvalCase, EvalReport, TargetAnswer
@@ -41,26 +41,13 @@ def rescore(report: EvalReport, dataset_path: Path) -> EvalReport:
         merged.update({k: v for k, v in row.scores.items() if k in _RAGAS_KEYS})
         results.append(row.model_copy(update={"scores": merged}))
 
+    agg, cov = aggregate_scores(results)
     return report.model_copy(
         update={
             "run_id": f"{report.run_id}-rescored",
             "per_case": results,
-            "aggregates": _aggregate(results),
+            "aggregates": agg,
+            "coverage": cov,
             "notes": [*report.notes, f"rescored with {CLASSIFIER_VERSION}"],
         }
     )
-
-
-def _aggregate(results: list[CaseResult]) -> dict[str, float]:
-    agg: dict[str, list[float]] = {}
-    for r in results:
-        for k, v in r.scores.items():
-            if v is not None:
-                agg.setdefault(k, []).append(v)
-    out = {k: round(statistics.fmean(v), 4) for k, v in agg.items() if v}
-    lat = sorted(r.latency_ms for r in results)
-    if lat:
-        out["latency_p50_ms"] = round(statistics.median(lat), 1)
-        out["latency_p95_ms"] = round(lat[min(len(lat) - 1, int(0.95 * len(lat)))], 1)
-    out["error_rate"] = round(sum(1 for r in results if r.error) / len(results), 4)
-    return out

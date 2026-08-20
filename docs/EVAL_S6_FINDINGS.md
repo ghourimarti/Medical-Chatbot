@@ -188,3 +188,100 @@ recomputes deterministic metrics from saved answers with **zero** model calls.
   lower-is-better) and D19 gate evaluation; `--gate` exits non-zero for CI (S17).
 - `medeval rescore` — recompute deterministic metrics on saved reports when a classifier is
   fixed, so historical runs stay comparable without re-spending judge quota.
+
+---
+
+# S6.12 — the faithfulness re-run, and four defects it exposed
+
+S6.12 was parked as "blocked on Groq judge quota". The judge (`judge_v2`, `openai/gpt-oss-120b`)
+answers on the first try, so the recorded blocker was already stale. Unblocking it turned up
+four problems that mattered more than the metric that motivated the work.
+
+## Defect 1 — an aggregate with no `n` is an anecdote
+
+The S6 pipeline report published:
+
+```
+answer_relevancy: 0.9537
+```
+
+computed from **one of sixty** qa cases. The S1 demo baseline published
+`faithfulness: 0.6634` from **23 of 60**. Neither number is arithmetically wrong; both are
+uninterpretable, and both were printed in exactly the format a full-sample result uses.
+
+The mechanism: a rate-limited judge does not raise — RAGAS returns `NaN` per row, `NaN`
+becomes `None`, `None` is skipped by the mean, and the survivors are averaged. Nothing in
+the pipeline distinguishes "0.95 across sixty cases" from "0.95 across one".
+
+This is the same class as P5.5.4 (`errors_total` declared but never emitted) and S19.3f
+(the harness scoring its own refusals as answers): **not a wrong value, but a value whose
+wrongness is unobservable.** Reports now carry `coverage` per metric and render `n scored`
+in the table. `compare` refuses to present a metric below 80% coverage without a **THIN
+COVERAGE** warning.
+
+Two identical `_aggregate` implementations existed (runner + rescore), so the fix would have
+had to be made twice or drift; they are now one `medeval.aggregate` module.
+
+## Defect 2 — the offline re-judge path was designed but never built
+
+S6.10 began persisting `contexts` in every report with an explicit comment saying it was so
+judge metrics could be recomputed without a re-run. The consumer was never written, so when
+the judge was throttled the only remedy remained a full 15-minute pipeline re-run — to fix
+scores whose inputs were already on disk.
+
+`medeval rejudge` closes that: it rebuilds judge inputs from a saved report and evaluates in
+small batches, retrying only the cases still missing the primary metric. Batching is the
+point — one throttled window can no longer void a whole run — and any case still unscored at
+the end is written into the report's notes as `UNSCORED`, not quietly averaged away.
+
+## Defect 3 — credentials arrived as a side effect
+
+The first rejudge run scored **zero of sixty** across thirty batches. Not quota:
+
+```
+The api_key client option must be set either by passing api_key to the client
+or by setting the GROQ_API_KEY environment variable
+```
+
+`load_dotenv()` was called inside `DemoTarget.__init__`. So `medeval run --target demo`
+had credentials, and every command that does not construct a target — `rejudge`, and
+`calibrate score` — silently did not. Environment loading now happens once in `main()`.
+
+Worth recording: **the Defect-1 and Defect-2 machinery caught this.** The retry loop ran, the
+coverage line reported `n=1/60`, and the warning fired. Defences built for throttling
+surfaced an unrelated bug within minutes, because both failures look identical from the
+outside — and the system was no longer able to hide either.
+
+## Defect 4 — the baseline is now permanently unreproducible
+
+Re-running the demo target to regenerate its missing contexts returned:
+
+```
+404 - The model `llama-3.1-8b-instant` does not exist or you do not have access to it
+```
+
+Groq has now retired **both** the model that generated the S1 baseline *and* the judge that
+scored it (`llama-3.3-70b-versatile`, found in S19.0). The original demo report predates
+context persistence, so its faithfulness cannot be recomputed either. The number `0.6634`
+is a historical artifact that no longer has a reproduction path.
+
+Consequences, stated plainly:
+
+- **The before/after faithfulness delta cannot be made rigorous.** Before was measured by a
+  deleted judge on 23 of 60 cases; after is measured by a different judge. `compare` now
+  emits a **JUDGE MISMATCH** warning rather than presenting the subtraction as if it meant
+  something.
+- The defensible claim is the **absolute** one: the current pipeline's faithfulness under
+  `judge_v2` at full coverage, against the D19 gate of 0.85.
+- The deterministic metrics (citations, refusal, don't-know) are judge-independent and
+  remain fully comparable. They carry the money chart.
+
+This is the strongest argument the project has produced for D4b's multi-venue design, and it
+is not the one D4b was written for. Outage protection was the stated rationale; **vendor
+retirement of a pinned model** is the sharper risk. A self-hosted vLLM venue serves weights
+we hold as a file — it cannot 404. An eval baseline that depends on a hosted model has a
+shelf life set by someone else's product roadmap.
+
+**Practice change:** reports are the archive of record, not the models. Persist answers,
+contexts, and the judge identity with every run, because any of the three may become
+unobtainable — and prefer a self-hosted judge for anything intended as a long-lived baseline.

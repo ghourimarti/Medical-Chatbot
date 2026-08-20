@@ -187,3 +187,26 @@ async def test_limiter_without_redis_still_limits() -> None:
     await limiter.check("s", scope="minute", limit=1, window_seconds=60)
     with pytest.raises(QuotaExceededError):
         await limiter.check("s", scope="minute", limit=1, window_seconds=60)
+
+
+# --- S19.4: the semantic cache decision, pinned -------------------------------------
+
+
+def test_semantic_cache_stays_off_by_default() -> None:
+    """S19.4 measured it and said no (docs/SEMANTIC_CACHE.md). Flipping this default is a
+    patient-safety decision, not a performance tweak: at a threshold loose enough to be
+    useful (~0.92) the margin above a known-dangerous pair is 0.007, which is thinner than
+    the sampling error on the 15-pair adversarial set that produced it."""
+    from medcore.config import Settings
+
+    assert Settings.model_fields["semantic_cache_enabled"].default is False
+
+
+def test_no_semantic_cache_implementation_exists() -> None:
+    """Guards against the defect S19.4 found in the docstring rather than the code: the
+    comment claimed a semantic cache was 'implemented but disabled' when none existed. If
+    someone builds one, this test fails and forces docs/SEMANTIC_CACHE.md to be revisited
+    along with the threshold evidence — rather than the layer arriving silently."""
+    import medapi.cache as cache_module
+
+    assert not hasattr(cache_module, "SemanticCache")

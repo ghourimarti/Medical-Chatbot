@@ -88,6 +88,24 @@ Tier 5  CROSS-CUTTING  D13 obs, D18 security, D19 eval, D20 cost, D21 failure, D
 **Trade-offs:** GPU fleet ops land on a team of 1 (pedagogically the point — operationally the risk, named); TTFT now depends on our batch/queue tuning, not a provider SLA; hosted legs still need DPA for the queries they see.
 **Reversibility:** Easy — the adapter seam (D12) makes hosted-primary a config flip. **Flip-back triggers:** GPU spend >1.5× hosted-equivalent for 2 consecutive months, TTFT p95 >2.0s at load after tuning, or ops burden displacing feature work.
 
+## Decision 4b: Serving VENUE strategy  *(NEW in v2.2 — user directive, S3b)*
+**Question:** Where does the self-hosted model actually run — and can more than one venue be live at once?
+**Context:** D12 v2.1 picked the *engines* (vLLM primary, SGLang second) but assumed a single GPU venue. S3b recon found a local RTX 3060 (12GB, compute 8.6, Docker GPU passthrough already configured), while AWS G-instance quotas need 24–48h human approval — making a single-venue choice both premature and unnecessarily limiting. **Correction (later in the same spike):** the local card was then found unable to run vLLM at all under WSL2 — see below, this reshapes the table.
+**Options:** single venue (v2.1 assumption — simplest, but couples all serving to one failure domain) · local-only ($0, but consumer card, not production-representative — and, as it turned out, not viable at all) · cloud-only (representative, but metered and quota-gated, and painful for the 50-restart debugging S13 needs) · **multi-venue with config-selected primary + ordered failover**.
+**Decision:** **Multi-venue.** All venues expose an **OpenAI-compatible API**, so one `OpenAICompatModel` adapter with a configurable `base_url` serves every one of them behind the existing `ModelPort` seam:
+
+| Venue | Failure domain | Role | Cost |
+|---|---|---|---|
+| `local` | Developer machine (RTX 3060, WSL2) | ❌ **not a serving venue** — vLLM's V1 engine cannot initialize under WSL2 (`UVA is not available`; `docs/gpu-venue.md` §3 — a platform wall, not a tuning knob). Excluded from `SERVING_FALLBACK_CHAIN` entirely; the card is repurposed for S5/S6 embedder/reranker GPU work instead (D5) | $0 (unused for serving) |
+| `runpod` | Third-party GPU cloud (L4/A10) | **S13 primary** — dev iteration *and* production-representative serving (local can no longer carry the free-iteration role) | ~$0.40–0.80/hr |
+| `aws` | AWS us-east-1 (g6 spot) | AWS-depth gap closure; S16 Terraform target | ~$0.50–0.80/hr |
+| `groq` | Hosted API | Always-available floor | per-token |
+
+Config: `SERVING_PRIMARY` defaults to `runpod` (not `local`); `SERVING_FALLBACK_CHAIN` is the ordered failover list over `runpod`/`aws`/`groq`; per-venue `VLLM_{RUNPOD,AWS}_URL`. Circuit breaker + health check per leg (D21).
+**Reasoning:** **This corrects a real weakness in v2.1.** The recorded senior correction on D12 was that SGLang cannot be outage protection because it shares vLLM's GPU pool and failure domain. Multi-venue supplies what that chain lacked: **three genuinely independent failure domains** — that claim survives local's removal, since `runpod`/`aws`/`groq` are still three unrelated infrastructures. It also resolves the sequencing conflict for the *cloud* legs — RunPod gives quota-free iteration now, AWS gives the Terraform-matching benchmark once quota lands — instead of forcing a choice between them. Marginal cost is low because the port seam already exists (D12).
+**Trade-offs accepted:** larger config surface; **eval must run per-leg** (already required by D4 — venues may differ in quantization, so answers can drift); TTFT budgets are per-venue (network adds 50–200ms on cloud legs); ~+0.5 session in S13; **S13 dev iteration is no longer free** — the original "$0 local debugging" premise is gone, so the earliest rented GPU session now absorbs that role and its cost.
+**Reversibility:** Easy — set `SERVING_FALLBACK_CHAIN` to a single venue and it degenerates to the v2.1 design.
+
 ## Decision 5: Embedding model  *(REVISED v2.1 — user pushback: bge-large)*
 **Question:** Which embedding model — baked into D2's collection *and* on the hot path at 350 RPS.
 **Options:** MiniLM (mediocre) · bge-small-en-v1.5 (v2 draft — MiniLM speed class, quality ↑ free) · **bge-large-en-v1.5 (1024d)** · OpenAI/Cohere APIs (N — hot-path coupling, and queries would leave the box: doubly wrong given D4's privacy story) · fine-tuned embeddings (no labeled pairs — No).

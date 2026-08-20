@@ -88,7 +88,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.mlService.modelCache.size }}
-{{- end }}
+{{ end }}
 ---
 apiVersion: v1
 kind: Service
@@ -103,4 +103,4 @@ spec:
       protocol: TCP
       name: http
   selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
-{{- end }}
+{{ end }}

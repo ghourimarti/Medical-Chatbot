@@ -1,0 +1,114 @@
+# Load smoke (S17.4) — a regression tripwire, not a capacity test.
+#
+# WHICH TIER AND WHY. tests/load/system_load.js has three (docs/LOAD_TEST.md):
+#
+#   TIER=full   traverses retrieval + rerank + a real LLM call. It measured 2 RPS locally
+#               and would burn provider quota on every run. Not a CI shape.
+#   TIER=cache  every request is a cache hit — the HTTP/async/Redis ceiling (310 RPS,
+#               p99 6 ms). Needs a warmed cache and therefore a full index.
+#   TIER=guard  unsafe prompts, refused BEFORE embedding (S12.6). No LLM, no ml-service,
+#               no index — and it still exercises the whole HTTP path, middleware, rate
+#               limiting and the guardrail. 6 ms per refusal, measured in P5.2.3.
+#
+# So `guard` is the only tier whose cost is compatible with running per-merge, and it is
+# genuinely useful: the guardrail is on the hot path of every request, and P5.2 found three
+# defects there (a rate-limit bypass, log amplification, and a process death under burst)
+# that no unit test surfaced.
+#
+# What this DOES NOT prove: end-to-end throughput or latency under real retrieval. That is
+# measured against a real cluster in P7.9, where an HPA can actually respond.
+name: load-smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      peak_rate:
+        description: "Peak requests/sec"
+        required: false
+        default: "100"
+
+concurrency:
+  group: load-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guard-tier:
+    name: guardrail throughput
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      qdrant:
+        # Present only so the API can start and pass readiness; the guard tier never
+        # reaches retrieval.
+        image: qdrant/qdrant:v1.12.4
+        ports: ["6333:6333"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --frozen
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install -y k6
+
+      - name: Seed a minimal index
+        # The guard tier never queries it, but readiness now REQUIRES a non-empty index
+        # (P6.3.5) — a pod that cannot answer anything must not report Ready. So the API
+        # will not come up against an empty Qdrant, by design.
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: http://localhost:6333
+          QDRANT_COLLECTION: gale_live
+        run: uv run medworker-ingest --direct --limit 50
+
+      - name: Start API
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: http://localhost:6333
+          QDRANT_COLLECTION: gale_live
+          REDIS_URL: redis://localhost:6379/0
+          API_PORT: "1107"
+        run: |
+          uv run uvicorn medapi.main:app --host 127.0.0.1 --port 1107 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:1107/readyz >/dev/null; then echo "api ready"; exit 0; fi
+            sleep 2
+          done
+          echo "api did not become ready"; exit 1
+
+      - name: Guardrail load smoke
+        env:
+          PEAK: ${{ github.event.inputs.peak_rate || '100' }}
+        run: |
+          k6 run -e TIER=guard -e PEAK_RATE="$PEAK" -e BASE_URL=http://localhost:1107 \
+            tests/load/system_load.js
+
+      - name: Upload k6 summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-smoke-report
+          path: eval-reports/load-*.json
+          if-no-files-found: ignore

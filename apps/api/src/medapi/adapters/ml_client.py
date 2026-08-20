@@ -54,6 +54,20 @@ class HttpEmbedder:
             )
         return payload["vectors"]  # type: ignore[no-any-return]
 
+    async def health(self) -> bool:
+        """Can this dependency actually serve? (P6.5.4)
+
+        Readiness previously checked only the vector store, so with ml-service scaled to
+        zero the API reported READY while every query failed 503 — embedding is the first
+        step of retrieval, and without a vector there is nothing to search. A pod that
+        cannot answer any request should not be in the Service's endpoint list.
+        """
+        try:
+            resp = await self._client.get("/healthz", timeout=2.0)
+            return resp.status_code == 200
+        except httpx.HTTPError:
+            return False
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

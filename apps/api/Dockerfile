@@ -18,6 +18,15 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH="/app/.venv/bin:$PATH"
 RUN useradd --create-home --uid 10001 appuser
 WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app /app
+
+# P6.1.5 — drop pip from the RUNTIME layer. Nothing installs packages here (uv resolves
+# and installs in the builder stage), and pip ships vendored copies of msgpack and
+# setuptools that account for 2 of the 3 Python CVEs Trivy reports against this image.
+# Removing the tool removes the finding and the capability at once: a runtime container
+# that cannot fetch and install packages is a smaller target than one that merely
+# should not. Our own venv keeps setuptools 83.0.0, which is already past the fix.
+RUN rm -rf /usr/local/lib/python3.13/site-packages/pip            /usr/local/lib/python3.13/site-packages/pip-*.dist-info            /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13
+
 USER appuser
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=3 \

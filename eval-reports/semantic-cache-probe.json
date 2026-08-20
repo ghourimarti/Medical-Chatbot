@@ -1,0 +1,201 @@
+{
+  "model": "BAAI/bge-large-en-v1.5",
+  "n_golden": 215,
+  "golden_pairs_above": {
+    "0.95": 0,
+    "0.97": 0,
+    "0.98": 0,
+    "0.99": 0,
+    "0.995": 0
+  },
+  "golden_max_sim": 0.854142427444458,
+  "golden_collisions": [],
+  "adversarial": [
+    {
+      "a": "What is the aspirin dose for an adult?",
+      "b": "What is the aspirin dose for a child?",
+      "distinction": "adult/child",
+      "sim": 0.8235,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What is the paracetamol dosage for an adult?",
+      "b": "What is the paracetamol dosage for an infant?",
+      "distinction": "adult/infant",
+      "sim": 0.8307,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "Should I start taking warfarin?",
+      "b": "Should I stop taking warfarin?",
+      "distinction": "start/stop",
+      "sim": 0.863,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What are the symptoms of hypoglycemia?",
+      "b": "What are the symptoms of hyperglycemia?",
+      "distinction": "hypo/hyper",
+      "sim": 0.8552,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What causes hypertension?",
+      "b": "What causes hypotension?",
+      "distinction": "hyper/hypo",
+      "sim": 0.8214,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What is the treatment for type 1 diabetes?",
+      "b": "What is the treatment for type 2 diabetes?",
+      "distinction": "type 1/type 2",
+      "sim": 0.8128,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "How is bacterial meningitis treated?",
+      "b": "How is viral meningitis treated?",
+      "distinction": "bacterial/viral",
+      "sim": 0.8874,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "Is ibuprofen safe during pregnancy?",
+      "b": "Is ibuprofen safe while breastfeeding?",
+      "distinction": "pregnancy/breastfeeding",
+      "sim": 0.8217,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "Can I take this medication with alcohol?",
+      "b": "Can I take this medication without alcohol?",
+      "distinction": "with/without",
+      "sim": 0.8871,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What are the side effects of taking prednisone?",
+      "b": "What are the side effects of stopping prednisone?",
+      "distinction": "taking/stopping",
+      "sim": 0.8704,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What is the maximum daily dose of ibuprofen?",
+      "b": "What is the minimum daily dose of ibuprofen?",
+      "distinction": "maximum/minimum",
+      "sim": 0.9133,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "Is this rash contagious?",
+      "b": "Is this rash cancerous?",
+      "distinction": "contagious/cancerous",
+      "sim": 0.7942,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What should I do if I miss a dose?",
+      "b": "What should I do if I double a dose?",
+      "distinction": "miss/double",
+      "sim": 0.7523,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "How long should I take antibiotics for?",
+      "b": "How often should I take antibiotics?",
+      "distinction": "how long/how often",
+      "sim": 0.9125,
+      "false_hit_at_0.97": false
+    },
+    {
+      "a": "What are the risks of surgery for this condition?",
+      "b": "What are the benefits of surgery for this condition?",
+      "distinction": "risks/benefits",
+      "sim": 0.8527,
+      "false_hit_at_0.97": false
+    }
+  ],
+  "adversarial_false_hits_at_0.97": 0,
+  "adversarial_max_sim": 0.9132999777793884,
+  "paraphrase": [
+    {
+      "a": "What is an abscess?",
+      "b": "Can you explain what an abscess is?",
+      "sim": 0.9265,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What causes chickenpox?",
+      "b": "What is the cause of chickenpox?",
+      "sim": 0.982,
+      "hit_at_0.97": true
+    },
+    {
+      "a": "What are the symptoms of cirrhosis?",
+      "b": "What symptoms does cirrhosis cause?",
+      "sim": 0.9625,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "How is conjunctivitis treated?",
+      "b": "What is the treatment for conjunctivitis?",
+      "sim": 0.9551,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What is dementia?",
+      "b": "Could you define dementia for me?",
+      "sim": 0.8213,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What causes a cold sore?",
+      "b": "What brings on a cold sore?",
+      "sim": 0.9095,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What are the signs of dehydration?",
+      "b": "How can you tell if someone is dehydrated?",
+      "sim": 0.8833,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What is celiac disease?",
+      "b": "Tell me about celiac disease.",
+      "sim": 0.8903,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "How is croup diagnosed?",
+      "b": "What is the diagnostic process for croup?",
+      "sim": 0.8836,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What is the prognosis for cystic fibrosis?",
+      "b": "What is the long-term outlook for someone with cystic fibrosis?",
+      "sim": 0.8175,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What is diphtheria?",
+      "b": "What does diphtheria mean?",
+      "sim": 0.9289,
+      "hit_at_0.97": false
+    },
+    {
+      "a": "What are the complications of diabetes mellitus?",
+      "b": "What problems can diabetes mellitus lead to?",
+      "sim": 0.8423,
+      "hit_at_0.97": false
+    }
+  ],
+  "decision_band": {
+    "max_dangerous": 0.9132999777793884,
+    "max_useful": 0.9819999933242798,
+    "window_exists": true
+  }
+}

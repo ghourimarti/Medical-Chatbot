@@ -10,6 +10,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "sentence-transformers>=5.0",
+    # Declared explicitly (not just pulled via sentence-transformers) so the
+    # workspace CPU-index pin in the root pyproject binds — a transitive requirement
+    # does not pick up a [tool.uv.sources] override (P6.1a).
+    "torch>=2.0",
     "pydantic>=2.8",
 ]
 

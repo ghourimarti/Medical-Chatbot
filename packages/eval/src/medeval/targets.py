@@ -9,6 +9,7 @@ absorbs the legacy trait instead of editing it away.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time
@@ -123,9 +124,52 @@ class MockTarget:
         )
 
 
+class PipelineTarget:
+    """The NEW stack (S6): hybrid retrieval -> rerank -> threshold -> cited generation.
+
+    Runs the real RagPipeline in-process, against the real Qdrant. This is what makes the
+    before/after delta measurable — evaluating the deployed HTTP surface instead would add
+    a server dependency to every eval run for no additional signal at this stage.
+    """
+
+    name = "pipeline"
+
+    def __init__(self) -> None:
+        load_dotenv(REPO_ROOT / ".env")
+        from medapi.deps import build_services
+
+        from medcore.config import get_settings
+
+        self._services = build_services(get_settings())
+        self._loop = asyncio.new_event_loop()
+        self._loop.run_until_complete(self._services.store.ensure_collection())
+
+    def answer(self, question: str) -> TargetAnswer:
+        t0 = time.perf_counter()
+        try:
+            ans, contexts = self._loop.run_until_complete(
+                self._services.pipeline.answer_verbose(question)
+            )
+        except Exception as e:  # noqa: BLE001 — a baseline records failures, never dies
+            return TargetAnswer(
+                answer="",
+                contexts=[],
+                latency_ms=(time.perf_counter() - t0) * 1000,
+                error=f"{type(e).__name__}: {e}",
+            )
+        return TargetAnswer(
+            answer=ans.text,
+            contexts=contexts,  # FULL passage text — RAGAS scores against what the model saw
+            latency_ms=ans.timings.total_ms or (time.perf_counter() - t0) * 1000,
+            model_id=ans.model_id,
+        )
+
+
 def get_target(name: str) -> Target:
     if name == "demo":
         return DemoTarget()
     if name == "mock":
         return MockTarget()
-    raise ValueError(f"unknown target: {name!r} (available: demo, mock)")
+    if name == "pipeline":
+        return PipelineTarget()
+    raise ValueError(f"unknown target: {name!r} (available: demo, mock, pipeline)")

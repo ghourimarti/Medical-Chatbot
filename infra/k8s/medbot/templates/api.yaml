@@ -8,6 +8,14 @@ spec:
   {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicaCount }}
   {{- end }}
+  # P6.5.2: the default strategy allows 25% unavailable, which with 2 replicas means
+  # serving on ONE pod mid-deploy. maxUnavailable 0 keeps full capacity throughout and
+  # maxSurge 1 pays for it with one extra pod for the duration of the roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels: {{- include "medbot.selectorLabels" $c | nindent 6 }}
   template:
@@ -60,6 +68,20 @@ spec:
             timeoutSeconds: {{ .timeoutSeconds }}
             failureThreshold: {{ .failureThreshold }}
           {{- end }}
+          # P6.5.2 — MEASURED: a rolling restart under continuous traffic lost 1 request
+          # in 90 (89 ok / 1 connection failure). Cause is the standard endpoint race:
+          # deleting a pod removes it from Service endpoints AND sends SIGTERM at the same
+          # time, asynchronously. kube-proxy on every node has to catch up, but uvicorn
+          # stops accepting the moment it sees SIGTERM — so for a beat, traffic is still
+          # routed to a socket that is already closing. terminationGracePeriodSeconds does
+          # not help: the pod is refusing, not slow.
+          #
+          # The fix is to delay the SIGTERM, not the shutdown: sleep in preStop so the pod
+          # keeps serving normally while the endpoint removal propagates.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ .Values.api.preStopSleepSeconds | default 6 }}"]
       # SSE streams are long-lived (D7). A pod terminating mid-stream must be given time to
       # finish in-flight answers rather than cutting users off at the TCP level.
       terminationGracePeriodSeconds: 45

@@ -112,6 +112,7 @@ DNS, private registry pulls, node failure, or anything about capacity. Those are
 | Step | Deliverable |
 |---|---|
 | P6.1 | Docker images for api / ml-service / worker — multi-stage, non-root, Trivy-clean |
+| P6.1a | **Strip CUDA from CPU-only images — MEASURED, see below** |
 | P6.2 | `docker compose` full-stack end-to-end smoke |
 | P6.3 | kind cluster created; Helm chart installs green |
 | P6.4 | Probes, HPA, ConfigMap/Secret wiring verified in-cluster |
@@ -173,3 +174,51 @@ leaked vendor specifics and that is a finding worth writing up.
 | P9.4 | Findings writeup (every measurement that refuted an assumption) |
 | P9.5 | Demo video / screenshots |
 | P9.6 | Interview talking points + consolidated senior-vs-junior table |
+
+
+---
+
+## Finding (S15.5): CPU-only images ship 3.4 GB of unusable CUDA runtime
+
+Measured inside `medbot-ml:0.1.0` (total image **8.5 GB**):
+
+| Package | Size | Reachable? |
+|---|---:|---|
+| `nvidia/*` (CUDA libs) | 2724 MB | ❌ never executed |
+| `triton` (GPU kernel compiler) | 691 MB | ❌ never executed |
+| `cuda` | 25 MB | ❌ never executed |
+| `torch` (CUDA build) | 1127 MB | partially — CPU ops only |
+
+**Cause.** `torch` is a transitive dependency of `sentence-transformers` and PyPI's default
+wheel is the CUDA build. But every model in this repo is instantiated CPU-only:
+
+```
+apps/api/src/medapi/adapters/embedder.py:30   SentenceTransformer(..., device="cpu")
+apps/api/src/medapi/adapters/reranker.py:41   CrossEncoder(..., device="cpu")
+apps/ml-service/src/medml/backends.py:51      SentenceTransformer(..., device="cpu")
+apps/ml-service/src/medml/backends.py:93      CrossEncoder(..., device="cpu")
+```
+
+GPU inference lives in the **separate vLLM venue** (D4b), never in these containers.
+
+**Why it matters beyond disk.** Image size is paid on every pull:
+* `kind load` of three images took long enough to background — the immediate symptom;
+* registry storage and egress on DOKS/EKS;
+* **pod cold-start on every HPA scale-up** — which directly undermines the autoscaling
+  behaviour Phase 7 exists to demonstrate. An 8.8 GB image makes "scale up fast" a fiction.
+
+**Fix** (repo root `pyproject.toml`), expected to cut each image roughly in half:
+
+```toml
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+```
+
+Deferred to **P6.1a** rather than applied mid-deployment: it changes `uv.lock` and requires
+a full rebuild + re-load of all three images. Sequencing an optimization ahead of the
+correctness proof it would invalidate is how you end up debugging two things at once.

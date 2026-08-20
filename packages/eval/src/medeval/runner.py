@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import statistics
 from datetime import UTC, datetime
 from pathlib import Path
 
+from medeval.aggregate import aggregate_scores, applicable_counts, coverage_line
 from medeval.dataset import category_counts, dataset_sha256, load_cases, stratified_sample
 from medeval.judge import JUDGE_VERSION
 from medeval.metrics import deterministic_scores, ragas_scores
@@ -51,12 +51,14 @@ def run_eval(
             scores=per_case_scores[c.id],
             answer=a.answer,
             n_contexts=len(a.contexts),
+            contexts=list(a.contexts),  # persisted so judge metrics stay re-scorable
             latency_ms=a.latency_ms,
             error=a.error,
         )
         for c, a in answers
     ]
 
+    _agg, _cov = aggregate_scores(results)
     report = EvalReport(
         run_id=f"{target_name}-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}",
         created_at=datetime.now(UTC),
@@ -65,27 +67,13 @@ def run_eval(
         dataset_sha256=dataset_sha256(dataset_path),
         judge=JUDGE_VERSION if not skip_ragas else "skipped",
         n_cases=len(cases),
-        aggregates=_aggregate(results),
+        aggregates=_agg,
+        coverage=_cov,
         per_case=results,
         notes=[f"category_counts={category_counts(cases)}"],
     )
     out_path = _write_reports(report, out_dir)
     return report, out_path
-
-
-def _aggregate(results: list[CaseResult]) -> dict[str, float]:
-    agg: dict[str, list[float]] = {}
-    for r in results:
-        for k, v in r.scores.items():
-            if v is not None:
-                agg.setdefault(k, []).append(v)
-    out = {k: round(statistics.fmean(v), 4) for k, v in agg.items() if v}
-    lat = sorted(r.latency_ms for r in results)
-    if lat:
-        out["latency_p50_ms"] = round(statistics.median(lat), 1)
-        out["latency_p95_ms"] = round(lat[min(len(lat) - 1, int(0.95 * len(lat)))], 1)
-    out["error_rate"] = round(sum(1 for r in results if r.error) / len(results), 4)
-    return out
 
 
 def _write_reports(report: EvalReport, out_dir: Path) -> Path:
@@ -100,10 +88,14 @@ def _write_reports(report: EvalReport, out_dir: Path) -> Path:
         f"(sha256 `{report.dataset_sha256[:12]}…`)",
         f"- judge: {report.judge} · cases: {report.n_cases} · {report.notes[0]}",
         "",
-        "| metric | value |",
-        "|---|---|",
+        "| metric | value | n scored |",
+        "|---|---|---|",
     ]
-    lines += [f"| {k} | {v} |" for k, v in sorted(report.aggregates.items())]
+    _applicable = applicable_counts(report.per_case)
+    lines += [
+        f"| {k} | {v} | {coverage_line(k, report.coverage, _applicable)} |"
+        for k, v in sorted(report.aggregates.items())
+    ]
     worst = [
         r
         for r in sorted(

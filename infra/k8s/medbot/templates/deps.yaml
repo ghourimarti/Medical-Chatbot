@@ -1,4 +1,13 @@
 {{/*
+WHITESPACE NOTE (found the hard way in S15.5): these block-closing tags are `{{ end }}`
+WITHOUT the leading dash, deliberately. `{{- end }}` strips the newline BEFORE it, which
+glued the final `selector:` line onto the next block's `---`, merging two Kubernetes
+objects into a single YAML document. Duplicate keys then collapsed and the Service was
+silently DISCARDED. Both `helm lint` and `helm template` pass in that state — the loss only
+surfaces at apply time as a DNS failure, which is a long way from the cause.
+*/}}
+
+{{/*
 In-cluster dependencies. This file is the single biggest portability lever in the chart:
   kind/dev   -> deps.*.enabled = true  (StatefulSets here, zero external cost)
   DOKS/EKS   -> deps.*.enabled = false (managed Postgres/Redis; URLs come from the Secret)
@@ -31,10 +40,26 @@ spec:
             - { name: http, containerPort: 6333 }
             - { name: grpc, containerPort: 6334 }
           resources: {{- toYaml .Values.deps.qdrant.resources | nindent 12 }}
-          # Qdrant's image is distroless — no shell, no curl. Its own binary is the only
-          # available probe, which is why this is exec and not httpGet.
+          # P6.4.1: this was `exec ["/qdrant/qdrant","--version"]`, carried over from the
+          # compose healthcheck where it IS the only option (distroless image: no shell,
+          # no curl, and a compose healthcheck must run inside the container).
+          #
+          # In Kubernetes that constraint does not apply — httpGet probes are executed by
+          # the KUBELET, not inside the container, so the missing shell is irrelevant.
+          # The exec probe only proved the binary could run: a Qdrant whose HTTP API was
+          # wedged still reported Ready, so the Service kept routing to it and the API
+          # blocked until its own timeout instead of failing fast into the degraded path
+          # (D21, and the 500→503 correction measured in P5.3.4).
+          # Verified against the running pod: /readyz, /healthz and /livez all return 200.
           readinessProbe:
-            exec: { command: ["/qdrant/qdrant", "--version"] }
+            httpGet: { path: /readyz, port: http }
+          livenessProbe:
+            # /livez is process-liveness only. Restarting on a failed /readyz would fight
+            # a slow-but-recovering node; readiness already removes it from the Service.
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
             initialDelaySeconds: 5
             periodSeconds: 10
           volumeMounts:
@@ -62,7 +87,7 @@ spec:
     - { port: 6333, targetPort: http, name: http }
     - { port: 6334, targetPort: grpc, name: grpc }
   selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
-{{- end }}
+{{ end }}
 
 {{- if .Values.deps.postgres.enabled }}
 {{- $c := dict "root" . "component" "postgres" -}}
@@ -122,7 +147,7 @@ spec:
   ports:
     - { port: 5432, targetPort: pg, name: pg }
   selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
-{{- end }}
+{{ end }}
 
 {{- if .Values.deps.redis.enabled }}
 {{- $c := dict "root" . "component" "redis" -}}
@@ -172,4 +197,4 @@ spec:
   ports:
     - { port: 6379, targetPort: redis, name: redis }
   selector: {{- include "medbot.selectorLabels" $c | nindent 4 }}
-{{- end }}
+{{ end }}

@@ -134,3 +134,49 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: str | None = Field(default=None, max_length=128)
     stream: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Streaming contract (D7). FROZEN: the frontend (S10) builds against these names.
+#
+# Ordering matters and is a deliberate UX decision: in RAG, retrieval completes
+# *before* generation starts, so citations are known up front. Emitting `sources`
+# first lets a client paint the source panel while the answer is still being
+# written — better perceived latency at zero cost.
+# ---------------------------------------------------------------------------
+
+
+class StreamEventType(StrEnum):
+    SOURCES = "sources"
+    TOKEN = "token"
+    DONE = "done"
+    ERROR = "error"
+
+
+class SourcesEvent(BaseModel):
+    """Emitted once, before any token."""
+
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class TokenEvent(BaseModel):
+    text: str
+
+
+class DoneEvent(BaseModel):
+    """Terminal event on success. Carries the same information the non-streaming
+    endpoint would have returned, so both paths stay observably equivalent."""
+
+    kind: AnswerKind
+    text: str
+    citations: list[Citation] = Field(default_factory=list)
+    model_id: str | None = None
+    usage: Usage = Field(default_factory=Usage)
+    timings: StageTimings = Field(default_factory=StageTimings)
+
+
+class ErrorEvent(BaseModel):
+    """Terminal event on failure. Once bytes are on the wire an HTTP status can no
+    longer be changed, so errors must be in-band — this carries the RFC 7807 body."""
+
+    problem: dict[str, Any]

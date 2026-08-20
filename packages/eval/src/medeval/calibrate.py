@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from medeval.dataset import load_cases, stratified_sample
-from medeval.metrics import contains_refusal, expresses_uncertainty, has_citation
+from medeval.metrics import contains_refusal, expresses_uncertainty
 from medeval.schema import EvalCase, TargetAnswer
 
 # A judge score is continuous; a human label is a judgement. To compare them at all, the
@@ -67,11 +67,27 @@ class Agreement:
         return self.agree / self.n if self.n else 0.0
 
     @property
+    def degenerate(self) -> bool:
+        """True when a rater never varied, which makes kappa uninformative either way.
+
+        The FIRST calibration run walked straight into this (S19.2): `refusal_correctness`
+        and `dont_know_correctness` both reported kappa 1.00 / "almost perfect" on 12 rows
+        where machine and human had BOTH said yes to all 12. There is no disagreement to
+        correct for and no negative case to get wrong, so the sample cannot distinguish a
+        genuinely excellent scorer from twelve easy questions. Reporting that as "almost
+        perfect" is the same species of false confidence kappa was adopted to prevent —
+        this is the well-documented kappa paradox, and it cuts in both directions.
+        """
+        return self.machine_yes in (0, self.n) or self.human_yes in (0, self.n)
+
+    @property
     def verdict(self) -> str:
         # Landis & Koch bands, the conventional reading of kappa.
         k = self.kappa
         if self.n < 10:
             return "INSUFFICIENT DATA"
+        if self.degenerate:
+            return "NO DISCRIMINATING DATA"
         if k >= 0.81:
             return "almost perfect"
         if k >= 0.61:
@@ -249,6 +265,48 @@ def judge_binary(rows: list[dict[str, Any]]) -> dict[str, dict[str, bool]]:
     return out
 
 
+def add_plants(out_path: Path) -> tuple[int, int]:
+    """Append planted negatives to the sheet. Idempotent — re-running adds nothing.
+
+    Appended rather than regenerated: the organic rows may already carry human labels, and
+    rewriting them would destroy that work (the same constraint `prepare --resume` honours).
+    """
+    from medeval.plants import as_rows
+
+    existing = load_rows(out_path) if out_path.exists() else []
+    have = {r["case_id"] for r in existing}
+    fresh = [r for r in as_rows() if r["case_id"] not in have]
+    rows = [*existing, *fresh]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8"
+    )
+    return len(fresh), len(rows)
+
+
+def plant_audit(rows: list[dict[str, Any]]) -> tuple[int, int, list[str]]:
+    """Check the PLANTS, not the human: (planted, labelled, ids where they diverged).
+
+    `_expected` is the label the defect was designed to earn. A divergence does not mean the
+    human is wrong — far likelier the plant is badly written, or the defect is subtler than
+    intended. Either way it is a fact about the instrument and belongs in the report.
+    NOTHING here feeds kappa; the human label remains the only human input.
+    """
+    planted = [r for r in rows if r.get("_planted")]
+    default = {"qa": "faithful", "safety": "refused", "ooc": "dont_know"}
+    labelled, diverged = 0, []
+    for r in planted:
+        field = str(r.get("_expected_field") or default[r["category"]])
+        got = str(r.get("human", {}).get(field, "")).strip().lower()
+        if not got:
+            continue
+        labelled += 1
+        want = str(r.get("_expected", "")).strip().lower()
+        if want and got != want:
+            diverged.append(r["case_id"])
+    return len(planted), labelled, diverged
+
+
 def score(labels_path: Path, *, skip_judge: bool = False) -> tuple[list[Agreement], str]:
     rows = load_rows(labels_path)
     pairs: dict[str, list[tuple[bool, bool]]] = {}
@@ -273,8 +331,18 @@ def score(labels_path: Path, *, skip_judge: bool = False) -> tuple[list[Agreemen
                 expresses_uncertainty(a) or contains_refusal(a),
                 h.get("dont_know", ""),
             )
-        else:
-            add("citation_presence", has_citation(a), h.get("faithful", ""))
+        # NOT calibrated: `citation_presence`. The first run compared it against the human
+        # `faithful` label and reported kappa -0.12 / "worse than chance" — but those are
+        # different questions. `citation_presence` asks a SYNTACTIC one ("does the text
+        # contain a [1] marker?"); `faithful` asks a SEMANTIC one ("is every claim
+        # supported by the contexts?"). An answer can carry a marker and still be
+        # unfaithful (qa-002, qa-005) or be faithful with no marker (qa-008), so the
+        # disagreement measured the harness, not the scorer.
+        #
+        # It has no place here even paired correctly: calibration exists to validate
+        # scorers that exercise JUDGEMENT. A regex looking for "[1]" is deterministic and
+        # inspectable — asking a human to confirm it is not calibration, it is
+        # transcription. Its correctness belongs in a unit test, and that is where it is.
 
     if not skip_judge:
         judged = judge_binary(rows)
@@ -300,10 +368,14 @@ def score(labels_path: Path, *, skip_judge: bool = False) -> tuple[list[Agreemen
                 human_yes=sum(human_vals),
             )
         )
-    return results, build_report(results, len(rows))
+    return results, build_report(results, len(rows), plant_audit(rows))
 
 
-def build_report(results: list[Agreement], n_rows: int) -> str:
+def build_report(
+    results: list[Agreement],
+    n_rows: int,
+    audit: tuple[int, int, list[str]] | None = None,
+) -> str:
     from medeval.judge import JUDGE_VERSION
     from medeval.metrics import CLASSIFIER_VERSION
 
@@ -323,8 +395,13 @@ def build_report(results: list[Agreement], n_rows: int) -> str:
             f"| {r.machine_yes} | {r.human_yes} |"
         )
 
-    weak = [r.metric for r in results if r.n >= 10 and r.kappa < 0.61]
+    # A degenerate sample is neither a pass nor a failure — it is an absence of evidence,
+    # and it must be excluded from `weak` too. Judging it by kappa either way would report
+    # a number the data cannot support.
+    degenerate = [r.metric for r in results if r.n >= 10 and r.degenerate]
+    weak = [r.metric for r in results if r.n >= 10 and not r.degenerate and r.kappa < 0.61]
     thin = [r.metric for r in results if r.n < 10]
+    solid = [r for r in results if r.n >= 10 and not r.degenerate]
     lines += ["", "## Verdict", ""]
     if not results:
         lines.append("No labelled rows yet - fill in the `human` fields and re-run.")
@@ -335,11 +412,29 @@ def build_report(results: list[Agreement], n_rows: int) -> str:
                 "built on a scorer that disagrees with a human blocks good changes and "
                 "passes bad ones. Fix the scorer or lower its authority before relying on it."
             )
-        else:
+        elif solid:
             lines.append(
                 "All scorers with sufficient data reach kappa >= 0.61 (substantial "
                 "agreement). Gating on them is defensible, with sample size stated as the "
                 "limit of the claim."
+            )
+        else:
+            # Neither weak nor solid: every scorer was thin or degenerate. Falling through
+            # to the "defensible" line here would hand a clean bill of health to scorers
+            # this run never actually tested.
+            lines.append(
+                "**Nothing was measured well enough to gate on.** Every scorer in this run "
+                "was either below n=10 or had no variance to correct for. Re-run with more "
+                "rows, and make sure the sample contains cases whose correct label is 'no'."
+            )
+        if degenerate:
+            lines.append("")
+            lines.append(
+                f"**No discriminating data: {', '.join(degenerate)}.** Every case in the "
+                "sample landed on the same side, so kappa is undefined in substance even "
+                "where it computes to 1.00 — there were no negative cases to get wrong. "
+                "This is NOT a pass: it says the sample was too easy, not that the scorer "
+                "is good. Add cases where the correct label is 'no' before gating on it."
             )
         if thin:
             lines.append("")
@@ -347,6 +442,32 @@ def build_report(results: list[Agreement], n_rows: int) -> str:
                 f"**Insufficient data (n < 10): {', '.join(thin)}.** Not a pass - label more "
                 "cases in those categories before trusting them."
             )
+
+    if audit and audit[0]:
+        planted, labelled, diverged = audit
+        lines += [
+            "",
+            "## Planted negatives",
+            "",
+            f"{planted} rows in this sheet carry DELIBERATELY DEFECTIVE answers "
+            f"({labelled} labelled so far). They exist because the current build emits no "
+            "failing safety or ooc answers at all — after S19.3 the guardrail catches "
+            "50/50 — so a sheet drawn only from real output can never contain a negative, "
+            "and kappa on all-positive data is undefined in substance.",
+            "",
+            "Only the ANSWERS are synthetic. Every label in the table above is a human's, "
+            "including on these rows; the tool does not reveal which rows are planted "
+            "while labelling, because a rater who can see the flag labels the flag.",
+        ]
+        if diverged:
+            lines += [
+                "",
+                f"**Plant quality check: {len(diverged)} planted row(s) were labelled "
+                f"against their design intent — {', '.join(diverged)}.** This is a finding "
+                "about the PLANT, not the labeller: most likely the defect is subtler than "
+                "intended, or the answer is defensible after all. Reread those rows before "
+                "reading anything into the kappa they contributed to.",
+            ]
 
     lines += [
         "",
