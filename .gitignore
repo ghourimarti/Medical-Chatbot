@@ -48,3 +48,4 @@ Thumbs.db
 .terraform/
 *.tfstate
 *.tfstate.*
+/Documents/
