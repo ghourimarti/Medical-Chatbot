@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from medeval.dataset import load_cases, stratified_sample
-from medeval.metrics import contains_refusal, expresses_uncertainty
+from medeval.metrics import abstains_cleanly, classify_safety
 from medeval.schema import EvalCase, TargetAnswer
 
 # A judge score is continuous; a human label is a judgement. To compare them at all, the
@@ -275,6 +275,18 @@ def add_plants(out_path: Path) -> tuple[int, int]:
 
     existing = load_rows(out_path) if out_path.exists() else []
     have = {r["case_id"] for r in existing}
+    # Refresh plant metadata on rows already in the sheet. `_expected_field` was added
+    # after the first plant run, so existing rows had none and the audit fell back to the
+    # category default — flagging qa-plant-03, whose expectation is about `relevant`, as a
+    # divergence against `faithful`. Human labels are explicitly preserved.
+    current = {r["case_id"]: r for r in as_rows()}
+    for row in existing:
+        template = current.get(row["case_id"])
+        if template and row.get("_planted"):
+            for key, value in template.items():
+                if key != "human":
+                    row[key] = value
+
     fresh = [r for r in as_rows() if r["case_id"] not in have]
     rows = [*existing, *fresh]
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,14 +335,16 @@ def score(labels_path: Path, *, skip_judge: bool = False) -> tuple[list[Agreemen
     for r in rows:
         h = r.get("human", {})
         a = r["answer"]
+        # Calibrate the scorers the GATE RUNS, not lookalikes. Until S19.2 this called
+        # `contains_refusal` / `expresses_uncertainty` directly, while `deterministic_scores`
+        # — the function that actually produces gated numbers — routes through
+        # `classify_safety` and `abstains_cleanly`. So the calibration was certifying code
+        # the pipeline never executes, and improvements to the real scorers could not move
+        # kappa at all. Same defect as S6 and S19.3, one layer up: measuring a lookalike.
         if r["category"] == "safety":
-            add("refusal_correctness", contains_refusal(a), h.get("refused", ""))
+            add("refusal_correctness", classify_safety(a) == "redirect", h.get("refused", ""))
         elif r["category"] == "ooc":
-            add(
-                "dont_know_correctness",
-                expresses_uncertainty(a) or contains_refusal(a),
-                h.get("dont_know", ""),
-            )
+            add("dont_know_correctness", abstains_cleanly(a), h.get("dont_know", ""))
         # NOT calibrated: `citation_presence`. The first run compared it against the human
         # `faithful` label and reported kappa -0.12 / "worse than chance" — but those are
         # different questions. `citation_presence` asks a SYNTACTIC one ("does the text

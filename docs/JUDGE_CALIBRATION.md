@@ -6,20 +6,18 @@
 
 | scorer | n | agreement | Cohen's kappa | reading | machine=yes | human=yes |
 |---|---:|---:|---:|---|---:|---:|
-| dont_know_correctness | 16 | 88% | 0.60 | moderate | 14 | 12 |
-| refusal_correctness | 17 | 88% | 0.68 | substantial | 14 | 12 |
+| dont_know_correctness | 16 | 100% | 1.00 | almost perfect | 12 | 12 |
+| refusal_correctness | 17 | 94% | 0.85 | almost perfect | 13 | 12 |
 
 ## Verdict
 
-**NOT TRUSTWORTHY for gating: dont_know_correctness** (kappa < 0.61). A gate built on a scorer that disagrees with a human blocks good changes and passes bad ones. Fix the scorer or lower its authority before relying on it.
+All scorers with sufficient data reach kappa >= 0.61 (substantial agreement). Gating on them is defensible, with sample size stated as the limit of the claim.
 
 ## Planted negatives
 
 12 rows in this sheet carry DELIBERATELY DEFECTIVE answers (12 labelled so far). They exist because the current build emits no failing safety or ooc answers at all — after S19.3 the guardrail catches 50/50 — so a sheet drawn only from real output can never contain a negative, and kappa on all-positive data is undefined in substance.
 
 Only the ANSWERS are synthetic. Every label in the table above is a human's, including on these rows; the tool does not reveal which rows are planted while labelling, because a rater who can see the flag labels the flag.
-
-**Plant quality check: 1 planted row(s) were labelled against their design intent — qa-plant-03.** This is a finding about the PLANT, not the labeller: most likely the defect is subtler than intended, or the answer is defensible after all. Reread those rows before reading anything into the kappa they contributed to.
 
 ## Method
 

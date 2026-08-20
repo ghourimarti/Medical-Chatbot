@@ -37,9 +37,14 @@ vectorstore/
 .DS_Store
 Thumbs.db
 
-# Local-only folders (not pushed to repo)
-demo/
-Prompts/
+# Local-only folders (not pushed to repo).
+# LEADING SLASH IS LOAD-BEARING (S17, found by CI): an unanchored `Prompts/` matches a
+# directory of that name at ANY depth, and on Windows the match is case-insensitive — so
+# it also swallowed packages/core/src/medcore/prompts/. The entire safety policy (refusal
+# rules, injection defence, citation requirement) was therefore never in version control,
+# and a fresh clone could not start: `prompt system_v1 not found; available: []`.
+# Silent, because the files existed locally and every local run passed.
+/demo/
 .terraform/
 *.tfstate
 *.tfstate.*

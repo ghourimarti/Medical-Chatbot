@@ -11,9 +11,12 @@
 # swap, not a rewrite. `REGISTRY`/`IMAGE_PREFIX` are the only lines that change.
 name: images
 
+# COST (private repo — every minute is billed). Building three ~2.3 GB images is the most
+# expensive job here, and rebuilding it on every push to main pays for artifacts nobody
+# deploys. Releases are what need images, so: tags and manual only.
+#   one-off build:  gh workflow run images
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -88,7 +91,7 @@ jobs:
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
       - name: Vulnerability scan (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: medbot-${{ matrix.service }}:ci
           severity: HIGH,CRITICAL
@@ -107,7 +110,7 @@ jobs:
         # Distinct from gitleaks in ci.yaml: that scans the repo, this scans what actually
         # shipped. P6.1.3 found tests/ (containing a fake `gsk_` literal) inside all three
         # runtime images — present in the artifact, not in any tracked source path.
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: medbot-${{ matrix.service }}:ci
           scanners: secret

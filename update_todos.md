@@ -228,7 +228,7 @@ PHASE 4 — Execution 🔄 14 / 20
 
         ✅ S19.0 Judge identity re-pinned → judge_v2 (Groq removed llama-3.3-70b)
         ✅ S19.1 Expand golden set 90 → 215 — v2 assembled (150/50/15), v1 superset verified
-        🔄 S19.2 Judge calibration vs human labels — 36 labels IN; 3 harness defects found — 5 / 7
+        🔄 S19.2 Judge calibration vs human labels — 48 labels IN; 6 defects found — 9 / 10
 
             ✅ S19.2a Harness + Cohen's κ + balanced 36-row sheet
             ✅ S19.2b Interactive labelling tool (tools/label.py) — resumable, never guesses
@@ -249,7 +249,19 @@ PHASE 4 — Execution 🔄 14 / 20
                  Answers are synthetic, labels never are; the labeller hides which
                  rows are planted, and a plant-quality audit flags any row you label
                  against its design intent.
-            ⏳ S19.2h Label the 12 planted rows → re-run score → real κ per classifier
+            ✅ S19.2h 48/48 labelled → REAL κ at last (variance, not the paradox):
+                 refusal_correctness 0.68 substantial · dont_know_correctness 0.60 moderate
+            ✅ S19.2i DEFECT: a dose outranked politeness — "400mg every 6 hours… Consult
+                 your doctor" scored a clean redirect. S12.3's dosage filter already caught
+                 it; the scorer never asked. Now vetoes.
+            ✅ S19.2j DEFECT: "I don't know, BUT here's the answer" scored as an honest
+                 abstention. New `abstains_cleanly` requires admit-the-gap-AND-STOP.
+            ✅ S19.2k DEFECT: calibration scored LOOKALIKES — calibrate.score called
+                 contains_refusal/expresses_uncertainty while the gate runs classify_safety/
+                 abstains_cleanly. It was certifying code the pipeline never executes.
+                 Post-fix κ 0.85 / 1.00 — FITTED, not independent; plants now spent.
+            ⏳ S19.2l faithfulness + answer_relevancy κ — still unmeasured (Groq TPD);
+                 strictness=1 fix is in, needs the daily reset
         ✅ S19.3 Threshold re-tune — 3 defects found, docs/THRESHOLDS.md
 
             ✅ S19.3a Safety scoring split 3-way — abstain (safe) no longer scored as unsafe
@@ -268,6 +280,168 @@ PHASE 4 — Execution 🔄 14 / 20
             ✅ S19.4e Exp C paraphrase — useful floor; only 1/12 hits at the configured 0.97
             ✅ S19.4f Decision — safe threshold is inert, useful threshold has 0.007 margin
             ✅ S19.4g Pinned in config comment + 2 regression tests
+
+    🔄 S17 CI/CD + eval gate proof [D16] — 5 / 7 (.6/.7 written, unexercised by design)
+         FIRST REAL RUN (you pushed) — 3 workflows failed, and each failure was worth more
+         than a green tick. actionlint-clean is NOT "will run":
+
+         🔴 A1 THE SAFETY POLICY WAS NEVER IN GIT. `.gitignore` line `Prompts/` had no
+              leading slash, so it matched a directory of that name at ANY depth — and on
+              Windows, case-insensitively — silently swallowing
+              packages/core/src/medcore/prompts/. CI: `prompt system_v1 not found;
+              available: []`. The refusal rules, injection defence and citation
+              requirement existed only on this machine; a fresh clone could not start, and
+              D6's "prompts are versioned as code, reviewed like code" was false.
+              Invisible locally because the files were there and every local run passed.
+              FIXED: anchored to /Prompts/ and /demo/. Verified both directions —
+              packages prompts now tracked, top-level folders still ignored.
+         🔴 A2 `aquasecurity/trivy-action@0.28.0` does not exist (7-second failure).
+              actionlint validates YAML and expressions; it cannot know whether a third
+              party's version tag is real. FIXED to @0.35.0, confirmed via the releases API.
+         🔴 A3 No corpus in CI: the Gale PDF is correctly untracked (27 MB, copyrighted,
+              /demo/ ignored) so `medworker-ingest` has nothing to index — and MY OWN
+              P6.3.5 readiness fix now REQUIRES a non-empty index, so the API cannot start.
+              Blocks load-smoke and the nightly eval-gate. Needs a small committed fixture
+              corpus (follow-up).
+
+         💰 BILLING (repo is PRIVATE — every minute is billed):
+              images    push-to-main → TAGS + manual only (3 × 2.3 GB builds per merge
+                        paid for artifacts nobody deployed)
+              load-smoke push → manual only (cannot pass until A3; was billing to fail
+                        identically every time)
+              eval-gate nightly cron DISABLED — it had failed every night on A3. A
+                        scheduled job that always fails is worse than none: it trains you
+                        to ignore the notification. Also costs a day of judge quota per run.
+              ci        unchanged: ~2-3 min, and it is the one that caught A1.
+         All 5 workflows pass `actionlint`. Local gate green: 324 tests, ruff, mypy.
+
+        ✅ S17.1 images.yaml — build · scan · push, matrix over the 3 services.
+             Unblocked BY P6.1a: at 8.84 GB each, three images did not fit a runner's
+             ~14 GB; at 2.32/1.95/2.32 they do. GHCR not ECR (no AWS creds — Track D.1;
+             registry is a 2-line swap, which is the vendor-portability principle).
+             NO `latest` tag — S16 recorded that the demo's :latest-only tagging made
+             rollback impossible: there was no earlier tag to roll back TO.
+             Adds an image-hygiene assert (non-root + no pip) because a base-image bump
+             can silently reintroduce both and nothing else would notice.
+        ✅ S17.2 ci.yaml split into unit / integration jobs with real services.
+             VERIFIED the split selects work rather than silently passing: 10 integration
+             + 311 unit = 321 collected. An integration job that matches nothing is a
+             green tick for tests that never ran.
+        ✅ S17.3 EVAL GATE BLOCKING — PROVEN, and proving it found 4 defects in the gate:
+             (a) UnicodeEncodeError: the delta table renders → and ✅; on a cp1252 console
+                 `print(table)` crashed. It ran BEFORE the gate check, so the gate NEVER
+                 EVALUATED and delta.md was never written — every run exited 1 from the
+                 traceback, indistinguishable from a real regression, and a passing run
+                 could never go green. Fixed at the entry point + verdict now computed
+                 and persisted BEFORE display.
+             (b) `latest_report` picked an ALL-ERRORED demo run (my 404'd re-run) as the
+                 baseline; the delta then read `error_rate 1 → 0` as **PASS**. Now skips
+                 reports with no completed cases, and says which it skipped.
+             (c) name-sort put `-rescored` BEFORE `.json` ('-' < '.'), so the corrected
+                 report lost to the buggy one it was created to replace
+                 (refusal_correctness 0.45 stale vs 0.70 corrected). Now ranks by
+                 (run id, derivation) so a correction outranks its original.
+             (d) my own rejudge checkpoint sidecar matched the *.json report glob, and an
+                 empty `{}` passed the guard because it DEFAULTED `completed` to 1.0.
+                 A guard whose default is "fine" only guards inputs that were already fine.
+             END STATE: gate selects demo-...-rescored vs pipeline-...-rescored-rejudged,
+             fires BOTH warnings built earlier this session (JUDGE MISMATCH, THIN COVERAGE
+             n=1/60), and BLOCKS with exit 1 on dont_know_correctness, refusal_correctness,
+             unsafe_answer_rate. 5 tests pin the exit-code CONTRACT, incl. one that runs
+             the gate against a cp1252 stdout so the original defect cannot return.
+        ✅ S17.4 load-smoke.yaml — TIER=guard, chosen by cost not convenience: `full` burns
+             provider quota at 2 RPS, `cache` needs a warmed full index, `guard` refuses
+             before embedding (6 ms, P5.2.3) yet still exercises HTTP + middleware + rate
+             limiting + guardrail — where P5.2 found 3 defects no unit test surfaced.
+             Seeds a 50-doc index because readiness now REQUIRES a non-empty one (P6.3.5).
+        ✅ S17.5 Security stages — gitleaks (full history) + pip-audit in ci.yaml; Trivy
+             vuln AND secret scans in images.yaml, scanning the loaded artifact BEFORE it
+             can reach a registry (P6.1.3 found tests/ with a fake gsk_ literal inside the
+             images but in no tracked source path).
+             pip-audit non-blocking BY DECISION with the reason recorded: its findings have
+             no available fix (langchain fix needs LangChain 1.x, which breaks ragas 0.4.3,
+             already latest). A gate that cannot be satisfied gets bypassed, and then it
+             guards nothing.
+        🔄 S17.6 Deploy to dev — WRITTEN, NEVER EXERCISED, deliberately. There is no cluster
+             and P7.1 (vendor selection) is still open, so the apply step would be a guess
+             at DOKS-vs-EKS auth/registry/secrets that Phase 7 rewrites. What IS
+             vendor-independent is encoded now: immutable-tag enforcement (refuses
+             `latest`/`main`), `--atomic` rollback, and a post-deploy smoke that must assert
+             BOTH readiness checks (P6.5.4: one-dependency readiness reports Ready while
+             every query fails). One TODO(P7) marker per environment.
+        🔄 S17.7 Promotion workflow — same file, same status. The promotion CONTRACT is
+             defined (dev auto → staging needs images+eval+load green → prod needs staging
+             smoke + manual reviewer + an existing rollback target), with approval held in
+             GitHub Environments rather than in this file, so it cannot be bypassed by the
+             same PR that deploys.
+
+PHASE 5 — Hardening ✅ 5 / 5
+
+    ✅ P5.1 Secrets · dependency · license audit
+
+        ✅ P5.1.1 Secret scan — tree, full git history, pattern grep → clean
+        ✅ P5.1.2 pip-audit → 13 findings
+        ✅ P5.1.3 Upgrade aiohttp + pypdf → 4 fixed
+        ✅ P5.1.4 Exploitability assessment → 9 not reachable
+        ✅ P5.1.5 Confirm ragas 0.4.3 is latest → pin is forced
+        ✅ P5.1.6 Delete dead code — model.py, reindex.py
+        ✅ P5.1.7 License audit — no copyleft; Gale corpus flagged
+        ✅ P5.1.8 docs/SECURITY_AUDIT.md + make audit
+
+    ✅ P5.2 Load test
+
+        ✅ P5.2.1 system_load.js harness, 3 tiers
+        ✅ P5.2.2 Tier A cache → 310 RPS, p99 6 ms
+        ✅ P5.2.3 Tier C guardrails → 6 ms/refusal
+        ✅ P5.2.4 Tier B full pipeline → 2 RPS, rerank 54%
+        ✅ P5.2.5 Fix rate-limit bypass
+        ✅ P5.2.6 Fix process death (BlockingConnectionPool)
+        ✅ P5.2.7 Fix log amplification
+        ✅ P5.2.8 Fix empty venue errors
+        ✅ P5.2.9 Fix silent Redis-off
+        ✅ P5.2.10 Correction — unattributed_ms
+        ✅ P5.2.11 docs/LOAD_TEST.md + 3 make targets
+
+    ✅ P5.3 Chaos drills
+
+        ✅ P5.3.1 Drill harness — stop/start only
+        ✅ P5.3.2 Provider drill → 503, RTO 64.8 s
+        ✅ P5.3.3 Redis drill → fixed 20.4 s → 4.7 s
+        ✅ P5.3.4 Qdrant drill → fixed 500 → 503
+        ✅ P5.3.5 Postgres drill → withdrawn, re-run in P5.4.2
+        ✅ P5.3.6 Empty index = fault, not abstention
+        ✅ P5.3.7 Harness false-pass fixed
+        ✅ P5.3.8 Pass criterion corrected
+        ✅ P5.3.9 docs/CHAOS_DRILLS.md + make chaos
+
+    ✅ P5.4 Backup / restore drill
+
+        ✅ P5.4.1 State classification — 1 of 3 is a system of record
+        ✅ P5.4.2 Re-run Postgres chaos drill properly → +3.5 s finding
+        ✅ P5.4.3 Fix — DATABASE_URL required outside local
+        ✅ P5.4.4 Fix — test suite no longer drops the dev database
+        ✅ P5.4.5 Extract shared Breaker → circuit.py
+        ✅ P5.4.6 Postgres dump + restore verified — RTO 0.5 s
+        ✅ P5.4.7 Qdrant snapshot + restore verified — RTO 3.5 s
+        ✅ P5.4.8 Measure re-index → snapshot is 390× faster
+        ✅ P5.4.9 Redis — prove no-backup is correct
+        ✅ P5.4.10 RPO analysis → PITR is a Phase 8 requirement
+        ✅ P5.4.11 docs/BACKUP_RESTORE.md + make backup-drill
+
+    ✅ P5.5 Runbooks · alerts · cost thresholds · log retention
+
+        ✅ P5.5.1 Runbook — provider outage
+        ✅ P5.5.2 Runbook — Redis / Postgres / Qdrant outages
+        ✅ P5.5.3 Runbook — index rebuild and alias rollback
+        ✅ P5.5.4 Fix — errors_total was declared but never emitted
+        ✅ P5.5.5 Fix — 429s were burning the availability budget
+        ✅ P5.5.6 Add dependency_circuit_state metric
+        ✅ P5.5.7 Six new alerts, thresholds traced to measurements
+        ✅ P5.5.8 promtool validation — 15 rules
+        ✅ P5.5.9 Runbook anchor links verified against alerts
+        ✅ P5.5.10 Cost threshold review — $5/day flagged
+        ✅ P5.5.11 Log retention + PII policy
+        ✅ P5.5.12 docs/RUNBOOKS.md
 
 PHASE 6 — Local & kind validation 🔄 6 / 7 (cost $0) — only P6.6.2 open (AWS creds, Track D.1)
 
@@ -501,137 +675,6 @@ PHASE 6 — Local & kind validation 🔄 6 / 7 (cost $0) — only P6.6.2 open (A
              IAM permission to create, name collisions). Those are exactly the failures
              that cannot be caught offline, which is why the step stays open rather than
              being marked done on the strength of `validate`
-
-    🔄 S17 CI/CD + eval gate proof [D16] — 5 / 7 (.6/.7 written, unexercised by design)
-         All 5 workflows pass `actionlint`. Local gate green: 324 tests, ruff, mypy.
-
-        ✅ S17.1 images.yaml — build · scan · push, matrix over the 3 services.
-             Unblocked BY P6.1a: at 8.84 GB each, three images did not fit a runner's
-             ~14 GB; at 2.32/1.95/2.32 they do. GHCR not ECR (no AWS creds — Track D.1;
-             registry is a 2-line swap, which is the vendor-portability principle).
-             NO `latest` tag — S16 recorded that the demo's :latest-only tagging made
-             rollback impossible: there was no earlier tag to roll back TO.
-             Adds an image-hygiene assert (non-root + no pip) because a base-image bump
-             can silently reintroduce both and nothing else would notice.
-        ✅ S17.2 ci.yaml split into unit / integration jobs with real services.
-             VERIFIED the split selects work rather than silently passing: 10 integration
-             + 311 unit = 321 collected. An integration job that matches nothing is a
-             green tick for tests that never ran.
-        ✅ S17.3 EVAL GATE BLOCKING — PROVEN, and proving it found 4 defects in the gate:
-             (a) UnicodeEncodeError: the delta table renders → and ✅; on a cp1252 console
-                 `print(table)` crashed. It ran BEFORE the gate check, so the gate NEVER
-                 EVALUATED and delta.md was never written — every run exited 1 from the
-                 traceback, indistinguishable from a real regression, and a passing run
-                 could never go green. Fixed at the entry point + verdict now computed
-                 and persisted BEFORE display.
-             (b) `latest_report` picked an ALL-ERRORED demo run (my 404'd re-run) as the
-                 baseline; the delta then read `error_rate 1 → 0` as **PASS**. Now skips
-                 reports with no completed cases, and says which it skipped.
-             (c) name-sort put `-rescored` BEFORE `.json` ('-' < '.'), so the corrected
-                 report lost to the buggy one it was created to replace
-                 (refusal_correctness 0.45 stale vs 0.70 corrected). Now ranks by
-                 (run id, derivation) so a correction outranks its original.
-             (d) my own rejudge checkpoint sidecar matched the *.json report glob, and an
-                 empty `{}` passed the guard because it DEFAULTED `completed` to 1.0.
-                 A guard whose default is "fine" only guards inputs that were already fine.
-             END STATE: gate selects demo-...-rescored vs pipeline-...-rescored-rejudged,
-             fires BOTH warnings built earlier this session (JUDGE MISMATCH, THIN COVERAGE
-             n=1/60), and BLOCKS with exit 1 on dont_know_correctness, refusal_correctness,
-             unsafe_answer_rate. 5 tests pin the exit-code CONTRACT, incl. one that runs
-             the gate against a cp1252 stdout so the original defect cannot return.
-        ✅ S17.4 load-smoke.yaml — TIER=guard, chosen by cost not convenience: `full` burns
-             provider quota at 2 RPS, `cache` needs a warmed full index, `guard` refuses
-             before embedding (6 ms, P5.2.3) yet still exercises HTTP + middleware + rate
-             limiting + guardrail — where P5.2 found 3 defects no unit test surfaced.
-             Seeds a 50-doc index because readiness now REQUIRES a non-empty one (P6.3.5).
-        ✅ S17.5 Security stages — gitleaks (full history) + pip-audit in ci.yaml; Trivy
-             vuln AND secret scans in images.yaml, scanning the loaded artifact BEFORE it
-             can reach a registry (P6.1.3 found tests/ with a fake gsk_ literal inside the
-             images but in no tracked source path).
-             pip-audit non-blocking BY DECISION with the reason recorded: its findings have
-             no available fix (langchain fix needs LangChain 1.x, which breaks ragas 0.4.3,
-             already latest). A gate that cannot be satisfied gets bypassed, and then it
-             guards nothing.
-        🔄 S17.6 Deploy to dev — WRITTEN, NEVER EXERCISED, deliberately. There is no cluster
-             and P7.1 (vendor selection) is still open, so the apply step would be a guess
-             at DOKS-vs-EKS auth/registry/secrets that Phase 7 rewrites. What IS
-             vendor-independent is encoded now: immutable-tag enforcement (refuses
-             `latest`/`main`), `--atomic` rollback, and a post-deploy smoke that must assert
-             BOTH readiness checks (P6.5.4: one-dependency readiness reports Ready while
-             every query fails). One TODO(P7) marker per environment.
-        🔄 S17.7 Promotion workflow — same file, same status. The promotion CONTRACT is
-             defined (dev auto → staging needs images+eval+load green → prod needs staging
-             smoke + manual reviewer + an existing rollback target), with approval held in
-             GitHub Environments rather than in this file, so it cannot be bypassed by the
-             same PR that deploys.
-
-PHASE 5 — Hardening ✅ 5 / 5
-
-    ✅ P5.1 Secrets · dependency · license audit
-
-        ✅ P5.1.1 Secret scan — tree, full git history, pattern grep → clean
-        ✅ P5.1.2 pip-audit → 13 findings
-        ✅ P5.1.3 Upgrade aiohttp + pypdf → 4 fixed
-        ✅ P5.1.4 Exploitability assessment → 9 not reachable
-        ✅ P5.1.5 Confirm ragas 0.4.3 is latest → pin is forced
-        ✅ P5.1.6 Delete dead code — model.py, reindex.py
-        ✅ P5.1.7 License audit — no copyleft; Gale corpus flagged
-        ✅ P5.1.8 docs/SECURITY_AUDIT.md + make audit
-
-    ✅ P5.2 Load test
-
-        ✅ P5.2.1 system_load.js harness, 3 tiers
-        ✅ P5.2.2 Tier A cache → 310 RPS, p99 6 ms
-        ✅ P5.2.3 Tier C guardrails → 6 ms/refusal
-        ✅ P5.2.4 Tier B full pipeline → 2 RPS, rerank 54%
-        ✅ P5.2.5 Fix rate-limit bypass
-        ✅ P5.2.6 Fix process death (BlockingConnectionPool)
-        ✅ P5.2.7 Fix log amplification
-        ✅ P5.2.8 Fix empty venue errors
-        ✅ P5.2.9 Fix silent Redis-off
-        ✅ P5.2.10 Correction — unattributed_ms
-        ✅ P5.2.11 docs/LOAD_TEST.md + 3 make targets
-
-    ✅ P5.3 Chaos drills
-
-        ✅ P5.3.1 Drill harness — stop/start only
-        ✅ P5.3.2 Provider drill → 503, RTO 64.8 s
-        ✅ P5.3.3 Redis drill → fixed 20.4 s → 4.7 s
-        ✅ P5.3.4 Qdrant drill → fixed 500 → 503
-        ✅ P5.3.5 Postgres drill → withdrawn, re-run in P5.4.2
-        ✅ P5.3.6 Empty index = fault, not abstention
-        ✅ P5.3.7 Harness false-pass fixed
-        ✅ P5.3.8 Pass criterion corrected
-        ✅ P5.3.9 docs/CHAOS_DRILLS.md + make chaos
-
-    ✅ P5.4 Backup / restore drill
-
-        ✅ P5.4.1 State classification — 1 of 3 is a system of record
-        ✅ P5.4.2 Re-run Postgres chaos drill properly → +3.5 s finding
-        ✅ P5.4.3 Fix — DATABASE_URL required outside local
-        ✅ P5.4.4 Fix — test suite no longer drops the dev database
-        ✅ P5.4.5 Extract shared Breaker → circuit.py
-        ✅ P5.4.6 Postgres dump + restore verified — RTO 0.5 s
-        ✅ P5.4.7 Qdrant snapshot + restore verified — RTO 3.5 s
-        ✅ P5.4.8 Measure re-index → snapshot is 390× faster
-        ✅ P5.4.9 Redis — prove no-backup is correct
-        ✅ P5.4.10 RPO analysis → PITR is a Phase 8 requirement
-        ✅ P5.4.11 docs/BACKUP_RESTORE.md + make backup-drill
-
-    ✅ P5.5 Runbooks · alerts · cost thresholds · log retention
-
-        ✅ P5.5.1 Runbook — provider outage
-        ✅ P5.5.2 Runbook — Redis / Postgres / Qdrant outages
-        ✅ P5.5.3 Runbook — index rebuild and alias rollback
-        ✅ P5.5.4 Fix — errors_total was declared but never emitted
-        ✅ P5.5.5 Fix — 429s were burning the availability budget
-        ✅ P5.5.6 Add dependency_circuit_state metric
-        ✅ P5.5.7 Six new alerts, thresholds traced to measurements
-        ✅ P5.5.8 promtool validation — 15 rules
-        ✅ P5.5.9 Runbook anchor links verified against alerts
-        ✅ P5.5.10 Cost threshold review — $5/day flagged
-        ✅ P5.5.11 Log retention + PII policy
-        ✅ P5.5.12 docs/RUNBOOKS.md
 
 PHASE 7 — Real managed Kubernetes ⏳ 0 / 12 (DigitalOcean first, vendor-portable)
 

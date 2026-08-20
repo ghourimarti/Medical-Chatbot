@@ -19,9 +19,13 @@
 # measured against a real cluster in P7.9, where an HPA can actually respond.
 name: load-smoke
 
+# COST + CORRECTNESS: manual only. It cannot pass yet — seeding an index needs the Gale
+# corpus, which is correctly NOT in the repo (27 MB, copyrighted, /demo/ is gitignored),
+# and readiness now REQUIRES a non-empty index (P6.3.5). Running it on every push would
+# bill minutes to fail identically each time. Re-enable the push trigger once a small
+# committed fixture corpus exists.
+#   run it:  gh workflow run load-smoke
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       peak_rate:

@@ -19,8 +19,13 @@ on:
         description: "Number of cases (blank = full golden set)"
         required: false
         default: "20"
-  schedule:
-    - cron: "0 3 * * *" # nightly, off-peak for provider quota
+  # NIGHTLY SCHEDULE DISABLED (S17). It failed every night for the same reason the load
+  # smoke does — no corpus in the repo to index — so it burned billed minutes on a private
+  # repo to produce an identical red run. A scheduled job that always fails is worse than
+  # no scheduled job: it trains you to ignore the notification. Re-enable with the fixture
+  # corpus, and note it also costs a day of judge quota per full run (measured in S6).
+  # schedule:
+  #   - cron: "0 3 * * *"
 
 jobs:
   quality-gate:
