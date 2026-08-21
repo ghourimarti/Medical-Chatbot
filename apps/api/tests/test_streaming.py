@@ -174,3 +174,62 @@ def test_problem_detail_hides_internals_and_maps_status() -> None:
     assert problem.status == 503
     assert problem.type.endswith("/retrieval-unavailable")
     assert ProviderError().to_problem().status == 502
+
+
+# ---------------------------------------------------------------------------
+# S10.2 — refusal categories reach the client, and the OUTPUT guardrail covers
+# the streaming path. These are the tests whose absence hid a real safety hole:
+# every previous safety assertion ran against answer(), the path a browser never
+# takes, so stream_answer() shipped with no output-side dosage net at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_output_guardrail_blocks_a_dosage_instruction() -> None:
+    """THE REGRESSION TEST for the S10.2b defect.
+
+    A model that starts emitting a dose must be cut off mid-stream: the dose must never
+    reach the client, generation must stop (we do not pay for the rest), and the terminal
+    event must be a categorised refusal.
+    """
+    model = StreamingStubModel(["Take ", "500mg ", "twice daily."])
+    pipe = _pipeline(model)
+
+    events = [e async for e in pipe.stream_answer("How is this treated?")]
+    done = events[-1]
+    streamed = "".join(e.text for e in events if isinstance(e, TokenEvent))
+
+    assert isinstance(done, DoneEvent)
+    assert done.kind is AnswerKind.REFUSED
+    assert done.refusal_category == "dosage"
+    assert "500mg" not in streamed, "the dose reached the client"
+    assert "500mg" not in done.text, "the dose survived in the terminal event"
+    assert not done.citations, "a refusal must not cite"
+    assert model.emitted < 3, "generation continued after the block — still paying"
+
+
+@pytest.mark.asyncio
+async def test_streaming_input_refusal_carries_its_category() -> None:
+    """An emergency and a dosage refusal must be distinguishable by the client, so
+    "contact emergency services now" can be rendered differently from "ask a pharmacist"."""
+    pipe = _pipeline(StreamingStubModel(["never used"]))
+    events = [
+        e async for e in pipe.stream_answer("I'm having chest pain and my left arm is numb")
+    ]
+    done = events[-1]
+
+    assert isinstance(done, DoneEvent)
+    assert done.kind is AnswerKind.REFUSED
+    assert done.refusal_category == "emergency"
+
+
+@pytest.mark.asyncio
+async def test_grounded_stream_carries_no_refusal_category() -> None:
+    """No false positives: a normal cited answer must not be tagged with a safety category."""
+    pipe = _pipeline(StreamingStubModel(["Cirrhosis ", "is ", "scarring [1]."]))
+    events = [e async for e in pipe.stream_answer("What is cirrhosis?")]
+    done = events[-1]
+
+    assert isinstance(done, DoneEvent)
+    assert done.kind is AnswerKind.GROUNDED
+    assert done.refusal_category is None

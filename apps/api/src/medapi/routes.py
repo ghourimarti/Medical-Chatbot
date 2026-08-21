@@ -90,12 +90,7 @@ async def readyz(request: Request) -> JSONResponse:
     (cache bypass, history disabled) but it can still answer, and failing readiness would
     take the whole deployment out of service over a partial loss (D21).
     """
-    services = _services(request)
-    embedder_health = getattr(services.embedder, "health", None)
-    store_ok, embedder_ok = await asyncio.gather(
-        services.store.health(),
-        embedder_health() if embedder_health else _always_true(),
-    )
+    store_ok, embedder_ok = await _readiness_checks(_services(request))
     ready = store_ok and embedder_ok
     return JSONResponse(
         status_code=200 if ready else 503,
@@ -109,6 +104,48 @@ async def readyz(request: Request) -> JSONResponse:
 async def _always_true() -> bool:
     """In-process embedder: if the module is loaded, it is available."""
     return True
+
+
+async def _readiness_checks(services: Services) -> tuple[bool, bool]:
+    """Single source of truth for "can this pod answer", shared by /readyz and the public
+    status page. Two endpoints computing readiness independently WILL drift, and a status
+    page that reports healthy while the probe fails is worse than no status page."""
+    embedder_health = getattr(services.embedder, "health", None)
+    store_ok, embedder_ok = await asyncio.gather(
+        services.store.health(),
+        embedder_health() if embedder_health else _always_true(),
+    )
+    return store_ok, embedder_ok
+
+
+@router.get("/api/v1/status")
+async def public_status(request: Request) -> dict[str, object]:
+    """PUBLIC operational status (S10.2c) — deliberately a different endpoint from
+    /admin/status, which is key-gated because it exposes spend, circuit state and the
+    serving chain. Those are operator facts; leaking them tells an attacker which
+    provider to target and how much budget is left to burn.
+
+    What a visitor legitimately needs: can it answer right now, is generation degraded,
+    and which corpus/index version produced the answers they are reading.
+    """
+    svc = _services(request)
+    store_ok, embedder_ok = await _readiness_checks(svc)
+    generation_enabled = await svc.kill_switch.llm_enabled()
+    if not (store_ok and embedder_ok):
+        status = "unavailable"
+    elif not generation_enabled:
+        status = "degraded"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "checks": {"vector_store": store_ok, "embedder": embedder_ok},
+        "generation_enabled": generation_enabled,
+        "corpus": {
+            "version": svc.settings.corpus_version,
+            "index_version": svc.settings.index_version,
+        },
+    }
 
 
 @router.post("/api/v1/query", response_model=Answer)

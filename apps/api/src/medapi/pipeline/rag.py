@@ -185,6 +185,7 @@ class RagPipeline:
                 text=state.answer.text,
                 citations=[],
                 timings=state.answer.timings,
+                refusal_category=state.answer.refusal_category,
             )
             return
 
@@ -207,16 +208,46 @@ class RagPipeline:
             max_tokens=self._s.llm_max_output_tokens,
             temperature=0.2,
         )
+        # S10.2b DEFECT FIX: the output dosage net (D18/S12.3) ran ONLY in _generate,
+        # which serves answer(). stream_answer() had no such check — and the browser uses
+        # this path for every question, so the "last line of defence" defended the one
+        # path real users never take. It passed every test because the eval harness calls
+        # answer_verbose() and test_streaming.py asserts nothing about dosages.
+        #
+        # A stream cannot un-send bytes, so detection stops generation immediately and the
+        # terminal DoneEvent carries the refusal. CONTRACT: done.text is AUTHORITATIVE —
+        # a client MUST discard accumulated tokens whenever done.kind != "grounded".
+        # Scanning the whole buffer per token is O(n^2), bounded by llm_max_output_tokens
+        # (512 -> ~2KB), i.e. microseconds; correctness beats cleverness in a safety net.
+        blocked = False
         try:
             async for delta in provider_stream:
                 if ttft_ms is None:
                     ttft_ms = (time.perf_counter() - t_start) * 1000
                 parts.append(delta)
+                if contains_dosage_instruction("".join(parts)):
+                    logger.warning("output guardrail blocked a dosage instruction mid-stream")
+                    blocked = True
+                    break
                 yield TokenEvent(text=delta)
         finally:
             aclose = getattr(provider_stream, "aclose", None)
             if aclose is not None:
                 await aclose()
+
+        timings_now = state.timings.model_copy(
+            update={"ttft_ms": ttft_ms, "total_ms": (time.perf_counter() - t_start) * 1000}
+        )
+        if blocked:
+            yield DoneEvent(
+                kind=AnswerKind.REFUSED,
+                text=_MESSAGES[RefusalCategory.DOSAGE],
+                citations=[],
+                refusal_category=RefusalCategory.DOSAGE.value,
+                model_id=self._model.model_id,
+                timings=timings_now,
+            )
+            return
 
         text = "".join(parts)
         timings = state.timings.model_copy(
@@ -257,6 +288,7 @@ class RagPipeline:
             answer=Answer(
                 kind=AnswerKind.REFUSED,
                 text=refusal.message,
+                refusal_category=refusal.category.value,
                 timings=state.timings,  # citations stay empty: a refusal cites nothing
             ),
         )
@@ -394,6 +426,7 @@ class RagPipeline:
                 answer=Answer(
                     kind=AnswerKind.REFUSED,
                     text=_MESSAGES[RefusalCategory.DOSAGE],
+                    refusal_category=RefusalCategory.DOSAGE.value,
                     model_id=completion.model_id,
                     usage=completion.usage,
                     timings=timings,

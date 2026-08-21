@@ -106,6 +106,13 @@ class Answer(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     timings: StageTimings = Field(default_factory=StageTimings)
     cache_hit: bool = False
+    # WHICH safety rule fired (D18/S10.2). The guardrail already classifies EMERGENCY /
+    # SELF_HARM / DOSAGE / DIAGNOSIS / INJECTION and has distinct copy for each, but the
+    # category was logged and then DISCARDED — so every client had to re-derive it by
+    # pattern-matching refusal prose. That is two sources of truth for a safety rule, and
+    # the copy-side one drifts the first time someone rewords a message. "Contact
+    # emergency services now" and "ask your pharmacist" must never render identically.
+    refusal_category: str | None = None
 
     @model_validator(mode="after")
     def _grounded_answers_must_cite(self) -> Self:
@@ -116,6 +123,8 @@ class Answer(BaseModel):
                 raise ValueError("a grounded answer must have text")
         if self.kind is AnswerKind.REFUSED and self.citations:
             raise ValueError("a refusal must not cite corpus sources")
+        if self.refusal_category is not None and self.kind is not AnswerKind.REFUSED:
+            raise ValueError("refusal_category is only meaningful on a refused answer")
         return self
 
     @property
@@ -173,6 +182,9 @@ class DoneEvent(BaseModel):
     model_id: str | None = None
     usage: Usage = Field(default_factory=Usage)
     timings: StageTimings = Field(default_factory=StageTimings)
+    # Mirrors Answer.refusal_category so the streaming and non-streaming paths stay
+    # observably equivalent — the property the DoneEvent docstring already promises.
+    refusal_category: str | None = None
 
 
 class ErrorEvent(BaseModel):

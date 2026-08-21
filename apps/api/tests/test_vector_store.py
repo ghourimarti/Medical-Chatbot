@@ -110,3 +110,62 @@ async def test_readiness_fails_when_embedder_is_down() -> None:
 
     r = _app(embedder_ok=True).get("/readyz")
     assert r.status_code == 200
+
+
+# --- S10.2c: the PUBLIC status surface -------------------------------------------
+
+async def test_public_status_reports_ok_degraded_and_unavailable() -> None:
+    """The status page drives a user-facing banner, so its three states must be distinct
+    and must never leak operator facts (spend, circuits, serving chain) — those live
+    behind the key-gated /admin/status."""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from medapi.routes import router
+
+    class _Store:
+        def __init__(self, ok: bool) -> None:
+            self._ok = ok
+
+        async def health(self) -> bool:
+            return self._ok
+
+    class _Embedder:
+        async def health(self) -> bool:
+            return True
+
+    class _KillSwitch:
+        def __init__(self, enabled: bool) -> None:
+            self._enabled = enabled
+
+        async def llm_enabled(self) -> bool:
+            return self._enabled
+
+    def _client(*, store_ok: bool, generation: bool) -> TestClient:
+        app = FastAPI()
+        app.include_router(router)
+        app.state.services = SimpleNamespace(
+            store=_Store(store_ok),
+            embedder=_Embedder(),
+            kill_switch=_KillSwitch(generation),
+            settings=SimpleNamespace(corpus_version="v1", index_version="v1"),
+        )
+        return TestClient(app)
+
+    body = _client(store_ok=True, generation=True).get("/api/v1/status").json()
+    assert body["status"] == "ok"
+    assert body["corpus"] == {"version": "v1", "index_version": "v1"}
+
+    # Kill switch / spend breaker tripped: answers still serve from cache, so this is
+    # DEGRADED, not unavailable — the banner must say something different from an outage.
+    assert _client(store_ok=True, generation=False).get("/api/v1/status").json()["status"] == (
+        "degraded"
+    )
+    assert _client(store_ok=False, generation=True).get("/api/v1/status").json()["status"] == (
+        "unavailable"
+    )
+
+    # No operator facts leak to the public surface.
+    leaked = set(body) & {"spend_today_usd", "circuits", "serving_chain", "cache_namespace"}
+    assert not leaked, f"public status leaked operator fields: {leaked}"

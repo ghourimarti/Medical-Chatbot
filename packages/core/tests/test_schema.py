@@ -60,3 +60,24 @@ def test_query_request_enforces_size_cap() -> None:
     with pytest.raises(ValidationError):
         QueryRequest(question="")
     assert QueryRequest(question="What is asthma?").stream is True
+
+
+def test_refusal_category_only_valid_on_a_refusal() -> None:
+    """S10.2: the category is a property OF a refusal. Allowing it on a grounded answer
+    would let a client render a safety treatment over a normal cited answer."""
+    with pytest.raises(ValidationError, match="only meaningful on a refused answer"):
+        Answer(kind=AnswerKind.NO_ANSWER, text="I don't know.", refusal_category="dosage")
+
+
+def test_refused_answer_carries_its_category() -> None:
+    ans = Answer(
+        kind=AnswerKind.REFUSED,
+        text="Please contact your local emergency services immediately.",
+        refusal_category="emergency",
+    )
+    assert ans.refusal_category == "emergency"
+    assert not ans.citations
+
+
+def test_refusal_category_defaults_to_none() -> None:
+    assert Answer(kind=AnswerKind.REFUSED, text="I can't help with that.").refusal_category is None
