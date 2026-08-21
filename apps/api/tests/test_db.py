@@ -34,12 +34,12 @@ pytestmark = pytest.mark.integration
 # test suite.
 #
 # The blast radius is the real point. The DSN is a hardcoded literal, so it depends entirely
-# on port 1102 belonging to a disposable container. Anyone port-forwarding a staging or
-# production Postgres to 1102 — a completely routine thing to do — turns `pytest` into an
+# on port 5001 belonging to a disposable container. Anyone port-forwarding a staging or
+# production Postgres to 5001 — a completely routine thing to do — turns `pytest` into an
 # outage.
 DB_NAME = "medbot_test"
-ADMIN_DSN = "postgresql+asyncpg://medbot:medbot@localhost:1102/postgres"
-DSN = f"postgresql+asyncpg://medbot:medbot@localhost:1102/{DB_NAME}"
+ADMIN_DSN = "postgresql+asyncpg://medbot:medbot@localhost:5001/postgres"
+DSN = f"postgresql+asyncpg://medbot:medbot@localhost:5001/{DB_NAME}"
 
 
 def _assert_disposable(dsn: str) -> None:
@@ -107,10 +107,10 @@ def test_fixture_refuses_a_non_disposable_database() -> None:
     """The guard itself must be tested — it is the only thing standing between `pytest` and
     a dropped database if someone edits the DSN back."""
     with pytest.raises(RuntimeError, match="_test"):
-        _assert_disposable("postgresql+asyncpg://medbot:medbot@localhost:1102/medbot")
+        _assert_disposable("postgresql+asyncpg://medbot:medbot@localhost:5001/medbot")
     with pytest.raises(RuntimeError, match="_test"):
         _assert_disposable("postgresql+asyncpg://u:p@prod-db.internal:5432/medbot_prod")
-    _assert_disposable("postgresql+asyncpg://u:p@localhost:1102/medbot_test")  # allowed
+    _assert_disposable("postgresql+asyncpg://u:p@localhost:5001/medbot_test")  # allowed
 
 
 @pytest.mark.asyncio

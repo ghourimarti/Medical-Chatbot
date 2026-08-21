@@ -1,0 +1,67 @@
+# TIER 3 — OBSERVABILITY. Standalone: `docker compose -f docker-compose.observability.yaml up`.
+#
+# It shares the compose PROJECT (both files live in this directory), so it lands on the
+# same default network as the data and app tiers and services resolve each other by name —
+# the API can post spans to `otel-collector:4318` without a shared-network declaration.
+#
+# Langfuse needs a Postgres. It uses the `langfuse` DATABASE created inside the data tier's
+# Postgres by infra/postgres/init/, rather than a second server: one container, one backup
+# story, and the schemas stay separate. That is why `make obs` expects `make db` first.
+services:
+  # 11/12. OTel Collector — the vendor-neutral hop. OTEL_ENABLED=false in .env means the
+  # app still creates spans and simply does not export them, so nothing breaks without this.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.127.0
+    command: ["--config=/etc/otel/config.yaml"]
+    ports:
+      - "${OTEL_HTTP_PORT:-5011}:4318"
+      - "${OTEL_GRPC_PORT:-5012}:4317"
+    volumes:
+      - ./infra/observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+
+  # 13. Prometheus — metrics + the 15 alert rules validated by promtool in P5.5.8.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    ports:
+      - "${PROMETHEUS_PORT:-5013}:9090"
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prom_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+
+  # 14. Grafana — dashboards over Prometheus.
+  grafana:
+    image: grafana/grafana:11.5.1
+    ports:
+      - "${GRAFANA_PORT:-5014}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  # 15. Langfuse — the ONE sanctioned store for prompt/completion content (D18).
+  # Everything else (app logs, OTel spans, metrics) carries only fingerprints, never the
+  # question text, which is what makes this the single place to control for PII.
+  langfuse:
+    image: langfuse/langfuse:2
+    ports:
+      - "${LANGFUSE_WEB_PORT:-5015}:3000"
+    environment:
+      # Plain `postgresql://` — Langfuse is a Node app and does not know asyncpg.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-medbot}:${POSTGRES_PASSWORD:-medbot}@postgres:5432/${LANGFUSE_POSTGRES_DB:-langfuse}
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_WEB_PORT:-5015}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-dev-secret-change-me}
+      SALT: ${LANGFUSE_SALT:-langfuse-dev-salt-change-me}
+      TELEMETRY_ENABLED: "false"
+
+volumes:
+  prom_data:
+  grafana_data:

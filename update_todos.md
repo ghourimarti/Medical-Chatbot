@@ -443,6 +443,43 @@ PHASE 5 — Hardening ✅ 5 / 5
         ✅ P5.5.11 Log retention + PII policy
         ✅ P5.5.12 docs/RUNBOOKS.md
 
+INFRA — layered local stack ✅ (env + compose + Makefile restructure)
+
+    ✅ I.1 .env / .env.example rewritten — every credential and port controllable, 5000-range
+         ports sequenced by STARTUP order (data 5001-5005, app 5006-5010, obs 5011-5022),
+         [live]/[infra]/[inert] tags, names generated FROM the Settings fields so nothing
+         documented is silently unread. Real secrets preserved.
+         🔴 FOUND: `VAR=   # comment` gives python-dotenv the COMMENT AS THE VALUE (a trailing
+              comment is only stripped when a real value precedes it). VLLM_RUNPOD_URL,
+              VLLM_AWS_URL, OPENAI_API_KEY, SQS_QUEUE_URL and HF_HOME all became non-empty
+              garbage, so the failover chain believed two GPU venues were configured and the
+              worker believed it had a queue. 13 comments moved above their line + a
+              regression test whose premise I verified by simulation.
+         🔴 FOUND: EMBEDDING_DIM cannot be set from env at all — Literal[1024] vs env strings.
+              It broke 18 tests. Commented out with the reason; changing the dimension means
+              a new collection and a full re-embed, not an env edit.
+    ✅ I.2 docker-compose.yml split into three tiers — data / app / observability.
+         app.yaml is deliberately NOT standalone (it depends_on data services); the worker is
+         profile-gated because a queue-less consumer that restarts forever trains you to
+         ignore red status (same reasoning as values-kind.yaml); no `web` placeholder because
+         S10 is deferred and a container that cannot start is worse than an honest absence.
+    ✅ I.3 Makefile: db / app / obs / up / upv / down / downv / worker / ps / logs / migrate /
+         seed / urls. Project prefix for volume deletion is resolved AT RUNTIME because this
+         repo's path contains spaces and `&` — the sample's warning applies here exactly.
+         `migrate` pipes scripts/migrate.py over stdin rather than baking scripts/ into the
+         image (P6.1 keeps images to what serves traffic).
+    ✅ I.4 VERIFIED LIVE end-to-end in containers — kind=grounded, 4 citations, both
+         readiness checks true. Steady-state timings embed ~250-390ms / retrieve ~10ms /
+         rerank ~1.1s (rerank dominates, consistent with S5.9).
+         🔴 FOUND: ml-service `--wait` timed out at ~355s while the service was seconds from
+              ready. start_period (60s) is a GRACE window and must cover the WORST legitimate
+              start — a cold boot downloads ~2.4GB of weights. Raised to 600s; a warm boot
+              still reports healthy in ~15s because the window ends at the first pass.
+         ⚠ UNVERIFIED: infra/postgres/init/ never executed — Postgres runs initdb.d only on an
+              EMPTY volume and this one had data. The `langfuse` DB exists from an earlier
+              session, so the script is correct-by-inspection but untested until a
+              `make downv && make db` cycle.
+
 PHASE 6 — Local & kind validation 🔄 6 / 7 (cost $0) — only P6.6.2 open (AWS creds, Track D.1)
 
     ✅ P6.1a Strip CUDA from CPU-only images — 6 / 6 — 26.18 GB → 6.59 GB (−75%)  [does P6.1 first: it changes what we build]

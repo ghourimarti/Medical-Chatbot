@@ -1,0 +1,101 @@
+# TIER 2 — APP. Overlays the data tier: `docker compose -f data.yaml -f app.yaml up`.
+#
+# EVERY service takes `env_file: .env`, so every knob documented there reaches the
+# container. The `environment:` block then overrides ONLY the handful of URLs that differ
+# between host and network: .env holds `localhost:5001` because that is what a host process
+# dials, while a container must dial `postgres:5432`. Overriding rather than duplicating
+# means a new setting in .env needs no change here.
+services:
+  # 6. ml-service — CPU embeddings + cross-encoder reranking (D5, D22).
+  # Starts BEFORE the API: readiness now checks the embedder, so the API stays NotReady
+  # until this is serving (P6.5.4).
+  ml-service:
+    build:
+      context: .
+      dockerfile: apps/ml-service/Dockerfile
+    image: medbot-ml:0.1.0
+    env_file: [.env]
+    environment:
+      HF_HOME: /models
+    ports:
+      - "${ML_SERVICE_PORT:-5006}:8001"
+    volumes:
+      - hf_models:/models   # ~2.4 GB of weights; without this every restart re-downloads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8001/readyz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      # start_period is a GRACE window: failures inside it do not count toward `retries`,
+      # so it should cover the worst legitimate start, not the typical one. A COLD first
+      # boot downloads ~2.4 GB of weights (bge-large + reranker) into an empty hf_models
+      # volume; the old 60s budget gave a 360s ceiling and `--wait` gave up at ~355s while
+      # the service was seconds from ready. A warm boot still reports healthy in ~15s,
+      # because the grace window ends as soon as one check passes.
+      start_period: 600s
+
+  # 7. api — FastAPI query service, SSE streaming (D7).
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: medbot-api:0.1.0
+    env_file: [.env]
+    environment:
+      # Host → in-network rewrites. Everything else comes from .env untouched.
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql+asyncpg://${POSTGRES_USER:-medbot}:${POSTGRES_PASSWORD:-medbot}@postgres:5432/${POSTGRES_DB:-medbot}}
+      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
+      QDRANT_URL: ${QDRANT_URL_DOCKER:-http://qdrant:6333}
+      ML_SERVICE_URL: http://ml-service:8001
+      AWS_ENDPOINT_URL: http://localstack:4566
+      OTEL_ENDPOINT: ${OTEL_ENDPOINT_DOCKER:-http://otel-collector:4318}
+      LANGFUSE_HOST: ${LANGFUSE_HOST_DOCKER:-http://langfuse:3000}
+    ports:
+      - "${API_PORT:-5007}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      ml-service: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # 8. worker — SQS-driven ingestion + scheduled retention (D11).
+  #
+  # Behind the `worker` profile, so a plain `make app` does not start it. A queue-less
+  # consumer fails fast with "SQS_QUEUE_URL is not set" — which is CORRECT behaviour, not
+  # something to paper over by idling — and a container that restarts forever trains you to
+  # ignore red status. The same reasoning disables it in values-kind.yaml.
+  #   enable with:  make worker   (creates the queue in LocalStack first)
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: medbot-worker:0.1.0
+    env_file: [.env]
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql+asyncpg://${POSTGRES_USER:-medbot}:${POSTGRES_PASSWORD:-medbot}@postgres:5432/${POSTGRES_DB:-medbot}}
+      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
+      QDRANT_URL: ${QDRANT_URL_DOCKER:-http://qdrant:6333}
+      ML_SERVICE_URL: http://ml-service:8001
+      AWS_ENDPOINT_URL: http://localstack:4566
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL_DOCKER:-http://localstack:4566/000000000000/medbot-ingestion}
+      HF_HOME: /models
+    volumes:
+      - hf_models:/models   # shares the weight cache with ml-service; ingestion embeds too
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_healthy}
+      localstack: {condition: service_healthy}
+
+  # 9. web — Next.js frontend. NOT DEFINED YET: S10 is deferred, so there is no image to
+  # run. Port 5008 is reserved in .env. Adding an empty service here would give `make app`
+  # a container that cannot start, which is worse than an honest absence.
+
+volumes:
+  hf_models:

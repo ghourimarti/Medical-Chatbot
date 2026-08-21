@@ -16,11 +16,11 @@ Vendor SDKs live here, never in `medcore`.
 
 ## Run locally
 ```bash
-docker compose up -d qdrant                    # vector store on :1104
+docker compose up -d qdrant                    # vector store on :5002
 uv run medapi-reindex --limit 1500             # embed a corpus subset at 1024d
-uv run uvicorn medapi.main:app --port 1107     # boot the API
-curl -s localhost:1107/readyz
-curl -s -X POST localhost:1107/api/v1/query \
+uv run uvicorn medapi.main:app --port 5007     # boot the API
+curl -s localhost:5007/readyz
+curl -s -X POST localhost:5007/api/v1/query \
      -H 'content-type: application/json' \
      -d '{"question":"What is an abscess?","stream":false}' | jq
 ```

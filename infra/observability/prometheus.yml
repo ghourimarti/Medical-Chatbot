@@ -12,7 +12,7 @@ scrape_configs:
     static_configs:
       # host.docker.internal: the API usually runs on the host during development while
       # its dependencies run in compose.
-      - targets: ["host.docker.internal:1107", "api:8000"]
+      - targets: ["host.docker.internal:5007", "api:8000"]
     # Scraping is best-effort in dev; a target that is down must not stop the others.
     honor_labels: true
 

@@ -38,7 +38,7 @@ def configure_llm_tracing(
         _CLIENT = Langfuse(
             public_key=public_key,
             secret_key=secret_key,
-            host=host or "http://localhost:1113",
+            host=host or "http://localhost:5015",
             environment=environment,
         )
         _ENABLED = True

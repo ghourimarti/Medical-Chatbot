@@ -43,7 +43,7 @@ def test_message_is_kept_when_present() -> None:
 def test_status_error_carries_status_and_body() -> None:
     """The provider's own body is the most useful line available — SGLang, for instance,
     reports exact token counts on a 400, which turns a mystery into an arithmetic check."""
-    request = httpx.Request("POST", "http://localhost:1111/v1/chat/completions")
+    request = httpx.Request("POST", "http://localhost:5010/v1/chat/completions")
     response = httpx.Response(
         400,
         request=request,

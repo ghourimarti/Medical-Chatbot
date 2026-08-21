@@ -1,0 +1,85 @@
+# TIER 1 — DATA. Starts first; every other tier waits on it.
+#
+# Host ports come from .env and are sequenced by startup order (5001-5005). Only HOST
+# ports are remapped — container-internal ports stay standard (5432, 6333, 6379), which is
+# why an in-network URL says `postgres:5432` while a host URL says `localhost:5001`. The
+# Helm manifests use the same internal ports, so compose and kind agree.
+services:
+  # 1. Postgres — sessions, chat history (day-partitioned), audit trail (D1).
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "${POSTGRES_PORT:-5001}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medbot}
+      POSTGRES_USER: ${POSTGRES_USER:-medbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medbot}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Creates the `langfuse` database alongside `medbot` on FIRST boot only (the script
+      # runs solely on an empty data volume). Without it Langfuse has nowhere to store
+      # traces and the obs tier comes up broken.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-medbot} -d ${POSTGRES_DB:-medbot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # 2/3. Qdrant — vector store. The app queries an ALIAS (D11), never a collection.
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "${QDRANT_HTTP_PORT:-5002}:6333"
+      - "${QDRANT_GRPC_PORT:-5003}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # Qdrant's image is distroless — no shell, no curl — so a compose healthcheck, which
+      # must run INSIDE the container, can only use its own binary. Kubernetes has no such
+      # limit (httpGet probes run in the kubelet), which is why the Helm chart uses
+      # httpGet /readyz instead — see P6.4.1.
+      test: ["CMD", "/qdrant/qdrant", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 4. Redis — response cache, embedding cache, per-session/per-IP quotas (D10, D20).
+  # No persistence by design (P5.4.9): every key here is a cache entry or a rate-limit
+  # counter, both of which are cheaper to rebuild than to restore.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-5004}:6379"
+    command: >
+      redis-server --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 5. LocalStack — SQS for the ingestion worker (D11). Real AWS needs none of this;
+  # AWS_ENDPOINT_URL is what switches between them.
+  localstack:
+    image: localstack/localstack:3.8
+    ports:
+      - "${LOCALSTACK_PORT:-5005}:4566"
+    environment:
+      SERVICES: sqs
+      DEBUG: "0"
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  pg_data:
+  qdrant_data:
+  localstack_data:

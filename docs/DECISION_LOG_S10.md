@@ -96,3 +96,149 @@ chain — operator facts that tell an attacker which provider to target and how 
 left. Public surface returns `status` (ok|degraded|unavailable), the two readiness checks,
 `generation_enabled`, and corpus/index versions. Readiness is computed by a shared helper so the
 status page and `/readyz` can never disagree.
+
+---
+
+# S10.6a — Endpoint parity (the largest finding of S10)
+
+## The defect
+
+`query_stream()` carried NONE of the cross-cutting controls that `query()` carried. Not a
+subset — none:
+
+| Control | `query()` | `query_stream()` (before) |
+|---|---|---|
+| Rate limiting (D18/D20) | yes | **no** |
+| Kill switch (D20) | yes | **no** |
+| Spend tracking / cost attribution (D20) | yes | **no** |
+| Response cache (D10) | yes | **no** |
+| History persistence (D1/S7) | yes | **no** |
+| Session identity (D9) | yes | **no** |
+
+Measured against the running service before the fix, one session, 25 requests each:
+
+```
+/api/v1/query          ->  200 x20, then 429 x5      (limit enforced)
+/api/v1/query/stream   ->  200 x25                   (no limit at all)
+```
+
+The browser only ever calls the streaming endpoint. So the deployed rate limit was
+bypassable by using the default path; the kill switch could not stop browser traffic
+during a cost incident; streamed answers were never cached, never costed, and never
+persisted — which also meant the S7 history feature was inert for real usage.
+
+## Why it stayed invisible
+
+Every test and the eval harness exercise `answer()` or `query()`. `PipelineTarget` calls
+`answer_verbose()`. The load tests drove the non-streaming path. So every quality, safety
+and performance number this project has published describes a code path a browser never
+takes. This is the SECOND instance of that shape: S10.2b found the output dosage guardrail
+missing from the same handler for the same reason.
+
+## The fix
+
+Extraction, not duplication. `medapi/serving.py` holds `preflight` (session + quota),
+`short_circuit` (cache hit or degraded), and `postflight` (cost, metrics, cache write,
+history). Both handlers call them. Copying the controls into the stream handler would have
+left two copies to drift again, which is how this happened in the first place.
+
+Two ordering constraints are encoded:
+
+* controls run BEFORE the `StreamingResponse` is constructed, so a quota rejection is a
+  real HTTP 429 with an RFC 7807 body rather than an in-band SSE error arriving after the
+  status line has already gone out as 200;
+* a cached or degraded answer is delivered through the SAME event sequence as a generated
+  one, so the client keeps exactly one code path.
+
+## Verified after the fix
+
+* streaming rate limit: `200 x20, then 429 x5` — identical to the non-streaming endpoint
+* session cookie present on a streaming response
+* history persisted for a streamed answer (both turns readable via `/session/history`)
+* cache hit on the stream: 2212 ms / 111 token events becomes 59 ms / 0 token events
+* 14 parametrized parity tests assert every control on BOTH endpoints, and were proven to
+  fail (4 failures, all on the stream variant) when the handler was reverted
+
+## Known and bounded gap, recorded rather than hidden
+
+A cancelled stream skips `postflight`, so a partial generation is not cost-attributed:
+there are no usage figures for it, and inventing them would corrupt the spend ledger. The
+exposure is bounded because rate limiting now applies to this endpoint. Closing it properly
+needs per-token accounting during generation, which is a separate change.
+
+---
+
+# S10.6b - S10.9 findings
+
+## S10.6b - browser verification (Playwright pulled forward from S10.13)
+
+Everything before this was verified at the HTTP level, which proves the contract but not
+the product: a client can receive a correct `refused` event and still render it as a
+grounded answer. Chromium only, ~114 MB, and it unblocks honest verification for every
+remaining step plus reproducible screenshots.
+
+Two findings from writing the tests:
+
+* **Next.js injects `<div id="__next-route-announcer__" role="alert">` into every page.**
+  So `getByRole("alert")).toHaveCount(0)` can never pass, and the emergency card is not the
+  only alert in the document. Assertions are now scoped to `[data-answer-kind="emergency"]`.
+* **Prose is a poor test hook.** The first `settled()` helper matched streaming copy and hit
+  a strict mode violation, because the sr-only aria-live region duplicates that text for
+  screen readers. That is the accessibility layer working correctly. `data-answer-kind`
+  now carries the RESOLVED treatment, so tests assert the decision rather than the wording.
+
+## S10.7 - citations
+
+Inline `[n]` markers are real controls that open their passage. Click, not hover: a
+hover-only preview does not exist on a phone, and this is used on phones.
+
+**The rule that matters:** a marker referencing a source that does not exist - `[9]` when
+three passages were retrieved - renders as PLAIN TEXT, never as a link. A model can emit a
+citation number it was never given, and turning that into a clickable affordance would
+manufacture provenance the system does not have. There is a gallery sample demonstrating
+it and an e2e test asserting it.
+
+Retrieved passages the answer never cited are shown and labelled "not cited" rather than
+hidden, because hiding them would misrepresent what the answer was built from.
+
+## S10.8 - session controls, and a session race
+
+History renders as a PLAIN TRANSCRIPT, not the treatment components. `GET /session/history`
+returns only role and content; the database does store `kind`, but the repository drops it
+on read and `Message` is the LLM prompt type, shared with generation. Reusing the treatment
+components would therefore mean GUESSING the kind, and a past emergency refusal rendered as
+an ordinary answer is exactly the misrepresentation this UI exists to prevent.
+
+**DEFECT FOUND: a read was minting a session.** `GET /session/history` resolved and attached
+unconditionally, so a first-time visitor loading the page raced their own first question:
+both requests arrive without a cookie, both mint a session, and whichever Set-Cookie lands
+last silently orphans the other session history. The symptom was history that intermittently
+failed to appear - caught only because a browser test failed roughly one run in two. A
+visitor with no session has no history by definition, so there is nothing to mint a session
+for. Only a write establishes one. Two regression tests pin it.
+
+Delete-my-data reports the number of rows removed, because the API does. A delete control
+that says "Done" without evidence passes review and fails an audit, and the person most
+likely to use it wants proof. It is on the main surface rather than in a settings page, and
+it uses NO red button: red is reserved for medical emergencies (D27).
+
+## S10.9 - designed failure states
+
+Each cause gets its own copy, because "what do I do now" differs for each: a quota is a
+wait, a provider outage is a retry, a degraded service is a partial capability. A single
+generic error box gives the user no way to tell them apart and teaches them the product is
+simply unreliable. The quota state deliberately offers NO retry button - retrying
+immediately would fail identically and make the product look broken rather than busy.
+
+None of them use red.
+
+The degraded banner is driven by `GET /api/v1/status` on mount rather than discovered when
+a request fails, because a standing condition needs a standing signal.
+
+## Test-suite honesty
+
+Playwright runs with `retries: 1`, documented in the config. This suite drives a real
+backend where a cold generation takes seconds and a cache hit takes about 50 ms - roughly
+20x variance - so the first run after an idle period can exceed a timeout the next run
+clears comfortably. A retry is honest here because a real failure still fails twice. It is
+not a licence to ignore a test that fails consistently.

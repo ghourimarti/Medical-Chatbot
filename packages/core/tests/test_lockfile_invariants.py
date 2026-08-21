@@ -54,3 +54,69 @@ def test_torch_resolves_from_the_cpu_index(lock_text: str) -> None:
     assert "download.pytorch.org/whl/cpu" in block.group(1), (
         "torch is no longer resolving from the PyTorch CPU index"
     )
+
+
+# --- .env parsing traps -------------------------------------------------------------
+
+ENV_EXAMPLE = REPO_ROOT / ".env.example"
+
+
+def test_no_env_value_is_actually_a_comment() -> None:
+    """`VAR=   # explanation` gives python-dotenv the COMMENT as the value.
+
+    A trailing comment is only stripped when a real value precedes it; with an empty value
+    the `#...` IS the value. That silently turned VLLM_RUNPOD_URL, OPENAI_API_KEY and
+    SQS_QUEUE_URL into non-empty strings, so the failover chain believed two GPU venues
+    were configured, the OpenAI leg believed it had a key, and the worker believed it had a
+    queue. Every one of those reads as "configured" to code that only checks emptiness.
+
+    Put the comment on its own line above an empty assignment.
+    """
+    from dotenv import dotenv_values
+
+    if not ENV_EXAMPLE.is_file():
+        pytest.skip(".env.example not present")
+    offenders = {
+        k: v for k, v in dotenv_values(ENV_EXAMPLE).items()
+        if v is not None and v.lstrip().startswith("#")
+    }
+    assert not offenders, (
+        f"{len(offenders)} .env value(s) are actually comments: {sorted(offenders)}. "
+        "Move the comment above the line: `# NAME — why`, then `NAME=`."
+    )
+
+
+def test_env_example_documents_only_names_something_reads() -> None:
+    """A name nothing reads is silent (P6.4.3): Settings uses extra='ignore', so a typo or
+    a renamed variable does nothing at all and the symptom appears far from the cause.
+    Every documented name must be a real Settings field, an infra name used by
+    compose/Makefile/Helm, or explicitly tagged [inert]."""
+    import re
+
+    from dotenv import dotenv_values
+
+    from medcore.config import Settings
+
+    if not ENV_EXAMPLE.is_file():
+        pytest.skip(".env.example not present")
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    live_fields = {f.upper() for f in Settings.model_fields}
+    compose = "".join(
+        f.read_text(encoding="utf-8") for f in sorted(REPO_ROOT.glob("docker-compose*.y*ml"))
+    )
+    infra = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
+    infra |= set(re.findall(r"\$\$?\{?([A-Z][A-Z0-9_]{3,})", (REPO_ROOT / "Makefile").read_text(
+        encoding="utf-8")))
+    # A name may also be tagged [inert] / [infra] in the file itself, which is a deliberate
+    # claim that nothing reads it yet.
+    tagged = set(re.findall(r"^([A-Z][A-Z0-9_]*)=.*?\[(?:inert|infra)\]", text, re.M))
+    tagged |= set(re.findall(r"^# ([A-Z][A-Z0-9_]*) — .*", text, re.M))
+
+    unknown = sorted(
+        k for k in dotenv_values(ENV_EXAMPLE)
+        if k not in live_fields and k not in infra and k not in tagged
+    )
+    assert not unknown, (
+        f"{len(unknown)} documented name(s) are read by nothing and are not tagged "
+        f"[infra]/[inert]: {unknown}"
+    )

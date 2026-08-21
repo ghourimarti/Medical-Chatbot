@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     circuit_failure_threshold: int = Field(default=3, ge=1)
     circuit_cooldown_seconds: float = Field(default=30.0, ge=1.0)
 
-    vllm_local_url: str = "http://localhost:1110/v1"
+    vllm_local_url: str = "http://localhost:5009/v1"
     vllm_local_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
     vllm_runpod_url: str = ""
     vllm_runpod_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     hybrid_search: bool = True  # dense + BM25 with server-side RRF fusion (D3)
 
     # --- Vector store (D2, D11) ---
-    qdrant_url: str = "http://localhost:1104"
+    qdrant_url: str = "http://localhost:5002"
     # The app queries an ALIAS, never a collection name. Ingestion builds a new collection
     # and repoints the alias atomically, so readers never see a half-ingested corpus.
     #
@@ -233,7 +233,7 @@ class Settings(BaseSettings):
 
     langfuse_public_key: str = ""
     langfuse_secret_key: SecretStr | None = None
-    langfuse_host: str = "http://localhost:1113"
+    langfuse_host: str = "http://localhost:5015"
 
     # --- DECISION GATE C (locked, D10): cache invalidation is version-key composition.
     # Bump a version => old entries go cold. No code ever writes a manual purge. ---

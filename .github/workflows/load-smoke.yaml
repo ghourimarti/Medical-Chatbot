@@ -93,11 +93,11 @@ jobs:
           QDRANT_URL: http://localhost:6333
           QDRANT_COLLECTION: gale_live
           REDIS_URL: redis://localhost:6379/0
-          API_PORT: "1107"
+          API_PORT: "5007"
         run: |
-          uv run uvicorn medapi.main:app --host 127.0.0.1 --port 1107 &
+          uv run uvicorn medapi.main:app --host 127.0.0.1 --port 5007 &
           for _ in $(seq 1 60); do
-            if curl -sf http://localhost:1107/readyz >/dev/null; then echo "api ready"; exit 0; fi
+            if curl -sf http://localhost:5007/readyz >/dev/null; then echo "api ready"; exit 0; fi
             sleep 2
           done
           echo "api did not become ready"; exit 1
@@ -106,7 +106,7 @@ jobs:
         env:
           PEAK: ${{ github.event.inputs.peak_rate || '100' }}
         run: |
-          k6 run -e TIER=guard -e PEAK_RATE="$PEAK" -e BASE_URL=http://localhost:1107 \
+          k6 run -e TIER=guard -e PEAK_RATE="$PEAK" -e BASE_URL=http://localhost:5007 \
             tests/load/system_load.js
 
       - name: Upload k6 summary

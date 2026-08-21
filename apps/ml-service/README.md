@@ -46,10 +46,10 @@ measure the quality cost of option 2 rather than guessing.
 
 ## Run
 ```bash
-uv run uvicorn medml.main:app --port 1108        # local
+uv run uvicorn medml.main:app --port 5006        # local
 docker compose up -d ml-service                   # containerized
-curl -s localhost:1108/readyz
-curl -s -X POST localhost:1108/embed -H 'content-type: application/json' \
+curl -s localhost:5006/readyz
+curl -s -X POST localhost:5006/embed -H 'content-type: application/json' \
      --data-binary '{"texts":["What is cirrhosis?"],"is_query":true}' | head -c 200
 ```
 

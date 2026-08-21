@@ -1,0 +1,40 @@
+{
+  "name": "medbot-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 5008",
+    "build": "next build",
+    "start": "next start -p 5008",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "check:contract": "node scripts/check-contract.mjs",
+    "check": "pnpm check:contrast && pnpm check:contract && pnpm typecheck && pnpm build",
+    "preview": "next build && next start -p 5008",
+    "e2e": "playwright test --project=chromium e2e/answer-kinds.spec.ts",
+    "e2e:mobile": "playwright test --project=mobile e2e/answer-kinds.spec.ts",
+    "screenshots": "playwright test e2e/screenshots.spec.ts --project=chromium"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.33.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.0"
+  }
+}

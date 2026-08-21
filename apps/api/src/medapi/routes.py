@@ -16,22 +16,22 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
-from medapi.budget import SpendState
 from medapi.deps import Services
 from medapi.observability import (
     REGISTRY,
-    cache_events,
-    fingerprint,
     get_logger,
-    rate_limited_total,
-    record_answer,
-    record_stage,
 )
-from medapi.pricing import cost_usd
+from medapi.serving import (
+    answer_from_done,
+    attach_session,
+    done_from_answer,
+    postflight,
+    preflight,
+    short_circuit,
+)
 from medcore.errors import MedbotError, ProblemDetail, QuotaExceededError
 from medcore.schema import (
     Answer,
-    AnswerKind,
     DoneEvent,
     ErrorEvent,
     QueryRequest,
@@ -150,125 +150,42 @@ async def public_status(request: Request) -> dict[str, object]:
 
 @router.post("/api/v1/query", response_model=Answer)
 async def query(req: QueryRequest, request: Request, response: Response) -> Answer:
+    """Non-streaming answer.
+
+    The cross-cutting controls live in medapi.serving so this path and the streaming path
+    cannot diverge (S10.6a). They used to live inline here — 194 lines of them — while the
+    streaming endpoint had none.
+    """
     svc = _services(request)
-    session_id, _ = svc.sessions.resolve(request)
-    svc.sessions.attach(response, session_id)
+    pre = await preflight(req.question, request, svc)
+    attach_session(response, pre, svc)
 
-    # A fingerprint, never the question itself (D18). Enough to correlate repeats of the
-    # same query across logs without ever storing a health question.
-    log = logger.bind(session=str(session_id)[:8], q=fingerprint(req.question))
-
-    # Quota BEFORE any expensive work (D20). Checking after retrieval would mean paying
-    # for the embedding and LLM call of a request we then reject — the abuse case is
-    # exactly where cost control must bite first. Raises QuotaExceededError -> 429/7807.
-    #
-    # TWO independent keys (D18). The session bucket gives a well-behaved client a fair,
-    # generous quota. The IP bucket is the enforcement one: a session id is just a cookie
-    # the caller decides whether to send, so session-only limiting is opt-in and an abuser
-    # opts out by dropping the cookie. Measured in P5.2 before this was added — 30
-    # cookieless requests against a 20/min limit produced ZERO 429s.
-    buckets: list[tuple[str, str, int, int]] = [
-        ("minute", str(session_id), svc.settings.rate_limit_per_minute, 60),
-        ("day", str(session_id), svc.settings.rate_limit_per_day, 86_400),
-    ]
-    client_key = svc.sessions.client_hash(
-        request, trusted_proxy_hops=svc.settings.trusted_proxy_hops
-    )
-    if client_key is not None:
-        buckets += [
-            ("ip_minute", client_key, svc.settings.rate_limit_ip_per_minute, 60),
-            ("ip_day", client_key, svc.settings.rate_limit_ip_per_day, 86_400),
-        ]
-    for scope, key, limit, window in buckets:
-        try:
-            await svc.limiter.check(key, scope=scope, limit=limit, window_seconds=window)
-        except QuotaExceededError:
-            rate_limited_total.labels(scope=scope).inc()
-            log.warning("rate_limited", scope=scope, limit=limit)
-            raise
-
-    # Cache-aside (D10). A hit skips embedding, retrieval, reranking, and generation —
-    # the single largest cost and latency lever in the system.
-    cached = await svc.cache.get(req.question)
-    if cached is not None:
-        cache_events.labels(layer="response", result="hit").inc()
-        record_answer(cached.kind.value, cached.timings.total_ms)
-        log.info("cache_hit", kind=cached.kind.value)
-        return cached
-    cache_events.labels(layer="response", result="miss").inc()
-
-    # Cache miss + generation disabled => DEGRADED, never an error (D20/D21). Two paths
-    # arrive here: an operator flipped the kill switch, or the daily spend breaker tripped.
-    if not await svc.kill_switch.llm_enabled() or (
-        await svc.spend.state() is SpendState.EXCEEDED
-    ):
-        log.warning("cache_only_mode", reason="kill_switch_or_spend_limit")
-        degraded = Answer(
-            kind=AnswerKind.DEGRADED,
-            text=(
-                "Answers are limited right now and I can't generate a new one. "
-                "Please try again shortly."
-            ),
-        )
-        record_answer(degraded.kind.value, 0.0)
-        return degraded
+    short = await short_circuit(req.question, svc, pre)
+    if short is not None:
+        return short
 
     answer = await svc.pipeline.answer(req.question)
-
-    # Cost attribution (D20). Self-hosted venues price at $0/token by construction — their
-    # cost is GPU-hours, tracked separately — so this measures hosted spend specifically.
-    spent = cost_usd(answer.model_id or "", answer.usage)
-    if spent:
-        answer = answer.model_copy(
-            update={"usage": answer.usage.model_copy(update={"cost_usd": spent})}
-        )
-        total = await svc.spend.record(spent)
-        state = svc.spend.state_for(total)
-        if state is not SpendState.OK:
-            log.warning("spend_alert", state=state.value, daily_total_usd=round(total, 4))
-
-    # Instrument at the STAGE boundary: the pipeline already returns timings, so metrics
-    # are derived here rather than the pipeline importing Prometheus (D13).
-    t = answer.timings
-    for stage, ms in (
-        ("embed", t.embed_ms), ("retrieve", t.retrieve_ms),
-        ("rerank", t.rerank_ms), ("generate", t.generate_ms),
-    ):
-        record_stage(stage, ms)
-    record_answer(answer.kind.value, t.total_ms, answer.usage.cost_usd)
-    log.info(
-        "answered",
-        kind=answer.kind.value,
-        citations=len(answer.citations),
-        total_ms=round(t.total_ms),
-        rerank_ms=round(t.rerank_ms or 0),
-        tokens=answer.usage.total_tokens,
-        model=answer.model_id,
-    )
-    # Only GROUNDED answers are stored; Answer.is_cacheable refuses refusals, no-answers,
-    # and degraded responses (D10 safety rule, enforced by the type, not by this call).
-    await svc.cache.set(req.question, answer)
-
-    # Persistence is a SIDE EFFECT of answering, never a precondition (D21): a database
-    # outage costs history, not availability.
-    await svc.history.record_turn(
-        session_id,
-        question=req.question,
-        answer_text=answer.text,
-        kind=answer.kind,
-        model_id=answer.model_id,
-        # Same hop count as the quota check above. Passing different values would derive
-        # two different hashes for one client behind a proxy, so abuse investigation and
-        # abuse enforcement would disagree about who the caller was.
-        client_hash=client_key,
-    )
-    return answer
+    return await postflight(answer, question=req.question, svc=svc, pre=pre)
 
 
 @router.get("/api/v1/session/history")
 async def session_history(request: Request, response: Response) -> dict[str, object]:
     svc = _services(request)
-    session_id, _ = svc.sessions.resolve(request)
+    session_id, is_new = svc.sessions.resolve(request)
+
+    # A READ MUST NOT MINT A SESSION.
+    #
+    # This endpoint used to resolve-and-attach unconditionally, which meant a first-time
+    # visitor loading the page raced their own first question: both requests arrive without
+    # a cookie, both mint a session, and whichever Set-Cookie lands last silently orphans
+    # the other session. The symptom was history that intermittently failed to appear —
+    # caught only because a browser test failed roughly one run in two.
+    #
+    # A visitor with no session has no history by definition, so there is nothing to mint
+    # a session FOR. Only a write (a query) establishes one.
+    if is_new:
+        return {"session_id": None, "enabled": svc.history.enabled, "messages": []}
+
     svc.sessions.attach(response, session_id)
     messages = await svc.history.load(session_id)
     return {
@@ -344,11 +261,36 @@ async def admin_kill_switch(request: Request, enabled: bool, reason: str = "") -
 
 @router.post("/api/v1/query/stream")
 async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
-    pipeline = _services(request).pipeline
+    """Streaming answer — the endpoint a browser actually uses.
+
+    S10.6a: this handler previously carried NONE of the cross-cutting controls that
+    query() carried. No rate limiting, no kill switch, no cache, no spend accounting, no
+    history, no session. Measured before the fix: 25 consecutive requests against a 20/min
+    limit returned 25x 200 here while /api/v1/query correctly 429'd after the 20th. In
+    other words the deployed rate limit could be bypassed by using the default endpoint.
+
+    ORDER MATTERS. The controls run BEFORE the StreamingResponse is constructed, so a
+    quota rejection is a real HTTP 429 with an RFC 7807 body. Once the response has begun
+    the status line is already 200 and the only way left to report a failure is in-band —
+    which a client has to special-case.
+    """
+    svc = _services(request)
+    pre = await preflight(req.question, request, svc)
+    short = await short_circuit(req.question, svc, pre)
 
     async def event_source() -> AsyncIterator[str]:
+        # A cached or degraded answer is delivered through the SAME event sequence as a
+        # generated one, so the client keeps exactly one code path.
+        if short is not None:
+            yield _sse("sources", SourcesEvent(citations=short.citations))
+            yield _sse("done", done_from_answer(short))
+            return
+
+        terminal: DoneEvent | None = None
         try:
-            async for event in pipeline.stream_answer(req.question):
+            async for event in svc.pipeline.stream_answer(req.question):
+                if isinstance(event, DoneEvent):
+                    terminal = event
                 yield _sse(_EVENT_NAMES[type(event)], event)
         except asyncio.CancelledError:
             # Client disconnected. Propagating closes the provider stream, which stops
@@ -358,6 +300,7 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
         except MedbotError as exc:
             logger.warning("domain error mid-stream: %s", exc.internal_message)
             yield _sse("error", ErrorEvent(problem=exc.to_problem().model_dump(exclude_none=True)))
+            return
         except Exception:
             # Bytes are already on the wire, so the HTTP status can no longer change:
             # the error must be delivered in-band, still without leaking internals.
@@ -369,5 +312,19 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
                 detail="An unexpected error occurred while generating the answer.",
             )
             yield _sse("error", ErrorEvent(problem=problem.model_dump(exclude_none=True)))
+            return
 
-    return StreamingResponse(event_source(), media_type="text/event-stream", headers=SSE_HEADERS)
+        if terminal is not None:
+            # Accounting runs after the final byte. A cancelled stream deliberately skips
+            # it: a partial generation has no usage figures to attribute, and inventing
+            # them would corrupt the spend ledger. That gap is bounded now that rate
+            # limiting applies to this endpoint, and it is recorded rather than hidden.
+            await postflight(
+                answer_from_done(terminal), question=req.question, svc=svc, pre=pre
+            )
+
+    response = StreamingResponse(
+        event_source(), media_type="text/event-stream", headers=SSE_HEADERS
+    )
+    attach_session(response, pre, svc)
+    return response

@@ -49,3 +49,28 @@ Thumbs.db
 *.tfstate
 *.tfstate.*
 /Documents/
+
+# --- Node / Next.js (S10.3) ---
+# Every rule below is written with its match-depth INTENDED, not copied from a template.
+# S17-A1: `Prompts/` (no leading slash) matched a directory of that name at ANY depth and
+# silently excluded packages/core/src/medcore/prompts/ — the safety policy never reached git.
+# So: unanchored here means "at any depth, deliberately", because these are generated in
+# every app directory. Anything that must match only at the repo root gets a leading slash.
+# CAUGHT WHILE WRITING THIS BLOCK: git only treats `#` as a comment when it is the FIRST
+# character of a line. `node_modules/   # note` is a pattern that literally matches a path
+# containing that text, so the rule silently does nothing — same failure shape as the
+# python-dotenv `VAR=  # note` finding in I.1. Verified empirically: with trailing comments
+# `git check-ignore apps/web/node_modules/probe.js` reported NOT ignored.
+#
+# Unanchored below = "at any depth", deliberately: these are generated in every app dir.
+# Anything that must match only at the repo root gets a leading slash.
+node_modules/
+.next/
+out/
+next-env.d.ts
+.turbo/
+*.tsbuildinfo
+
+# Playwright (S10.6b)
+test-results/
+playwright-report/

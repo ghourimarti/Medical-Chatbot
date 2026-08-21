@@ -6,7 +6,7 @@ practical payoff of the D12 adapter seam, applied to measurement.
 
 Usage:
   # local vLLM (S3b spike)
-  uv run python scripts/bench_venue.py --base-url http://localhost:1110/v1 \
+  uv run python scripts/bench_venue.py --base-url http://localhost:5009/v1 \
       --model Qwen/Qwen2.5-7B-Instruct-AWQ --runs 5
 
   # hosted Groq, same command shape
@@ -113,7 +113,7 @@ def measure_usage(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", required=True, help="e.g. http://localhost:1110/v1")
+    ap.add_argument("--base-url", required=True, help="e.g. http://localhost:5009/v1")
     ap.add_argument("--model", required=True)
     ap.add_argument("--api-key", default=None)
     ap.add_argument("--runs", type=int, default=5)

@@ -1,0 +1,206 @@
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS (D27) — every value verified by scripts/check-contrast.mjs.
+   Run `node scripts/check-contrast.mjs` after ANY colour edit; it fails the
+   build-adjacent gate rather than letting a regression reach a screenshot review.
+
+   THE RULE THAT MATTERS MOST:
+     RED IS RESERVED EXCLUSIVELY FOR MEDICAL EMERGENCIES.
+   Not errors, not validation, not destructive buttons. That reservation is the
+   only reason an emergency treatment reads as urgent when it fires. A codebase
+   that spends red on a failed form teaches users to ignore it.
+
+   Theme handling has THREE states, deliberately:
+     :root                      -> light (the default, defined unconditionally)
+     prefers-color-scheme: dark -> dark, but ONLY when no explicit choice is set
+     [data-theme="dark|light"]  -> an explicit choice always wins
+   Defining dark only inside a media query is the common bug: a manual toggle can
+   then never override the OS, which matters here because this is read at night.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Not #FFF: a pure-white field is harsh for someone reading at 2 a.m. */
+  --surface: #fafaf8;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f3f2ed;
+  --ink: #1c1c1a;
+  --ink-muted: #57564f;
+  --line: #e6e4de;
+  --line-strong: #cfccc2;
+
+  --accent: #0f766e;
+  --accent-contrast: #ffffff;
+  --accent-wash: #f0fdfa;
+
+  --kind-grounded: #0f766e;
+  --kind-grounded-wash: #f0fdfa;
+  --kind-no-answer: #475569;
+  --kind-no-answer-wash: #f4f6f8;
+  --kind-refused: #a4550a;
+  --kind-refused-wash: #fdf6ec;
+  --kind-emergency: #b91c1c;
+  --kind-emergency-wash: #fdf2f2;
+  --kind-emergency-contrast: #ffffff;
+  --kind-degraded: #57534e;
+  --kind-degraded-wash: #f5f4f2;
+
+  --focus: #0f766e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: #12140f;
+    --surface-raised: #1a1d17;
+    --surface-sunken: #0d0f0b;
+    --ink: #e9e7e0;
+    --ink-muted: #a8a69c;
+    --line: #2a2e26;
+    --line-strong: #3d4237;
+
+    --accent: #5eead4;
+    --accent-contrast: #06231f;
+    --accent-wash: #12241f;
+
+    --kind-grounded: #5eead4;
+    --kind-grounded-wash: #12241f;
+    --kind-no-answer: #94a3b8;
+    --kind-no-answer-wash: #191d22;
+    --kind-refused: #fcd34d;
+    --kind-refused-wash: #241d0e;
+    --kind-emergency: #fca5a5;
+    --kind-emergency-wash: #2a1414;
+    --kind-emergency-contrast: #2a0d0d;
+    --kind-degraded: #d6d3d1;
+    --kind-degraded-wash: #1c1b19;
+
+    --focus: #5eead4;
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface: #12140f;
+  --surface-raised: #1a1d17;
+  --surface-sunken: #0d0f0b;
+  --ink: #e9e7e0;
+  --ink-muted: #a8a69c;
+  --line: #2a2e26;
+  --line-strong: #3d4237;
+  --accent: #5eead4;
+  --accent-contrast: #06231f;
+  --accent-wash: #12241f;
+  --kind-grounded: #5eead4;
+  --kind-grounded-wash: #12241f;
+  --kind-no-answer: #94a3b8;
+  --kind-no-answer-wash: #191d22;
+  --kind-refused: #fcd34d;
+  --kind-refused-wash: #241d0e;
+  --kind-emergency: #fca5a5;
+  --kind-emergency-wash: #2a1414;
+  --kind-emergency-contrast: #2a0d0d;
+  --kind-degraded: #d6d3d1;
+  --kind-degraded-wash: #1c1b19;
+  --focus: #5eead4;
+}
+
+/* `@theme inline` makes Tailwind utilities resolve to the RUNTIME variable rather than
+   baking the light value in — which is what lets one class work in both themes. */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-accent-wash: var(--accent-wash);
+  --color-grounded: var(--kind-grounded);
+  --color-grounded-wash: var(--kind-grounded-wash);
+  --color-no-answer: var(--kind-no-answer);
+  --color-no-answer-wash: var(--kind-no-answer-wash);
+  --color-refused: var(--kind-refused);
+  --color-refused-wash: var(--kind-refused-wash);
+  --color-emergency: var(--kind-emergency);
+  --color-emergency-wash: var(--kind-emergency-wash);
+  --color-emergency-contrast: var(--kind-emergency-contrast);
+  --color-degraded: var(--kind-degraded);
+  --color-degraded-wash: var(--kind-degraded-wash);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+
+  /* Type scale — 1.200 minor third. Small enough steps that a health UI stays calm;
+     a 1.333 scale makes headings shout, which is the wrong voice here. */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.35rem;
+  --text-2xl: 1.62rem;
+  --text-3xl: 1.94rem;
+}
+
+html {
+  /* Tells the UA to style form controls and scrollbars for the active theme. */
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Answers are long-form reading, not chat chrome: serif, generous leading, bounded
+   measure. 68ch is the upper end of comfortable reading; past it the eye loses the line. */
+.answer-prose {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  line-height: 1.7;
+  max-width: 68ch;
+}
+
+/* Editorial Evidence density (D27b): tighter leading, footnote-scale sources. One
+   renderer, two layouts — not two component trees. */
+[data-density="editorial"] .answer-prose {
+  font-size: var(--text-base);
+  line-height: 1.6;
+  max-width: 74ch;
+}
+
+:where(a, button, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Respect a user's reduced-motion setting. Someone anxious at 2 a.m. is exactly the
+   person for whom motion is not decoration. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Public information pages (S10.10). Long-form reading, bounded measure, no client JS. */
+.prose-page p {
+  max-width: 68ch;
+  line-height: 1.7;
+  color: var(--ink-muted);
+}
+.prose-page p + p {
+  margin-top: 0.75rem;
+}
+.prose-page code {
+  font-size: 0.9em;
+  background: var(--surface-sunken);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
