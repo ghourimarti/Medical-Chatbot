@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "next dev -p 5008",
     "build": "next build",
@@ -11,13 +12,17 @@
     "lint": "next lint",
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:contract": "node scripts/check-contract.mjs",
-    "check": "pnpm check:contrast && pnpm check:contract && pnpm typecheck && pnpm build",
+    "check": "pnpm check:contrast && pnpm check:contract && pnpm typecheck && pnpm check:bundle",
     "preview": "next build && next start -p 5008",
     "e2e": "playwright test --project=chromium e2e/answer-kinds.spec.ts",
     "e2e:mobile": "playwright test --project=mobile e2e/answer-kinds.spec.ts",
-    "screenshots": "playwright test e2e/screenshots.spec.ts --project=chromium"
+    "screenshots": "playwright test e2e/screenshots.spec.ts --project=chromium",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "a11y": "playwright test --project=chromium e2e/a11y.spec.ts",
+    "mobile": "playwright test --project=mobile e2e/mobile.spec.ts"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.33.0",
@@ -36,5 +41,10 @@
     "@types/react-dom": "^19.1.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp"
+    ]
   }
 }

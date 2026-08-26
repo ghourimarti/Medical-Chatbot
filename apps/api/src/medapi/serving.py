@@ -26,7 +26,9 @@ from uuid import UUID
 
 from fastapi import Request, Response
 
+from medapi.auth import bearer_token
 from medapi.budget import SpendState
+from medapi.conversations import Caller
 from medapi.deps import Services
 from medapi.observability import (
     cache_events,
@@ -54,14 +56,26 @@ class Preflight:
     session_id: UUID
     client_key: str | None
     log: Any
+    # The authorised thread this turn belongs to, or None for the anonymous single-thread
+    # path. Already ownership-checked by the time it lands here — nothing downstream
+    # re-verifies it, so it must never be set from the request body directly.
+    conversation_id: UUID | None = None
 
 
-async def preflight(question: str, request: Request, svc: Services) -> Preflight:
-    """Session identity + quota enforcement. Raises QuotaExceededError -> 429/7807.
+async def preflight(
+    question: str,
+    request: Request,
+    svc: Services,
+    conversation_id: UUID | None = None,
+) -> Preflight:
+    """Identity, authorisation and quota. Raises QuotaExceededError -> 429/7807, or
+    ConversationNotFound -> 404 for a thread the caller does not own.
 
     Runs BEFORE any expensive work (D20): checking after retrieval would mean paying for
     the embedding and LLM call of a request we then reject, and the abuse case is exactly
-    where cost control has to bite first.
+    where cost control has to bite first. It also runs before the StreamingResponse exists,
+    which is what lets an unauthorised thread be a real 404 instead of an in-band SSE error
+    delivered once the status line already says 200.
     """
     session_id, _ = svc.sessions.resolve(request)
 
@@ -94,7 +108,23 @@ async def preflight(question: str, request: Request, svc: Services) -> Preflight
             log.warning("rate_limited", scope=scope, limit=limit)
             raise
 
-    return Preflight(session_id=session_id, client_key=client_key, log=log)
+    # Ownership of a caller-supplied thread is resolved HERE, in the one place both
+    # endpoints pass through, and the authorised id is what travels onward. The request
+    # body's value never reaches the writer: a thread is prompt context, so appending to
+    # someone else's would be a write into their conversation, not merely a read of it.
+    thread: UUID | None = None
+    if conversation_id is not None and svc.conversations is not None:
+        caller = Caller(
+            session_id=session_id,
+            user_id=await svc.conversations.resolve_user(
+                bearer_token(request.headers.get("authorization"))
+            ),
+        )
+        thread = await svc.conversations.resolve_thread(caller, conversation_id)
+
+    return Preflight(
+        session_id=session_id, client_key=client_key, log=log, conversation_id=thread
+    )
 
 
 def attach_session(response: Response, pre: Preflight, svc: Services) -> None:
@@ -189,6 +219,7 @@ async def postflight(
         # behind a proxy would make abuse investigation and abuse enforcement disagree
         # about who the caller was.
         client_hash=pre.client_key,
+        conversation_id=pre.conversation_id,
     )
     return answer
 

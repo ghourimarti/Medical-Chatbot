@@ -102,3 +102,22 @@ export interface PublicStatus {
 export function finalText(done: DoneEvent, streamed: string): string {
   return done.kind === "grounded" ? streamed || done.text : done.text;
 }
+
+/** A saved thread (S20/S21). Owned by a user when signed in, otherwise by the anonymous
+ *  session — which is why the sidebar works with no account at all. */
+export interface Conversation {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  /** False while owned only by an anonymous session. The UI uses this to explain that
+   *  signing in will keep the thread rather than silently discarding it. */
+  claimed: boolean;
+}
+
+export interface ConversationList {
+  /** False when no database is configured: the feature is absent, not broken. */
+  enabled: boolean;
+  signed_in: boolean;
+  conversations: Conversation[];
+}

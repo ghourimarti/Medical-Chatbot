@@ -186,12 +186,38 @@ async def test_streaming_does_NOT_fail_over_after_the_first_token() -> None:
 
 
 def test_parse_chain_preserves_order_and_dedupes() -> None:
-    assert parse_chain("local, groq ,local") == ["local", "groq"]
+    assert [leg.label for leg in parse_chain("local, groq ,local")] == ["local", "groq"]
+
+
+def test_engine_suffixed_legs_are_not_duplicates() -> None:
+    """`local-vllm` and `local-sglang` are the same box with different engines. Deduping
+    them by venue would silently delete the leg that covers an ENGINE fault — a crash, an
+    OOM regression, a bad build — which is exactly what that pair is for."""
+    labels = [leg.label for leg in parse_chain("local-vllm,local-sglang,local-vllm")]
+    assert labels == ["local-vllm", "local-sglang"]
+
+
+def test_a_bare_gpu_venue_still_means_what_it_used_to() -> None:
+    """Chains written before engine suffixes existed must keep their exact meaning."""
+    (leg,) = parse_chain("local")
+    assert (leg.venue, leg.engine) == ("local", None)
 
 
 def test_unknown_venue_is_rejected_at_config_time() -> None:
-    with pytest.raises(ValueError, match="unknown venues"):
+    with pytest.raises(ValueError, match="unknown venue"):
         parse_chain("local,teapot")
+
+
+def test_unknown_engine_is_rejected_at_config_time() -> None:
+    with pytest.raises(ValueError, match="unknown engine"):
+        parse_chain("local-tensorrt")
+
+
+def test_naming_an_engine_for_a_hosted_api_is_rejected() -> None:
+    """Groq runs no engine of ours. Ignoring the suffix would leave the operator believing
+    they had chosen something."""
+    with pytest.raises(ValueError, match="hosted API"):
+        parse_chain("groq-vllm")
 
 
 def test_unconfigured_venues_are_skipped_not_fatal() -> None:
@@ -200,22 +226,46 @@ def test_unconfigured_venues_are_skipped_not_fatal() -> None:
     assert model.venues == ["local", "groq"]  # runpod/aws have no URL yet
 
 
+def test_openai_leg_is_skipped_without_a_key() -> None:
+    """An unconfigured hosted leg must be SKIPPED at startup, not added and then 401 on
+    the first real question."""
+    assert build_failover_model(_settings(serving_chain="openai,groq")).venues == ["groq"]
+
+
+def test_openai_leg_is_used_when_a_key_is_present() -> None:
+    model = build_failover_model(
+        _settings(serving_chain="openai,groq", openai_api_key="sk-test-not-real")
+    )
+    assert model.venues == ["openai", "groq"]
+
+
 def test_empty_chain_fails_at_startup() -> None:
     """A service that boots with no way to answer would pass liveness and fail every
     request. Fail at startup instead (D17)."""
-    with pytest.raises(ValueError, match="no usable venues"):
+    with pytest.raises(ValueError, match="no usable legs"):
         build_failover_model(
             _settings(serving_chain="runpod,aws", vllm_runpod_url="", vllm_aws_url="")
         )
 
 
 def test_all_known_venues_are_configurable() -> None:
+    """Every venue the registry admits must be reachable through config alone. `openai`
+    needs a key as well as a URL — without one the leg is skipped rather than added and
+    then 401-ing on the first real question."""
     model = build_failover_model(
         _settings(
             serving_chain=",".join(KNOWN_VENUES),
             vllm_runpod_url="http://runpod.test/v1",
             vllm_aws_url="http://aws.test/v1",
+            openai_api_key="sk-test-not-real",
         )
     )
     assert model.venues == list(KNOWN_VENUES)
     assert set(model.status()) == set(KNOWN_VENUES)
+
+
+def test_openai_without_a_key_is_skipped_not_added() -> None:
+    """A leg that exists but cannot authenticate is worse than no leg: failover would
+    'succeed' onto it and then fail the request."""
+    model = build_failover_model(_settings(serving_chain="openai,groq", openai_api_key=None))
+    assert model.venues == ["groq"]

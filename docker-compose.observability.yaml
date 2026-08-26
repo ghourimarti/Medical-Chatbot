@@ -42,8 +42,21 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # T6 — open the dashboards WITHOUT a login. This is a LOCAL-ONLY convenience and it
+      # is safe only because nothing here is exposed beyond localhost. Anonymous is Viewer,
+      # never Admin: you can read every panel and change nothing, so a stray click cannot
+      # edit a provisioned dashboard. Sign in as admin when you want to edit.
+      GF_AUTH_ANONYMOUS_ENABLED: "${GRAFANA_ANONYMOUS:-true}"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      # Land on the service overview instead of an empty home page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/medbot-overview.json
     volumes:
       - grafana_data:/var/lib/grafana
+      # Provisioned at boot (T6): datasource UID is FIXED so the committed dashboard JSON
+      # is portable, and the dashboards themselves live in git.
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
 
@@ -61,7 +74,81 @@ services:
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-dev-secret-change-me}
       SALT: ${LANGFUSE_SALT:-langfuse-dev-salt-change-me}
       TELEMETRY_ENABLED: "false"
+      # T5 — HEADLESS BOOTSTRAP. Langfuse creates the org, project, user AND pins the API
+      # keys to the values below on first boot of an empty database. Because the API reads
+      # those same two keys from .env, tracing works the moment the stack is up: no signup,
+      # no "create a project", no copying keys between two browser tabs.
+      #
+      # These run ONLY against an empty Langfuse database. After `make downv` they seed
+      # again; on a warm start they are ignored, which is why changing a key here needs a
+      # `make downv` to take effect.
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-medbot-local}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-Medbot Local}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-medbot}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-Medical RAG Chatbot}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-medbot-local}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-medbot-local}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@medbot.local}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-Medbot Admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-medbot-admin-1234}
+
+  # 16. Jaeger — the distributed TRACE view (T8).
+  #
+  # WHY IT IS NEEDED: the OTel Collector was exporting traces to the `debug` exporter,
+  # which writes them to its own stdout and nowhere else. The instrumentation existed, the
+  # tail-sampling policy existed, and there was no way to LOOK at a trace. Its own config
+  # comment said "production exports to Tempo/Jaeger instead".
+  #
+  # WHY IT DOES NOT DUPLICATE LANGFUSE: Langfuse answers "what did the model see and say,
+  # and what did it cost". Jaeger answers "where did the 1.8 seconds go" across
+  # HTTP -> embed -> retrieve -> rerank -> generate. When a request is slow, only one of
+  # those two tells you which stage to look at.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    ports:
+      - "${JAEGER_UI_PORT:-5023}:16686"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # In-memory storage: traces are for debugging the run in front of you, and this
+      # keeps the local stack to one container with no storage tier to operate.
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "50000"
+
+  # 22. RedisInsight — Redis GUI, with the databases already registered (T7).
+  redisinsight:
+    image: redis/redisinsight:2.62
+    ports:
+      - "${REDISINSIGHT_PORT:-5022}:5540"
+    environment:
+      # Without this the UI opens on a EULA/consent screen and the API refuses writes —
+      # which is exactly the "log in and click through" step this is meant to remove.
+      RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
+      RI_APP_PORT: "5540"
+    volumes:
+      - redisinsight_data:/data
+
+  # Registers every Redis instance in RedisInsight, then exits. Idempotent: it checks
+  # before adding, so `make up` twice does not create duplicates.
+  # Behind a profile so it is NOT part of `up --wait`. A one-shot task container exits
+  # when it finishes, and `--wait` treats ANY exit as a failure — so a seeder that worked
+  # perfectly made `make up` report Error 1 over a healthy stack. A command that cries
+  # failure when nothing is wrong is worse than no check at all: it teaches you to ignore
+  # the exit code. The Makefile runs this immediately after the stack is up.
+  redisinsight-seed:
+    profiles: ["seed"]
+    image: busybox:1.37
+    depends_on:
+      redisinsight:
+        condition: service_started
+    environment:
+      RI_URL: http://redisinsight:5540
+      REDISINSIGHT_DATABASES: ${REDISINSIGHT_DATABASES:-medbot-cache|redis|6379}
+    volumes:
+      - ./infra/redisinsight/seed-databases.sh:/seed.sh:ro
+    command: ["sh", "/seed.sh"]
+    restart: "no"
 
 volumes:
   prom_data:
   grafana_data:
+  redisinsight_data:

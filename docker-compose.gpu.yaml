@@ -1,0 +1,148 @@
+# TIER 4 — SELF-HOSTED INFERENCE (D4b). vLLM and SGLang, both OpenAI-compatible, both
+# serving the SAME weights from the SAME cache volume.
+#
+# WHY A SEPARATE FILE AND A PROFILE: these need an NVIDIA GPU. On a machine without one
+# the containers do not fail gracefully — they fail at device init, minutes in, after
+# pulling ~10 GB of image. `make up` detects the GPU and includes this tier only when it
+# can actually run, so the absence of a GPU is a printed note rather than a broken stack.
+#
+# WHY BOTH ENGINES AT ONCE: SERVING_CHAIN=local-vllm,local-sglang makes SGLang the
+# engine-level failover leg D12 v2.1 asked for. They share a GPU, so that pair covers an
+# engine crash or an OOM regression — NOT a dead card. Keep a hosted leg last for that.
+#
+# ⚠ THE WEIGHTS VOLUME IS PRECIOUS. `vllm-hf-cache` holds ~5 GB that took an uninterrupted
+# download to obtain (S3b blocker #3: huggingface_hub 1.27 does NOT resume across process
+# restarts — an interrupted pull restarts from byte 0 and orphans the partial). `make downv`
+# deliberately does NOT delete it; `make clean-models` exists for that, on purpose and alone.
+services:
+  # 9. vLLM — the primary local engine (S3b: TTFT 37 ms, 63.5 tok/s on an RTX 3060).
+  vllm:
+    profiles: ["gpu"]
+    image: vllm/vllm-openai:latest
+    ports:
+      - "${VLLM_LOCAL_PORT:-5009}:8000"
+    environment:
+      # S3b blocker #1: vLLM 0.27's V2 model runner allocates a UVA buffer via
+      # cudaHostRegister, which the WSL2 GPU driver does not implement. Without this the
+      # container dies at init_device with "RuntimeError: UVA is not available".
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+      # S3b blocker #2: unauthenticated HF Hub pulls are throttled to ~0.4 MB/s.
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - --model
+      - ${VLLM_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      # 0.80 leaves headroom on a 12 GB card for the KV cache at 8k context. Raising it
+      # trades context length for batch size; both were measured in S3b.
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.80}"
+      - --max-model-len
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+    volumes:
+      - vllm-hf-cache:/root/.cache/huggingface
+    ipc: host          # vLLM needs a large /dev/shm for its worker IPC
+    healthcheck:
+      # /health is vLLM's own readiness endpoint; the image has no curl, so use python.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      # A COLD start downloads ~5 GB of weights. start_period is a GRACE window, not a
+      # timeout: it must cover the worst legitimate start or compose kills a container that
+      # was merely slow (the exact mistake corrected for ml-service in I.4).
+      start_period: 900s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # 10. SGLang — the second engine. Benchmarked against vLLM in S14 (51.8 vs 58 tok/s,
+  # p99 2504 vs 1034 ms → vLLM recommended), kept as the engine-failover leg.
+  # NOT in the `gpu` profile, and this was MEASURED rather than reasoned.
+  #
+  # vLLM asks for 0.80 of the card and SGLang for 0.45 — 125% of a 12GB RTX 3060. Starting
+  # both from `make up` did not fail fast: SGLang took memory while vLLM was mid-load, and
+  # vLLM WEDGED at "Starting to load model" for 15 minutes with no error. Stopping SGLang
+  # afterwards did not release it either; the process had to be recreated.
+  #
+  # Two engines on one consumer card is not a configuration, it is a deadlock. Run SGLang
+  # when you want to BENCHMARK it against vLLM or rehearse an engine failover, on a box
+  # with the headroom for it:
+  #     make sglang-up          (stop vLLM first on a single 12GB card)
+  #     make up GPU_ENGINES=both
+  sglang:
+    profiles: ["gpu-sglang"]
+    image: lmsysorg/sglang:latest
+    ports:
+      - "${SGLANG_LOCAL_PORT:-5010}:30000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --model-path
+      - ${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "30000"
+      # Deliberately LOWER than vLLM's 0.80: if both engines are up on one card they must
+      # not each claim 80% of it. Running the pair is a failover rehearsal, not the
+      # steady state — see docs/SERVING.md.
+      - --mem-fraction-static
+      - "${SGLANG_MEM_FRACTION:-0.45}"
+      - --context-length
+      - "${SGLANG_MAX_MODEL_LEN:-8192}"
+    volumes:
+      # SAME cache as vLLM: one download serves both engines.
+      - vllm-hf-cache:/root/.cache/huggingface
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:30000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 900s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # 24. Open WebUI - a ChatGPT-style interface pointed straight at the engines.
+  #
+  # WHY: `curl /v1/chat/completions` proves an engine RESPONDS. It does not let you feel
+  # whether the model is any good, notice that it rambles, or compare vLLM against SGLang
+  # on the same prompt. This is the tool for judging OUTPUT; the API's own UI (port 5008)
+  # is the medical product with retrieval, citations and guardrails in front of it.
+  # Talking to the raw engine here is deliberately the UNGUARDED path.
+  #
+  # Auth is off: local only, and a login screen defeats the purpose of a scratchpad.
+  # `webui` ONLY, deliberately. Putting it in the `gpu` profile made `make up` depend on
+  # pulling a chat-UI image that serves no traffic — a debugging convenience should never
+  # gate the stack coming up. Start it when you want it: `make webui`.
+  open-webui:
+    profiles: ["webui"]
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "${OPEN_WEBUI_PORT:-5024}:8080"
+    environment:
+      WEBUI_AUTH: "false"
+      # Both engines registered, so the model picker switches between them.
+      OPENAI_API_BASE_URLS: "http://vllm:8000/v1;http://sglang:30000/v1"
+      OPENAI_API_KEYS: "none;none"
+      ENABLE_OLLAMA_API: "false"
+      WEBUI_NAME: "Medbot engines (raw - no retrieval, no guardrails)"
+    volumes:
+      - open_webui_data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  # NOT in the Makefile's DATA_VOLS list, and that omission is the point.
+  vllm-hf-cache:
+  open_webui_data:

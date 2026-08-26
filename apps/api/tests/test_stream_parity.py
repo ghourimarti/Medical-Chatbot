@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from medapi.conversations import ConversationNotFound
 from medapi.routes import router
 
 from medcore.errors import MedbotError, QuotaExceededError
@@ -106,11 +107,35 @@ class _Pipeline:
         )
 
 
+class _Conversations:
+    """Stands in for ConversationService with the SAME three outcomes preflight relies on.
+
+    `owned` is the set of threads this caller may write to; `broken` simulates Postgres
+    being unreachable, which must degrade rather than authorise.
+    """
+
+    def __init__(self, owned: set[UUID] | None = None, broken: bool = False) -> None:
+        self.owned = owned or set()
+        self.broken = broken
+        self.enabled = True
+
+    async def resolve_user(self, token: str | None) -> UUID | None:
+        return None
+
+    async def resolve_thread(self, caller: Any, conversation_id: UUID | None) -> UUID | None:
+        if conversation_id is None or self.broken:
+            return None
+        if conversation_id not in self.owned:
+            raise ConversationNotFound("not yours")
+        return conversation_id
+
+
 def build_client(
     *,
     limit: int = 20,
     cache_hit: Answer | None = None,
     llm_enabled: bool = True,
+    conversations: Any = None,
 ) -> tuple[TestClient, SimpleNamespace]:
     sid = uuid4()
     services = SimpleNamespace(
@@ -136,6 +161,7 @@ def build_client(
         ),
         history=_History(),
         pipeline=_Pipeline(),
+        conversations=conversations,
     )
     app = FastAPI()
     app.include_router(router)
@@ -175,8 +201,8 @@ async def _record(amount: float) -> float:
     return amount
 
 
-def _post(client: TestClient, path: str) -> Any:
-    body = {"question": "What is cirrhosis?", "stream": path.endswith("stream")}
+def _post(client: TestClient, path: str, **extra: Any) -> Any:
+    body = {"question": "What is cirrhosis?", "stream": path.endswith("stream"), **extra}
     return client.post(path, json=body)
 
 
@@ -289,3 +315,50 @@ def test_history_read_still_serves_an_established_session() -> None:
     client, services = build_client()
     client.post("/api/v1/query", json={"question": "What is cirrhosis?", "stream": False})
     assert len(services.history.turns) == 1
+
+
+# --------------------------------------------------------------------------------------
+# S20b — conversation_id is caller-supplied, so BOTH paths must authorise it.
+#
+# The failure this prevents is a WRITE-side IDOR, which is worse than the read-side one:
+# a thread is prompt context, so appending a turn to a stranger's conversation puts text
+# of the attacker's choosing into what that person's next request sends to the model.
+# --------------------------------------------------------------------------------------
+@pytest.mark.parametrize("path", BOTH_ENDPOINTS)
+def test_an_unowned_thread_is_rejected_on_both_endpoints(path: str) -> None:
+    client, svc = build_client(conversations=_Conversations(owned={uuid4()}))
+    response = _post(client, path, conversation_id=str(uuid4()))
+
+    # 404 as a REAL status line, on the streaming path too. The check runs before the
+    # StreamingResponse is constructed; once bytes are on the wire the status is already
+    # 200 and the only way left to report the refusal is in-band.
+    assert response.status_code == 404, f"{path}: unowned thread was accepted"
+    assert svc.history.turns == [], f"{path}: wrote a turn into a thread it did not own"
+
+
+@pytest.mark.parametrize("path", BOTH_ENDPOINTS)
+def test_an_owned_thread_is_persisted_on_both_endpoints(path: str) -> None:
+    mine = uuid4()
+    client, svc = build_client(conversations=_Conversations(owned={mine}))
+    assert _post(client, path, conversation_id=str(mine)).status_code == 200
+    assert [t["conversation_id"] for t in svc.history.turns] == [mine], path
+
+
+@pytest.mark.parametrize("path", BOTH_ENDPOINTS)
+def test_an_unverifiable_thread_still_answers_on_both_endpoints(path: str) -> None:
+    """D21: a database outage costs history, not the ability to answer.
+
+    "Cannot prove ownership" must resolve to "write no thread", never to "allow" — the
+    answer is still served, and nothing lands in anyone's conversation."""
+    client, svc = build_client(conversations=_Conversations(broken=True))
+    assert _post(client, path, conversation_id=str(uuid4())).status_code == 200
+    assert [t["conversation_id"] for t in svc.history.turns] == [None], path
+
+
+@pytest.mark.parametrize("path", BOTH_ENDPOINTS)
+def test_no_thread_is_still_valid_on_both_endpoints(path: str) -> None:
+    """D24 sequencing: the anonymous single-thread path predates conversations and must
+    keep working with no thread at all."""
+    client, svc = build_client(conversations=_Conversations())
+    assert _post(client, path).status_code == 200
+    assert [t["conversation_id"] for t in svc.history.turns] == [None], path

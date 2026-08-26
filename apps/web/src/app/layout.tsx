@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { Disclaimer } from "@/components/disclaimer";
 import { SiteFooter } from "@/components/site-footer";
 import { DensityToggle, PreferencesScript, ThemeToggle } from "@/components/preferences";
@@ -10,10 +11,11 @@ export const metadata: Metadata = {
     "Answers grounded in a medical reference corpus, with sources shown for every claim.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // suppressHydrationWarning: PreferencesScript mutates <html> dataset before React
   // hydrates, so server and client markup legitimately differ on this one element.
   return (
+    <AuthShell>
     <html lang="en" data-density="calm" suppressHydrationWarning>
       <head>
         <PreferencesScript />
@@ -47,5 +49,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SiteFooter />
       </body>
     </html>
+    </AuthShell>
   );
 }

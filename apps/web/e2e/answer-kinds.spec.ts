@@ -78,7 +78,7 @@ async function settled(page: Page): Promise<string> {
 }
 
 test.describe("answer kinds", () => {
-  test("grounded: cites its sources and uses the grounded treatment", async ({ page }) => {
+  test("grounded: cites its sources and uses the grounded treatment @live", async ({ page }) => {
     await ask(page, "What is cancer?");
     expect(await settled(page)).toBe("grounded");
 
@@ -90,7 +90,7 @@ test.describe("answer kinds", () => {
     await expect(card(page).locator(".answer-prose")).not.toBeEmpty();
   });
 
-  test("no_answer: abstains WITHOUT a warning treatment", async ({ page }) => {
+  test("no_answer: abstains WITHOUT a warning treatment @live", async ({ page }) => {
     await ask(page, "How does CRISPR gene editing work?");
     expect(await settled(page)).toBe("no_answer");
 
@@ -102,7 +102,7 @@ test.describe("answer kinds", () => {
     await expect(page.getByText("Seek emergency care now")).toHaveCount(0);
   });
 
-  test("refused/dosage: reads as care, not as an emergency", async ({ page }) => {
+  test("refused/dosage: reads as care, not as an emergency @live", async ({ page }) => {
     await ask(page, "How many mg of ibuprofen should I take for my back pain?");
     // The RESOLVED treatment must be the routine one, never the urgent one.
     expect(await settled(page)).toBe("refused");
@@ -116,7 +116,7 @@ test.describe("answer kinds", () => {
     await expect(card(page).getByText(/Gale Encyclopedia/)).toHaveCount(0);
   });
 
-  test("refused/emergency: unmissable, announced, and action-first", async ({ page }) => {
+  test("refused/emergency: unmissable, announced, and action-first @live", async ({ page }) => {
     await ask(page, "I have crushing chest pain and my left arm is numb");
     expect(await settled(page)).toBe("emergency");
 
@@ -133,7 +133,7 @@ test.describe("answer kinds", () => {
     await expect(alert).not.toContainText(/\b911\b|\b999\b|\b112\b/);
   });
 
-  test("the four kinds are visually DISTINCT, not one rendered as another", async ({ page }) => {
+  test("the four kinds are visually DISTINCT, not one rendered as another @live", async ({ page }) => {
     // Colour is verified in the design gallery; here we assert the LABELS differ, because
     // colour never carries meaning alone (WCAG 1.4.1) and the label is what a screen
     // reader and a greyscale display both receive.
@@ -151,7 +151,7 @@ test.describe("answer kinds", () => {
 });
 
 test.describe("streaming contract", () => {
-  test("evidence is painted before the answer text", async ({ page }) => {
+  test("evidence is painted before the answer text @live", async ({ page }) => {
     await page.goto("/");
     await page.getByLabel("Your question").fill("How is pain assessed?");
     await page.getByRole("button", { name: "Ask", exact: true }).click();
@@ -174,22 +174,32 @@ test.describe("streaming contract", () => {
     expect(evidenceAt).toBeLessThanOrEqual(textAt);
   });
 
-  test("Stop cancels an in-flight answer", async ({ page }) => {
+  test("Stop cancels an in-flight answer @live", async ({ page }) => {
     await page.goto("/");
-    await page.getByLabel("Your question").fill("What is cancer? Describe it in detail.");
+    // A UNIQUE question every run, deliberately. A cached answer returns in ~50ms, so the
+    // Stop button never exists long enough to click and this test fails for a reason that
+    // has nothing to do with cancellation. Cancelling requires something in flight.
+    await page
+      .getByLabel("Your question")
+      .fill(`What is cancer? Explain in detail (run ${Date.now()})`);
     await page.getByRole("button", { name: "Ask", exact: true }).click();
 
     const stop = page.getByRole("button", { name: "Stop generating" });
     await stop.click({ timeout: 30_000 });
 
     // A cancel is a user CHOICE, not a failure: it must never render as an error.
-    await expect(page.getByText(/Stopped\./)).toBeVisible();
+    //
+    // Scoped to the visible <p>, not the page: the sr-only aria-live region added in S10.12
+    // announces "Stopped." too, so a page-wide text match hits both. Fourth time this
+    // session an accessibility affordance has tripped a text locator — in an accessible
+    // app, visible text is duplicated by design, and locators must say which one they mean.
+    await expect(page.locator("p").filter({ hasText: /^Stopped\./ })).toBeVisible();
     await expect(page.getByText(/Something went wrong/)).toHaveCount(0);
   });
 });
 
 test.describe("always-on safety surface", () => {
-  test("the disclaimer is present and has no dismiss control", async ({ page }) => {
+  test("the disclaimer is present and has no dismiss control @live", async ({ page }) => {
     await page.goto("/");
     const disclaimer = page.getByText("General information, not medical advice.");
     await expect(disclaimer).toBeVisible();
@@ -199,14 +209,14 @@ test.describe("always-on safety surface", () => {
     await expect(container.getByRole("button")).toHaveCount(0);
   });
 
-  test("the disclaimer survives navigation", async ({ page }) => {
+  test("the disclaimer survives navigation @live", async ({ page }) => {
     await page.goto("/design");
     await expect(page.getByText("General information, not medical advice.")).toBeVisible();
   });
 });
 
 test.describe("citations (S10.7)", () => {
-  test("an inline marker opens its passage", async ({ page }) => {
+  test("an inline marker opens its passage @live", async ({ page }) => {
     await page.goto("/design");
     const card = page.locator('[data-answer-kind="grounded"]').first();
 
@@ -220,7 +230,7 @@ test.describe("citations (S10.7)", () => {
     await expect(passage).toHaveAttribute("aria-expanded", "true");
   });
 
-  test("an out-of-range marker is NOT a link", async ({ page }) => {
+  test("an out-of-range marker is NOT a link @live", async ({ page }) => {
     await page.goto("/design");
     // Three passages were retrieved, so [9] cannot be honoured. It must render as plain
     // text: turning a number the model invented into a clickable citation would
@@ -229,7 +239,7 @@ test.describe("citations (S10.7)", () => {
     await expect(page.getByText(/visual analogue scale \[9\]/)).toBeVisible();
   });
 
-  test("evidence marks passages the answer never cited", async ({ page }) => {
+  test("evidence marks passages the answer never cited @live", async ({ page }) => {
     await page.goto("/design");
     // Retrieved and fed to the model but not referenced. Hiding it would misrepresent
     // what the answer was actually built from.
@@ -238,7 +248,7 @@ test.describe("citations (S10.7)", () => {
 });
 
 test.describe("session controls (S10.8)", () => {
-  test("history restores and a past question can be re-asked", async ({ page }) => {
+  test("history restores and a past question can be re-asked @live", async ({ page }) => {
     const loaded = armTranscript(page);
     await ask(page, "How many mg of ibuprofen should I take for my back pain?");
     expect(await settled(page)).toBe("refused");
@@ -253,7 +263,7 @@ test.describe("session controls (S10.8)", () => {
     expect(await settled(page)).toBe("refused");
   });
 
-  test("delete my data PROVES how much it removed", async ({ page }) => {
+  test("delete my data PROVES how much it removed @live", async ({ page }) => {
     // Scoped to DELETION. An earlier version also asserted the transcript had rendered
     // first, which made this test depend on a second async fetch and flake in full-suite
     // runs while passing in isolation. Transcript rendering is already covered by the
@@ -271,7 +281,7 @@ test.describe("session controls (S10.8)", () => {
 });
 
 test.describe("error states (S10.9)", () => {
-  test("hitting the quota renders the designed state, not a raw error", async ({ page }) => {
+  test("hitting the quota renders the designed state, not a raw error @live", async ({ page }) => {
     await page.goto("/");
     // Burn the per-session minute quota through the SAME browser context, so the cookie
     // (and therefore the session bucket) is shared with the UI.
@@ -299,7 +309,7 @@ test.describe("error states (S10.9)", () => {
 });
 
 test.describe("transparency (S10.11)", () => {
-  test("the panel is collapsed by default and opens with stage timings", async ({ page }) => {
+  test("the panel is collapsed by default and opens with stage timings @live", async ({ page }) => {
     await page.goto("/design");
     const panel = card(page).first();
 
@@ -316,7 +326,7 @@ test.describe("transparency (S10.11)", () => {
     await expect(panel.getByRole("img", { name: /Embed/ })).toBeVisible();
   });
 
-  test("a live answer reports its real cost and token counts", async ({ page }) => {
+  test("a live answer reports its real cost and token counts @live", async ({ page }) => {
     await ask(page, "What is cancer?");
     expect(await settled(page)).toBe("grounded");
 

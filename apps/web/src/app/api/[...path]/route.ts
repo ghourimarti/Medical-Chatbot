@@ -14,3 +14,7 @@ async function handle(request: Request, ctx: Ctx): Promise<Response> {
 
 export const GET = handle;
 export const POST = handle;
+// S21: conversations are renamed and deleted. Methods are still pinned per route inside
+// the allowlist — exporting a verb here only makes it reachable, never permitted.
+export const PATCH = handle;
+export const DELETE = handle;

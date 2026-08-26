@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from medapi.conversations import router as conversations_router
 from medapi.db.partitions import ensure_future_partitions
 from medapi.db.schema_sql import INITIAL_DDL
 from medapi.deps import build_services
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="P5 Medical RAG API", version="0.1.0", lifespan=lifespan)
     register_error_handlers(app)  # RFC 7807 for every failure path (D18)
     app.include_router(router)
+    app.include_router(conversations_router)
     return app
 
 

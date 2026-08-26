@@ -15,8 +15,10 @@ from medapi.adapters.ml_client import HttpEmbedder, HttpReranker
 from medapi.adapters.reranker import BgeReranker
 from medapi.adapters.sparse import Bm25Encoder
 from medapi.adapters.vector_store import QdrantVectorStore
+from medapi.auth import AuthVerifier, build_verifier
 from medapi.budget import KillSwitch, SpendTracker
 from medapi.cache import EmbeddingCache, ResponseCache
+from medapi.conversations import ConversationService
 from medapi.db.engine import build_engine, build_session_factory
 from medapi.history import HistoryService
 from medapi.pipeline.rag import RagPipeline
@@ -42,6 +44,8 @@ class Services:
     limiter: RateLimiter
     spend: SpendTracker
     kill_switch: KillSwitch
+    conversations: ConversationService | None = None
+    verifier: AuthVerifier | None = None
     reranker: RerankerPort | None = None
     engine: AsyncEngine | None = None
     redis: Any | None = None
@@ -125,6 +129,8 @@ def build_services(settings: Settings) -> Services:
             cooldown_seconds=settings.redis_circuit_cooldown_seconds,
         )
 
+    verifier = build_verifier(settings)
+
     return Services(
         settings=settings,
         embedder=embedder,
@@ -160,4 +166,14 @@ def build_services(settings: Settings) -> Services:
         ),
         reranker=reranker,
         engine=engine,
+        # Accounts are OPTIONAL infrastructure: with no JWKS URL the verifier rejects any
+        # token presented, and with no database the service reports itself disabled. Either
+        # way the anonymous product is unaffected (D24 sequencing).
+        #
+        # ONE verifier, shared. Building it twice gave the readiness check and the request
+        # path separate PyJWKClient instances, so each JWKS fetch happened twice and a key
+        # rotation cost two cache misses instead of one. Worse, they could disagree: an
+        # operator swapping one for a test would leave the other on the old config.
+        verifier=verifier,
+        conversations=ConversationService(factory, verifier),
     )

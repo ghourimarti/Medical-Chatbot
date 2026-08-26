@@ -180,6 +180,14 @@ leaked vendor specifics and that is a finding worth writing up.
 
 ## Finding (S15.5): CPU-only images ship 3.4 GB of unusable CUDA runtime
 
+> **Superseded by the P6.1a fix — and the estimate below was LOW.** Auditing package sizes
+> inside the image caught 3.4 GB; actually removing the CUDA stack recovered **6.5 GB per
+> image**, 19.59 GB across all three (26.18 GB → 6.59 GB, −75%). The gap is transitive
+> weight the per-package tally missed. Full measurement and the fix: `docs/IMAGES.md`.
+>
+> Kept here rather than rewritten, because "my estimate was half the real number" is the
+> useful part. The section below is the original S15.5 audit.
+
 Measured inside `medbot-ml:0.1.0` (total image **8.5 GB**):
 
 | Package | Size | Reachable? |

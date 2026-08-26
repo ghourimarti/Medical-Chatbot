@@ -1,0 +1,30 @@
+# Provisioned datasources (T6). Grafana reads this at boot, so nobody clicks
+# "Add data source" — and more importantly, nobody has a DIFFERENT one from the next
+# person. A dashboard that references a hand-made datasource UID is unshareable.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Fixed UID: dashboards reference the datasource BY UID. Letting Grafana generate one
+    # makes every dashboard JSON machine-specific, which is how "works on my machine"
+    # gets committed.
+    uid: medbot-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s      # match Prometheus scrape_interval; rate() lies if it is wrong
+      httpMethod: POST
+    editable: false
+
+  - name: Jaeger
+    uid: medbot-jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      # Clicking a trace ID in a log/metric exemplar jumps straight to the span tree.
+      tracesToMetrics:
+        datasourceUid: medbot-prometheus

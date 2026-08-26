@@ -8,6 +8,7 @@ store a refusal) all have to branch on them. A str cannot be branched on safely.
 
 from __future__ import annotations
 
+import uuid
 from enum import StrEnum
 from typing import Any, Literal, Self
 
@@ -143,6 +144,14 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: str | None = Field(default=None, max_length=128)
     stream: bool = True
+    # Which saved thread this turn belongs to (S20b). Optional: the anonymous single-thread
+    # path predates conversations and must keep working with no thread at all (D24).
+    #
+    # CALLER-SUPPLIED AND THEREFORE UNTRUSTED. Ownership is verified in serving.preflight
+    # before anything is written; passing it straight to the writer would let anyone append
+    # turns to a stranger's thread, and since a thread is prompt context, that is a write
+    # into someone else's conversation rather than merely a read of it.
+    conversation_id: uuid.UUID | None = None
 
 
 # ---------------------------------------------------------------------------

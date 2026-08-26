@@ -107,10 +107,44 @@ def test_env_example_documents_only_names_something_reads() -> None:
     infra = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
     infra |= set(re.findall(r"\$\$?\{?([A-Z][A-Z0-9_]{3,})", (REPO_ROOT / "Makefile").read_text(
         encoding="utf-8")))
-    # A name may also be tagged [inert] / [infra] in the file itself, which is a deliberate
-    # claim that nothing reads it yet.
+    # The WEB TIER reads .env too (S10.14). It is a real consumer, not infrastructure, so
+    # its `process.env.NAME` accesses count as "something reads this" exactly as a Settings
+    # field does. Added because this guard fired on UPSTREAM_TIMEOUT_MS — correctly, since
+    # it only knew about Python readers, while the variable is read by src/lib/env.ts. A
+    # guard whose scope lags the codebase produces false positives, and false positives are
+    # how a guard gets disabled.
+    web_src = REPO_ROOT / "apps" / "web" / "src"
+    if web_src.is_dir():
+        web_text = "".join(
+            f.read_text(encoding="utf-8", errors="ignore")
+            for f in web_src.rglob("*.ts*")
+        )
+        infra |= set(re.findall(r"process\.env\.([A-Z][A-Z0-9_]*)", web_text))
+
+    # A name may also be tagged [inert] / [infra], a deliberate claim that it is read
+    # somewhere ungreppable (boto3 reading AWS_* straight from the environment) or not yet
+    # read at all.
+    #
+    # The tag used to be required on the SAME line as the assignment. That stopped working
+    # when .env moved every comment ABOVE its variable — trailing comments are parsed
+    # differently by python-dotenv, a shell `source`, and everything else, and this repo
+    # has been bitten by that twice. The tag is now looked for in the comment block
+    # immediately above, which is where comments now live.
     tagged = set(re.findall(r"^([A-Z][A-Z0-9_]*)=.*?\[(?:inert|infra)\]", text, re.M))
     tagged |= set(re.findall(r"^# ([A-Z][A-Z0-9_]*) — .*", text, re.M))
+
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        match = re.match(r"^([A-Z][A-Z0-9_]*)=", line)
+        if not match:
+            continue
+        # Walk back over the contiguous comment block that documents this variable.
+        for above in range(index - 1, -1, -1):
+            if not lines[above].startswith("#"):
+                break
+            if "[infra]" in lines[above] or "[inert]" in lines[above]:
+                tagged.add(match.group(1))
+                break
 
     unknown = sorted(
         k for k in dotenv_values(ENV_EXAMPLE)

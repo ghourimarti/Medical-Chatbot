@@ -1,0 +1,115 @@
+# Web tier CI (S10.13).
+#
+# SCOPE, CHOSEN HONESTLY. The full browser suite drives a real backend — API, Qdrant,
+# ml-service and a seeded index. That stack does not exist in CI for the same reason
+# load-smoke does not (S17-A3): the corpus PDF is correctly untracked, so there is nothing
+# to index, and the API refuses to become Ready without a non-empty index.
+#
+# Rather than skip browser testing entirely, the suite is split by dependency. Tests tagged
+# @live need the backend and run locally (`make web-e2e`); everything else — the design
+# system, public pages, accessibility, mobile layout, and the CLIENT streaming contract with
+# the network mocked — runs here on every push.
+#
+# That includes the retracted-dose contract, which is the most safety-relevant assertion in
+# the frontend: a stream cut off by the output guardrail must not leave the partial dose on
+# screen. It is mocked, so it is guarded on every commit rather than only when someone
+# remembers to run the live suite.
+name: web
+
+on:
+  pull_request:
+    paths: ["apps/web/**", ".github/workflows/web.yaml"]
+  push:
+    branches: [main]
+    paths: ["apps/web/**", ".github/workflows/web.yaml"]
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: apps/web
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Each of these fails the build. None are advisory: a gate that only warns is a gate
+      # people learn to scroll past.
+      - name: Contrast (WCAG AA, 30 pairs)
+        run: pnpm check:contrast
+
+      - name: Frontend/backend contract drift
+        run: pnpm check:contract
+
+      - name: Types
+        run: pnpm typecheck
+
+      - name: Build + bundle budget
+        run: pnpm check:bundle
+
+  browser:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Chromium only. Installing all three browsers triples the download for coverage this
+      # suite does not currently assert anything about.
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build
+        run: pnpm build
+
+      # No API_BASE_URL is set on purpose: the BFF proxy will fail to reach an upstream, and
+      # every non-@live test must still pass. That is a real assertion — the public pages and
+      # the status page are required to degrade rather than break when the API is absent.
+      - name: Start web tier
+        run: |
+          pnpm start &
+          npx --yes wait-on http://localhost:5008 --timeout 60000
+
+      - name: Browser tests (no live backend)
+        run: pnpm exec playwright test --project=chromium --grep-invert "@live"
+
+      - name: Mobile layout (no live backend)
+        run: pnpm exec playwright test --project=mobile --grep-invert "@live"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/test-results/
+          retention-days: 7

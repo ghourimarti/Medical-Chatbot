@@ -50,6 +50,12 @@ services:
       AWS_ENDPOINT_URL: http://localstack:4566
       OTEL_ENDPOINT: ${OTEL_ENDPOINT_DOCKER:-http://otel-collector:4318}
       LANGFUSE_HOST: ${LANGFUSE_HOST_DOCKER:-http://langfuse:3000}
+      # The engines too. .env points these at localhost:5009/5010 so a HOST-run API and
+      # the k6 benchmarks work; inside the network they are service names on their own
+      # container ports. Miss this and the whole GPU half of SERVING_CHAIN is dead from
+      # inside the API while looking perfectly configured from outside.
+      VLLM_LOCAL_URL: http://vllm:8000/v1
+      SGLANG_LOCAL_URL: http://sglang:30000/v1
     ports:
       - "${API_PORT:-5007}:8000"
     depends_on:
@@ -96,6 +102,29 @@ services:
   # 9. web — Next.js frontend. NOT DEFINED YET: S10 is deferred, so there is no image to
   # run. Port 5008 is reserved in .env. Adding an empty service here would give `make app`
   # a container that cannot start, which is worse than an honest absence.
+
+  # 8. web — Next.js. The browser talks ONLY to this origin; the BFF proxy forwards to the
+  # API server-side, so the API needs no CORS and, in a real deployment, no public ingress.
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: medbot-web:0.1.0
+    env_file: [.env]
+    environment:
+      # In-network address. On the host .env says localhost:5007 because that is what a host
+      # process dials; a container must dial the service name.
+      API_BASE_URL: http://api:8000
+    ports:
+      - "${WEB_PORT:-5008}:3000"
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
 volumes:
   hf_models:

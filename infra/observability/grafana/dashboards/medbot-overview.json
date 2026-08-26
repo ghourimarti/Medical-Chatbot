@@ -1,0 +1,541 @@
+{
+  "uid": "medbot-overview",
+  "title": "Medbot \u2014 service overview",
+  "tags": [
+    "medbot",
+    "provisioned"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "editable": true,
+  "panels": [
+    {
+      "title": "TTFT p50 (NFR \u2264 0.8s)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Perceived latency. The NFR that matters to a reader watching tokens appear.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "TTFT p95 (NFR \u2264 2.0s)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "",
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Cost / request (NFR \u2264 $0.001)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Unit economics as a dashboard rather than a spreadsheet (D20).",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_cost_usd_bucket[30m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.001
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Requests / sec",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_answers_total[5m]))",
+          "legendFormat": "rps",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Error rate (5xx only)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "4xx is EXCLUDED on purpose: a 429 is quota enforcement working. Counting it against availability lets abusive traffic page the on-call (P5.5).",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_errors_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(medbot_answers_total[5m])), 0.001)",
+          "legendFormat": "err",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Cache hit rate",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "The D10 cost lever.",
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_cache_events_total{result=\"hit\"}[5m])) / clamp_min(sum(rate(medbot_cache_events_total[5m])), 0.001)",
+          "legendFormat": "hit",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Stage latency p95 \u2014 where the time goes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "embed / retrieve / rerank / generate. S5.9 measured rerank as the dominant cost, so this is the panel that would show a regression.",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_stage_duration_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "End-to-end latency p95 by outcome",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "A refusal is fast and a grounded answer is slow; averaging them together hides both.",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le, outcome))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Answers by kind",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "grounded / no_answer / refused / degraded. The abstention and refusal rates are QUALITY signals \u2014 a jump in no_answer usually means retrieval broke.",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_answers_total[5m])) by (kind)",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Rate limiting by scope",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "",
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_rate_limited_total[5m])) by (scope)",
+          "legendFormat": "{{scope}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Tokens/sec by venue and direction",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Which serving leg is actually answering \u2014 the D4b failover made visible.",
+      "gridPos": {
+        "x": 16,
+        "y": 12,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_tokens_total[5m])) by (venue, direction)",
+          "legendFormat": "{{venue}} {{direction}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Serving venue circuit breakers",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "0 closed \u00b7 1 half-open \u00b7 2 OPEN. A leg sitting at 2 means the chain is running on its fallbacks \u2014 working as designed, but not silently.",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "medbot_venue_circuit_state",
+          "legendFormat": "{{venue}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "max": 2,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Infra dependency circuit breakers",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Redis / Postgres. Open here means DEGRADED, not down: the service keeps answering with cache bypassed or history disabled (D21).",
+      "gridPos": {
+        "x": 12,
+        "y": 19,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "medbot_dependency_circuit_state",
+          "legendFormat": "{{dependency}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "max": 2,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Errors by type",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "`degradable` separates handled degradation from real failure.",
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "sum(rate(medbot_errors_total[5m])) by (error_type, degradable, status)",
+          "legendFormat": "{{error_type}} (degradable={{degradable}}, {{status}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

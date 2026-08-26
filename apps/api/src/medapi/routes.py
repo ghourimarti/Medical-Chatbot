@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
+from medapi.auth import jwks_reachable
 from medapi.deps import Services
 from medapi.observability import (
     REGISTRY,
@@ -157,7 +158,7 @@ async def query(req: QueryRequest, request: Request, response: Response) -> Answ
     streaming endpoint had none.
     """
     svc = _services(request)
-    pre = await preflight(req.question, request, svc)
+    pre = await preflight(req.question, request, svc, req.conversation_id)
     attach_session(response, pre, svc)
 
     short = await short_circuit(req.question, svc, pre)
@@ -241,7 +242,29 @@ async def admin_status(request: Request) -> dict[str, object]:
         "circuits": svc.model.status(),
         "collection_alias": svc.settings.qdrant_collection,
         "cache_namespace": svc.settings.cache_namespace,
+        # Accounts health is reported HERE and deliberately not in /readyz or the public
+        # status page. A JWKS outage stops new sign-ins from being verified; it does not
+        # stop the pod answering questions. Failing readiness on it would take the whole
+        # anonymous product down over a dependency the anonymous product never uses
+        # (D21, D24) — and an autoscaler would then cycle healthy pods during the outage.
+        "accounts": await _accounts_status(svc),
     }
+
+
+async def _accounts_status(svc: Services) -> dict[str, object]:
+    verifier = svc.verifier
+    enabled = bool(verifier is not None and getattr(verifier, "enabled", False))
+    status: dict[str, object] = {
+        "enabled": enabled,
+        "storage": bool(svc.conversations is not None and svc.conversations.enabled),
+    }
+    url = getattr(svc.settings, "clerk_jwks_url", None)
+    if enabled and url:
+        # Probed only for the operator view, never on the request path: verification uses
+        # the cached JWKS, so a reachability check per request would add a network hop to
+        # every signed-in call for information the request does not need.
+        status["jwks_reachable"] = await jwks_reachable(url)
+    return status
 
 
 @router.post("/admin/kill-switch")
@@ -275,7 +298,7 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
     which a client has to special-case.
     """
     svc = _services(request)
-    pre = await preflight(req.question, request, svc)
+    pre = await preflight(req.question, request, svc, req.conversation_id)
     short = await short_circuit(req.question, svc, pre)
 
     async def event_source() -> AsyncIterator[str]:

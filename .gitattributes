@@ -1,0 +1,10 @@
+# Shell scripts mounted into Linux containers MUST have LF endings.
+# A CRLF `set -eu` becomes `set -eu\r`, and busybox sh reports it as
+# "illegal option -" — an error that names neither the file nor the real cause.
+# Found when the RedisInsight seeder failed this way after a Windows-side edit.
+*.sh            text eol=lf
+Makefile        text eol=lf
+*.mk            text eol=lf
+Dockerfile*     text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf

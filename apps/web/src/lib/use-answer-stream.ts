@@ -127,7 +127,7 @@ export function useAnswerStream() {
     dispatch({ type: "cancel" });
   }, []);
 
-  const ask = useCallback(async (question: string) => {
+  const ask = useCallback(async (question: string, conversationId?: string | null) => {
     const trimmed = question.trim();
     if (!trimmed) return;
 
@@ -141,7 +141,14 @@ export function useAnswerStream() {
       const res = await fetch("/api/v1/query/stream", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question: trimmed, stream: true }),
+        // conversation_id is CALLER-SUPPLIED and the API treats it as untrusted: ownership
+        // is verified server-side in serving.preflight before anything is written, so a
+        // forged id appends to nothing.
+        body: JSON.stringify({
+          question: trimmed,
+          stream: true,
+          ...(conversationId ? { conversation_id: conversationId } : {}),
+        }),
         signal: controller.signal,
       });
 

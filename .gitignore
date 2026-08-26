@@ -74,3 +74,7 @@ next-env.d.ts
 # Playwright (S10.6b)
 test-results/
 playwright-report/
+
+# HuggingFace cache accidentally committed in b5ae0dd (86 MB safetensors blob, GH001).
+# Containers use HF_HOME=/models backed by the named `hf_models` volume, never this dir.
+/hub/

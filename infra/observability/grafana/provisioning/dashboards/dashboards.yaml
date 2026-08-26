@@ -1,0 +1,17 @@
+# Dashboard provider (T6). Any *.json dropped into /var/lib/grafana/dashboards is loaded
+# automatically, so dashboards live in git and arrive with the stack.
+apiVersion: 1
+
+providers:
+  - name: medbot
+    orgId: 1
+    folder: Medbot
+    type: file
+    disableDeletion: false
+    # allowUiUpdates lets you tweak a panel in the browser to try something out. It is NOT
+    # a save path: the file on disk wins on restart, which keeps git the source of truth.
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

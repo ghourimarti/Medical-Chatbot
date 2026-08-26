@@ -46,12 +46,24 @@ processors:
         probabilistic: { sampling_percentage: 5 }
 
 exporters:
+  # T8: traces now go somewhere you can LOOK at them. Until this existed the pipeline
+  # ended at `debug`, which writes spans to the Collector's own stdout — the
+  # instrumentation and the sampling policy were both real and the traces were
+  # unreadable, which is the same "declared but not working" shape this project keeps
+  # finding elsewhere.
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true      # local compose network; nothing crosses a host boundary
+
+  # Kept, but quiet. `detailed` printed every span body to the Collector log, which at any
+  # real request rate is the log-amplification failure P5.2.7 already had to fix once.
   debug:
-    verbosity: detailed   # local verification; production exports to Tempo/Jaeger instead
+    verbosity: basic
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, tail_sampling, batch]
-      exporters: [debug]
+      exporters: [otlp/jaeger, debug]

@@ -27,7 +27,7 @@ async function answer(page: Page, question: string) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`screenshots - ${theme}`, async ({ page }) => {
+  test(`screenshots - ${theme} @live`, async ({ page }) => {
     await setTheme(page, theme);
 
     await page.goto("/");

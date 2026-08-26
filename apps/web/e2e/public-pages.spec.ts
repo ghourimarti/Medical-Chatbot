@@ -39,7 +39,7 @@ test.describe("public pages", () => {
     }
   });
 
-  test("status reports live component health", async ({ page }) => {
+  test("status reports live component health @live", async ({ page }) => {
     await page.goto("/status");
     // Read from the service itself, so it must name the components rather than show a
     // static badge. A status page that cannot fail is not a status page.
@@ -51,5 +51,15 @@ test.describe("public pages", () => {
     await page.goto("/safety");
     await expect(page.getByText("If this is an emergency")).toBeVisible();
     await expect(page.getByText(/contact your local emergency services/i).first()).toBeVisible();
+  });
+
+  test("status degrades honestly when the API is unreachable", async ({ page }) => {
+    // Complements the @live test above. Found while verifying the CI split against a
+    // genuinely dead backend: the live assertion failed, correctly, because the page
+    // renders its unavailable branch. That branch deserves its own test — a status page
+    // that cannot report failure is not a status page.
+    await page.route("**/api/v1/status", (route) => route.abort());
+    await page.goto("/status");
+    await expect(page.getByRole("heading", { level: 1, name: "Status" })).toBeVisible();
   });
 });

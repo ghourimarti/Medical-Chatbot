@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from medapi.circuit import Breaker
 from medapi.db.engine import session_scope
-from medapi.db.repository import MessageRepository, SessionRepository
+from medapi.db.repository import (
+    ConversationRepository,
+    MessageRepository,
+    SessionRepository,
+)
 from medapi.logthrottle import ThrottledLogger
 from medcore.schema import AnswerKind, Message
 
@@ -84,11 +88,16 @@ class HistoryService:
         kind: AnswerKind,
         model_id: str | None,
         client_hash: str | None = None,
+        conversation_id: uuid.UUID | None = None,
     ) -> bool:
         """Persist one user/assistant exchange. Returns whether it was stored.
 
         Both messages are written in ONE transaction: a user turn saved without its
         assistant reply would render as a conversation the system ignored.
+
+        `conversation_id` must already be ownership-checked (serving.preflight does it).
+        Nothing here re-verifies it, deliberately: one authorisation site is auditable,
+        two are a matter of time before they disagree.
         """
         if self._factory is None or self._breaker.is_open:
             return False
@@ -96,14 +105,25 @@ class HistoryService:
             async with session_scope(self._factory) as s:
                 await SessionRepository(s).touch(session_id, client_hash=client_hash)
                 repo = MessageRepository(s)
-                await repo.add(session_id=session_id, role="user", content=question)
+                await repo.add(
+                    session_id=session_id,
+                    role="user",
+                    content=question,
+                    conversation_id=conversation_id,
+                )
                 await repo.add(
                     session_id=session_id,
                     role="assistant",
                     content=answer_text,
                     kind=kind.value,
                     model_id=model_id,
+                    conversation_id=conversation_id,
                 )
+                if conversation_id is not None:
+                    # Bumps updated_at so the sidebar sorts by real activity. Without it a
+                    # thread keeps the timestamp of its creation and sinks down the list
+                    # while the user is still actively talking in it.
+                    await ConversationRepository(s).touch(conversation_id)
             self._breaker.record_success()
             return True
         except Exception:

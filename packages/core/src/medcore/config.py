@@ -40,16 +40,28 @@ class Settings(BaseSettings):
     environment: Environment = "local"
     log_level: str = "INFO"
 
-    # --- Serving venues (D4b). All four speak the SAME OpenAI-compatible protocol, so one
-    # adapter serves every one of them; only base_url and model id differ.
+    # --- Serving venues (D4b). Every venue speaks the SAME OpenAI-compatible protocol, so
+    # one adapter serves all of them; only base_url, model id and key differ. ---
+    # An ORDERED PREFERENCE LIST. The first reachable leg answers; the rest are tried in
+    # order; a leg whose URL is empty is skipped, so the chain can name venues whose
+    # accounts do not exist yet.
     #
-    # The chain is ordered and crosses INDEPENDENT FAILURE DOMAINS — developer machine,
-    # third-party GPU cloud, AWS, hosted API. That is what makes it real outage protection,
-    # unlike two engines sharing a single GPU pool (the correction recorded in D12).
-    # Venues with an empty URL are skipped, so a chain can be configured ahead of the
-    # accounts existing. ---
-    serving_chain: str = "groq"  # comma-separated: local,runpod,aws,groq
-    serving_engine: Literal["vllm", "sglang"] = "vllm"  # within a GPU venue
+    # Each entry is `venue` or `venue-engine`:
+    #     local-vllm,local-sglang,openai,groq
+    # A bare GPU venue (`local`) uses SERVING_ENGINE as its engine, which is what keeps
+    # older chains working unchanged.
+    #
+    # WHY A LIST AND NOT PRIORITY NUMBERS: numbers put identity and order in two places
+    # that can disagree, and inserting a leg means renumbering the rest. The list is the
+    # order, so there is nothing to keep in sync.
+    #
+    # WHAT THE ORDER SHOULD RESPECT: legs are only outage protection when they fail
+    # INDEPENDENTLY. local-vllm -> local-sglang covers an ENGINE fault (a crash, an OOM
+    # regression, a bad build) but not a dead GPU or a dead box — both legs share those.
+    # Independence starts at the hosted legs, so keep at least one of them last.
+    serving_chain: str = "groq"
+    # Default engine for a chain entry that does not name one.
+    serving_engine: Literal["vllm", "sglang"] = "vllm"
     circuit_failure_threshold: int = Field(default=3, ge=1)
     circuit_cooldown_seconds: float = Field(default=30.0, ge=1.0)
 
@@ -59,6 +71,29 @@ class Settings(BaseSettings):
     vllm_runpod_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
     vllm_aws_url: str = ""
     vllm_aws_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+
+    # SGLang endpoints for the same three GPU venues.
+    #
+    # S13.7 made `serving_engine` an either/or SELECTOR: you could run vLLM or SGLang,
+    # never "vLLM, and if the engine faults, SGLang". D12 v2.1 had actually asked for the
+    # second thing — SGLang as ENGINE-LEVEL failover — so the chain now accepts
+    # `venue-engine` entries and `local-vllm,local-sglang` is expressible.
+    #
+    # The failure-domain caveat still holds and is why the ORDER matters: those two legs
+    # share a GPU and a box, so the pair survives an engine crash or an OOM regression and
+    # nothing else. It is not outage protection. Keep a hosted leg last for that.
+    #
+    # Local default tracks SGLANG_LOCAL_PORT in .env.example (5010), NOT the 1111 in
+    # docs/benchmarks/vllm-vs-sglang.md — the ports were renumbered after S14 (vLLM moved
+    # 1110 -> 5009 at the same time) and the benchmark doc still shows the old run.
+    # runpod/aws stay empty: an unconfigured venue is SKIPPED, never an error.
+    sglang_local_url: str = "http://localhost:5010/v1"
+    sglang_local_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    sglang_runpod_url: str = ""
+    sglang_runpod_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    sglang_aws_url: str = ""
+    sglang_aws_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # --- LLM providers (D4: self-host primary lands in S13; hosted is the outage leg) ---
@@ -77,7 +112,12 @@ class Settings(BaseSettings):
     # works but emits <think> reasoning preambles that corrupt structured output.
     groq_default_model: str = "openai/gpt-oss-20b"
     groq_escalation_model: str = "openai/gpt-oss-120b"
+    # OpenAI is a real chain venue, not just a spare key. Before this it was config that
+    # NOTHING read (the same dead-config shape as serving_engine in S13.7 and
+    # semantic_cache_enabled in S19.4): you could set OPENAI_API_KEY, see it in .env, and
+    # never have it serve a single token.
     openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
     openai_fallback_model: str = "gpt-4o-mini"
     groq_timeout: float = 10.0
 
@@ -214,6 +254,15 @@ class Settings(BaseSettings):
     daily_spend_limit_usd: float = Field(default=5.0, ge=0.0)
     spend_soft_alert_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     admin_api_key: SecretStr | None = None  # required to flip the kill switch
+
+    # --- Accounts (D24, S20b). ALL OPTIONAL: with no JWKS URL, accounts are simply off and
+    # the anonymous product works exactly as before. That is the D24 sequencing promise —
+    # anonymous chat never waits on an identity provider being configured.
+    clerk_jwks_url: str | None = None
+    # Checked when set: a validly-signed token from a DIFFERENT Clerk instance is still not
+    # a token for this application.
+    clerk_issuer: str | None = None
+    clerk_audience: str | None = None
     llm_max_input_tokens: int = 3000
     llm_max_output_tokens: int = 512
 

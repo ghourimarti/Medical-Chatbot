@@ -47,8 +47,81 @@ CREATE INDEX IF NOT EXISTS ix_messages_session_created
     ON messages (session_id, created_at DESC);
 """
 
+
+# ── S20: users and conversations ──────────────────────────────────────────────────────
+#
+# DATA MINIMISATION. `users` stores the auth provider's subject and nothing else — no
+# email, no name, no picture. The identity provider already holds the profile; duplicating
+# it here would add a PII store to defend, a deletion obligation to honour, and a breach
+# surface, in exchange for data this product never uses. Not storing what you do not need
+# is the cheapest compliance control available (D18).
+CREATE_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+    id            UUID PRIMARY KEY,
+    auth_subject  VARCHAR(255) NOT NULL UNIQUE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+# A conversation belongs to a USER (signed in) or to a SESSION (anonymous), and the CHECK
+# makes an ownerless row impossible rather than merely unlikely.
+#
+# Both columns exist at once on purpose: an anonymous conversation records the session that
+# created it, and when that visitor signs in their conversations are CLAIMED by setting
+# user_id. Without that seam, signing in would silently orphan everything asked beforehand —
+# and the first thing a new user does is lose the conversation that convinced them to sign up.
+#
+# The FK to users CASCADEs, which is safe here because `conversations` is NOT partitioned.
+# `messages` still has no FK: a cascade across partitions would defeat DROP PARTITION, which
+# is the entire reason D1 chose this design.
+CREATE_CONVERSATIONS = """
+CREATE TABLE IF NOT EXISTS conversations (
+    id          UUID PRIMARY KEY,
+    user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+    session_id  UUID,
+    title       VARCHAR(200),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT conversations_have_an_owner
+        CHECK (user_id IS NOT NULL OR session_id IS NOT NULL)
+);
+"""
+
+# ONE statement per constant. asyncpg prepares each statement, and a prepared statement
+# cannot contain multiple commands — bundling these two produced
+# `cannot insert multiple commands into a prepared statement` on every boot. Every other
+# constant in this file is single-statement for the same reason; this one broke the pattern.
+CREATE_CONVERSATIONS_USER_INDEX = """
+CREATE INDEX IF NOT EXISTS ix_conversations_user_updated
+    ON conversations (user_id, updated_at DESC);
+"""
+
+CREATE_CONVERSATIONS_SESSION_INDEX = """
+CREATE INDEX IF NOT EXISTS ix_conversations_session_updated
+    ON conversations (session_id, updated_at DESC);
+"""
+
+# ADD COLUMN IF NOT EXISTS on a partitioned table cascades to every partition, so this is
+# idempotent and safe to run on every boot like the rest of the DDL.
+#
+# NULLABLE, and session_id is KEPT. Existing rows predate conversations, and dropping the
+# old column would break the anonymous read path this release must not disturb. The two
+# coexist: session_id answers "this visitor's transcript", conversation_id answers "this
+# thread". Removing session_id is a later, separate migration once nothing reads it.
+ALTER_MESSAGES_ADD_CONVERSATION = """
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS conversation_id UUID;
+"""
+
+CREATE_MESSAGES_CONVERSATION_INDEX = """
+CREATE INDEX IF NOT EXISTS ix_messages_conversation_created
+    ON messages (conversation_id, created_at DESC);
+"""
+
 DROP_ALL = """
 DROP TABLE IF EXISTS messages CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
 """
 
@@ -57,4 +130,12 @@ INITIAL_DDL: tuple[str, ...] = (
     CREATE_SESSIONS_INDEX,
     CREATE_MESSAGES,
     CREATE_MESSAGES_INDEX,
+    # S20. Order matters: users before conversations (FK), conversations before the
+    # messages column that references them by id.
+    CREATE_USERS,
+    CREATE_CONVERSATIONS,
+    CREATE_CONVERSATIONS_USER_INDEX,
+    CREATE_CONVERSATIONS_SESSION_INDEX,
+    ALTER_MESSAGES_ADD_CONVERSATION,
+    CREATE_MESSAGES_CONVERSATION_INDEX,
 )

@@ -2,10 +2,10 @@
 # Every target is a documented, reproducible command (no tribal knowledge).
 
 .DEFAULT_GOAL := help
-.PHONY: web web-e2e web-shots web-stop web-preview web-design web-build web-verify help sync lint type test check eval-mock baseline validate api reindex smoke         db app obs up upv down downv ps logs migrate seed worker urls \
+.PHONY: web web-ci web-a11y web-mobile web-e2e web-shots web-stop web-preview web-design web-build web-verify help sync lint type test check eval-mock baseline validate api reindex smoke         db app obs up upv down downv ps logs migrate seed worker urls \
         eval-pipeline eval-gate eval-delta rescore bench-groq bench-local bench-sglang \
         load-cache load-full load-guard audit chaos backup-drill \
-        images kind-up kind-load kind-install kind-smoke kind-down chart-lint
+        images kind-up kind-load kind-install kind-smoke kind-down chart-lint \n        service_ls clean-images clean-models clean-all kind-sync gpu gpu-down \n        kind-start kind-stop kind-status vllm-up vllm-down vllm-upv vllm-downv \n        sglang-up sglang-down sglang-upv sglang-downv webui vllm-test sglang-test engine-guide
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -71,7 +71,40 @@ rescore:  ## Recompute deterministic metrics on the latest pipeline report (no m
 DC_DATA := docker compose -f docker-compose.data.yaml
 DC_APP  := docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml
 DC_OBS  := docker compose -f docker-compose.observability.yaml
-DC_FULL := docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml -f docker-compose.observability.yaml
+DC_GPU  := docker compose -f docker-compose.gpu.yaml
+DC_FULL := docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml -f docker-compose.observability.yaml -f docker-compose.gpu.yaml
+
+# ── GPU tier (vLLM + SGLang) ──────────────────────────────────────────────────────────
+# Included only when an NVIDIA GPU is actually present. Without one these containers do
+# not fail politely: they pull ~10 GB and then die at device init, minutes later. Detecting
+# up front turns that into one printed line.
+#   GPU=0 make up   forces it off even on a GPU box (useful when the card is busy).
+GPU ?= $(shell nvidia-smi -L >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(GPU),1)
+  GPU_PROFILE := --profile gpu
+else
+  GPU_PROFILE :=
+endif
+
+# ── kind (local Kubernetes) ───────────────────────────────────────────────────────────
+# kind runs its nodes as DOCKER CONTAINERS (medbot-control-plane, medbot-worker,
+# medbot-worker2), so without this they survive `make down` and sit there consuming RAM
+# while looking like part of the stack. They now follow the same lifecycle as everything
+# else, with the same preserve/destroy split the data volumes use:
+#
+#   make up     cluster exists -> START its nodes (~20s)   |  missing -> CREATE it
+#   make down   STOP the nodes. The cluster, its images and its state all survive,
+#               exactly as `down` keeps your database volume.
+#   make downv  DELETE the cluster. Destructive, and paired with wiping volumes.
+#   make upv    delete + recreate, the cold path.
+#
+# Deploying the APP into the cluster is `make kind-sync` and stays separate: it rebuilds
+# and side-loads ~6.6GB of images, which is minutes of work that a routine `make up`
+# should not silently do.
+#   KIND=0 make up   skip the cluster entirely (pure compose loop)
+KIND ?= 1
+KIND_CLUSTER := medbot
+KIND_NODES   := $(KIND_CLUSTER)-control-plane $(KIND_CLUSTER)-worker $(KIND_CLUSTER)-worker2
 
 db:		## tier 1: DATA only — Postgres + Qdrant + Redis + LocalStack
 	$(DC_DATA) up -d --wait
@@ -84,10 +117,14 @@ app:	## tier 2: data + APP (ml-service, api). Builds images on first run.
 obs:	## tier 3: OBSERVABILITY (OTel, Prometheus, Grafana, Langfuse). Needs `make db`:
 		## Langfuse stores its traces in the data tier's Postgres.
 	$(DC_OBS) up -d
+	@$(DC_OBS) --profile seed up -d redisinsight-seed >/dev/null 2>&1 || true
 	@$(MAKE) --no-print-directory urls
 
-up:		## EVERYTHING: data + app + observability
-	$(DC_FULL) up --build -d --wait
+up:		## EVERYTHING: data + app + observability (+ GPU if present, + kind if KIND=1)
+	$(DC_FULL) $(GPU_PROFILE) up --build -d --wait
+	@$(DC_OBS) --profile seed up -d redisinsight-seed >/dev/null 2>&1 || true
+	@if [ "$(GPU)" = "1" ]; then 	  echo "  GPU detected - vLLM + SGLang started (first run pulls ~10GB and weights)."; 	else 	  echo "  No NVIDIA GPU detected - vLLM/SGLang SKIPPED. The chain falls back to hosted."; 	fi
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@$(MAKE) --no-print-directory urls
 
 worker:	## Start the ingestion worker (profile-gated: it needs an SQS queue to exist)
@@ -114,32 +151,71 @@ seed:	## Ingest the corpus -> new collection -> atomic alias swap. LIMIT=N for a
 	# abstentions and a meaningless score.
 	uv run medworker-ingest --direct $${LIMIT:+--limit $$LIMIT}
 
-down:	## Stop every tier (KEEPS all data volumes)
-	$(DC_FULL) down
+down:	## Stop every tier (KEEPS all data volumes, images and model weights)
+	$(DC_FULL) $(GPU_PROFILE) down
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-stop; fi
 
 # Volume names are prefixed with the compose PROJECT name, which is derived from the repo
 # directory — and this repo's path contains spaces and an `&`, which break $(notdir
 # $(CURDIR)). So ask compose for the project name at runtime instead of guessing it.
-DATA_VOLS  := pg_data qdrant_data localstack_data hf_models prom_data grafana_data
+DATA_VOLS  := pg_data qdrant_data localstack_data hf_models prom_data grafana_data redisinsight_data
+# NOT wiped by `make downv`, on purpose. `vllm-hf-cache` holds the ~5GB of LLM weights
+# shared by vLLM and SGLang. S3b blocker #3: huggingface_hub does not resume across
+# process restarts, so replacing this volume costs one uninterrupted download, not a
+# resumable one. `make clean-models` removes it when you actually mean to.
+KEEP_VOLS  := vllm-hf-cache
 PROJECT_CMD = $(DC_DATA) config --format json | python -c "import sys,json;print(json.load(sys.stdin)['name'])"
 
-downv:	## DESTRUCTIVE: stop every tier AND delete all data volumes (DB, index, weights)
-	$(DC_FULL) down -v --remove-orphans
-	@P=$$($(PROJECT_CMD)); 	  docker volume rm $(foreach v,$(DATA_VOLS),$${P}_$(v)) 2>/dev/null || true; 	  echo "  Wiped: $(DATA_VOLS)"; 	  echo "  Next 'make upv' re-downloads ~2.4GB of model weights and re-ingests the corpus."
+downv:	## DESTRUCTIVE: stop every tier AND delete DATA volumes. KEEPS images + LLM weights.
+	$(DC_FULL) $(GPU_PROFILE) down -v --remove-orphans
+	@P=$$($(PROJECT_CMD)); 	  docker volume rm $(foreach v,$(DATA_VOLS),$${P}_$(v)) 2>/dev/null || true; 	  echo "  Wiped: $(DATA_VOLS)"; 	  echo "  KEPT:  $(KEEP_VOLS) - LLM weights (~5GB, and huggingface_hub does NOT"; 	  echo "         resume across restarts, so re-downloading means one uninterrupted run)"; 	  echo "  KEPT:  all docker images. 'make clean-images' removes those, deliberately separate."
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-down; fi
 
 upv:		## FROM SCRATCH in ONE command: wipe volumes, rebuild images, start every tier,
 		## create the schema, ingest the corpus. The full cold-start path.
 	@echo "  make upv — clean rebuild from scratch (DESTROYS local data volumes)."
 	@$(MAKE) --no-print-directory downv
-	$(DC_FULL) up --build -d --wait
+	$(DC_FULL) $(GPU_PROFILE) up --build -d --wait
+	@$(DC_OBS) --profile seed up -d redisinsight-seed >/dev/null 2>&1 || true
 	@$(MAKE) --no-print-directory migrate
 	@$(MAKE) --no-print-directory seed
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@echo ""
-	@echo "  Up from scratch — every tier running, schema created, corpus ingested."
+	@echo "  Up from scratch - every tier running, schema created, corpus ingested."
 	@$(MAKE) --no-print-directory urls
 
-urls:	## Print which URL opens which UI (ports come from .env)
-	@set -a; . ./.env 2>/dev/null || true; set +a; 	echo ""; 	echo "  P5 Medical RAG Chatbot - local URLs   (ports sequenced by startup order in .env)"; 	echo "  ---------------------------------------------------------------------------"; 	echo "  -- data tier (starts 1st) ----"; 	echo "  Postgres             localhost:$${POSTGRES_PORT:-5001}          (user/db = $${POSTGRES_USER:-medbot})"; 	echo "  Qdrant dashboard     http://localhost:$${QDRANT_HTTP_PORT:-5002}/dashboard"; 	echo "  Redis                localhost:$${REDIS_PORT:-5004}          (redis-cli / RedisInsight)"; 	echo "  LocalStack (SQS)     http://localhost:$${LOCALSTACK_PORT:-5005}/_localstack/health"; 	echo "  -- app tier (starts 2nd) ----"; 	echo "  ml-service           http://localhost:$${ML_SERVICE_PORT:-5006}/readyz"; 	echo "  API docs (Swagger)   http://localhost:$${API_PORT:-5007}/docs"; 	echo "  API metrics (raw)    http://localhost:$${API_PORT:-5007}/metrics"; 	echo "  Web (Next.js)        http://localhost:$${WEB_PORT:-5008}          (S10 deferred - not running)"; 	echo "  -- observability tier (starts 3rd) ----"; 	echo "  Prometheus           http://localhost:$${PROMETHEUS_PORT:-5013}          Status > Targets"; 	echo "  Grafana              http://localhost:$${GRAFANA_PORT:-5014}          login $${GRAFANA_ADMIN_USER:-admin}/$${GRAFANA_ADMIN_PASSWORD:-admin}"; 	echo "  Langfuse (LLM trace) http://localhost:$${LANGFUSE_WEB_PORT:-5015}"; 	echo "  ---------------------------------------------------------------------------"; 	echo ""
+urls:	## Print every service URL (no credentials)
+	@python scripts/service_board.py --mode urls
+
+service_ls:	## FULL inventory WITH credentials: DBs, engines, dashboards, connection strings
+	@python scripts/service_board.py --mode full
+
+# ── Images and model weights: destructive, and deliberately NOT part of downv ──────────
+clean-images:	## DESTRUCTIVE: remove this project's images (app + vLLM + SGLang). Keeps weights.
+	@echo "  Removing medbot images and the inference engine images."
+	@echo "  Rebuild: 'make images' (~10-25 min).  Re-pull vLLM/SGLang: ~10GB."
+	-docker rmi medbot-api:0.1.0 medbot-ml:0.1.0 medbot-worker:0.1.0 2>/dev/null
+	-docker rmi vllm/vllm-openai:latest lmsysorg/sglang:latest 2>/dev/null
+	@echo "  Model WEIGHTS were kept. 'make clean-models' removes those."
+
+clean-models:	## DESTRUCTIVE: delete the ~5GB LLM weight cache shared by vLLM and SGLang
+	@echo "  Deleting vllm-hf-cache (~5GB of weights)."
+	@echo "  Re-downloading needs ONE uninterrupted run: huggingface_hub does not resume"
+	@echo "  across process restarts (S3b blocker #3), so a broken pull starts from zero."
+	-docker volume rm vllm-hf-cache 2>/dev/null || docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null
+	@echo "  Weight cache removed."
+
+clean-all: clean-images clean-models	## DESTRUCTIVE: images AND weights. The full reset.
+	@echo "  Everything removed. Next 'make upv' is a cold build: expect 30-60 min."
+
+# ── kind: keep the cluster in step with the images you just built ──────────────────────
+kind-sync:	## Build -> load -> install into kind so the cluster runs the CURRENT code
+	@echo "  syncing kind with the local images (this is the slow part of KIND=1)"
+	@kind get clusters 2>/dev/null | grep -qx medbot || $(MAKE) --no-print-directory kind-up
+	@$(MAKE) --no-print-directory images
+	@$(MAKE) --no-print-directory kind-load
+	@$(MAKE) --no-print-directory kind-install
+	@echo "  kind ready:  kubectl get pods"
 
 # ── Native dev (run the API on the host against the containerized data tier) ────────────
 api:  ## Run the query service on $$API_PORT (default 5007)
@@ -246,9 +322,175 @@ web-design:	## Open the design-system gallery (needs `make web`)
 web-e2e:	## Browser verification of the four answer kinds (needs the full stack up)
 	cd apps/web && pnpm exec playwright test --project=chromium e2e/answer-kinds.spec.ts
 
+web-ci:	## The subset CI runs: everything that does NOT need a live backend
+	cd apps/web && pnpm exec playwright test --project=chromium --grep-invert "@live"
+
+web-a11y:	## WCAG 2.2 AA audit: axe on every route + keyboard and screen-reader checks
+	cd apps/web && pnpm exec playwright test --project=chromium e2e/a11y.spec.ts
+
+web-mobile:	## Mobile layout checks on a Pixel 7 viewport
+	cd apps/web && pnpm exec playwright test --project=mobile e2e/mobile.spec.ts
+
 web-shots:	## Regenerate docs/screenshots in both themes
 	cd apps/web && pnpm exec playwright test e2e/screenshots.spec.ts --project=chromium
 
 web-verify:	## PROVE the BFF proxy streams SSE rather than buffering (D23)
 	@echo "Start the web server first: (cd apps/web && API_BASE_URL=http://localhost:5099 pnpm start)"
 	cd apps/web && node scripts/verify-stream.mjs http://localhost:$${WEB_PORT:-5008}
+
+# ── GPU tier on its own (when you want the engines without the rest) ───────────────────
+gpu:	## Start vLLM + SGLang only (needs an NVIDIA GPU; first run pulls ~10GB)
+	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker. Aborting."; exit 1; }
+	$(DC_GPU) --profile gpu up -d
+	@echo "  vLLM   http://localhost:$${VLLM_LOCAL_PORT:-5009}/v1/models"
+	@echo "  SGLang http://localhost:$${SGLANG_LOCAL_PORT:-5010}/v1/models"
+	@echo "  First boot downloads ~5GB of weights - do NOT interrupt it (S3b blocker #3)."
+
+gpu-down:	## Stop vLLM + SGLang (KEEPS the weight cache)
+	$(DC_GPU) --profile gpu down
+	@echo "  Engines stopped. Weight cache kept - 'make clean-models' deletes it."
+
+# ── kind node lifecycle: START/STOP (cheap) vs CREATE/DELETE (expensive) ──────────────
+# kind has no start/stop of its own — a cluster is created or deleted. But its nodes are
+# ordinary containers, so `docker stop` suspends the cluster and `docker start` resumes it
+# with all state intact. That is what makes `make down` cheap and `make up` fast.
+kind-start:	## Start the kind nodes (creates the cluster if it does not exist yet)
+	@if kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	  echo "  kind: starting nodes ($(KIND_CLUSTER))"; \
+	  docker start $(KIND_NODES) >/dev/null 2>&1 || true; \
+	  kind export kubeconfig --name $(KIND_CLUSTER) >/dev/null 2>&1 || true; \
+	  n=0; \
+	  until kubectl get nodes >/dev/null 2>&1 || [ $$n -ge 60 ]; do n=$$((n+1)); sleep 2; done; \
+	  kubectl wait --for=condition=Ready nodes --all --timeout=120s >/dev/null 2>&1 \
+	    && echo "  kind: nodes Ready" \
+	    || echo "  kind: nodes started but NOT Ready - check 'kubectl get nodes'"; \
+	else \
+	  echo "  kind: no '$(KIND_CLUSTER)' cluster - creating one (~2 min, one time)"; \
+	  kind create cluster --config infra/k8s/kind-cluster.yaml --wait 180s; \
+	  kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml; \
+	  kubectl patch deployment metrics-server -n kube-system --type=json -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'; \
+	  echo "  kind: cluster created. Deploy the app with 'make kind-sync'."; \
+	fi
+
+kind-stop:	## Stop the kind nodes. Cluster, images and state all survive.
+	@if kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	  echo "  kind: stopping nodes (cluster kept - 'make kind-down' deletes it)"; \
+	  docker stop $(KIND_NODES) >/dev/null 2>&1 || true; \
+	  echo "  kind: nodes stopped"; \
+	else \
+	  echo "  kind: no cluster to stop"; \
+	fi
+
+kind-status:	## Are the kind nodes up, and is the chart installed?
+	@kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)" \
+	  && echo "  cluster: $(KIND_CLUSTER) exists" || echo "  cluster: none"
+	@docker ps --filter "name=$(KIND_CLUSTER)-" --format '  node: {{.Names}}  {{.Status}}' 2>/dev/null || true
+	@kubectl get pods --no-headers 2>/dev/null | awk '{printf "  pod:  %-34s %s %s\n",$$1,$$2,$$3}' || echo "  pods: (API server unreachable)"
+
+# ── Engines on their own: vLLM and SGLang, independently ──────────────────────────────
+# Make targets cannot contain a space, so it is `make vllm-up`, not `make vllm up`.
+#
+# The -up/-down/-upv/-downv quartet mirrors the whole-stack one exactly:
+#   -up     start it, keeping the weight cache
+#   -down   stop it, keeping the weight cache
+#   -upv    recreate the container from scratch (weights KEPT - see below)
+#   -downv  stop it AND delete its ~5GB weight cache
+#
+# WHY -downv IS SHARED-AWARE: both engines read ONE cache volume, so deleting it from
+# either target costs the OTHER engine its weights too. The target says so before acting.
+ENGINE_HINT = @echo ""; echo "  Test it:"; echo ""
+
+vllm-up:	## Start vLLM alone, then print how to test it
+	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
+	$(DC_GPU) --profile gpu up -d vllm
+	@$(MAKE) --no-print-directory vllm-test
+
+vllm-down:	## Stop vLLM (weights kept)
+	$(DC_GPU) --profile gpu stop vllm
+	@echo "  vLLM stopped. Weight cache kept."
+
+vllm-upv:	## Recreate the vLLM container from scratch (weights kept)
+	$(DC_GPU) --profile gpu rm -sf vllm
+	$(DC_GPU) --profile gpu up -d --force-recreate vllm
+	@$(MAKE) --no-print-directory vllm-test
+
+vllm-downv:	## Stop vLLM AND delete the shared ~5GB weight cache
+	@echo "  WARNING: the weight cache is SHARED with SGLang - this costs both engines"
+	@echo "  their weights, and huggingface_hub does not resume across restarts."
+	$(DC_GPU) --profile gpu rm -sf vllm
+	-docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null || docker volume rm vllm-hf-cache 2>/dev/null
+	@echo "  vLLM removed and weight cache deleted."
+
+sglang-up:	## Start SGLang alone, then print how to test it
+	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
+	$(DC_GPU) --profile gpu-sglang up -d sglang
+	@$(MAKE) --no-print-directory sglang-test
+
+sglang-down:	## Stop SGLang (weights kept)
+	$(DC_GPU) --profile gpu-sglang stop sglang
+	@echo "  SGLang stopped. Weight cache kept."
+
+sglang-upv:	## Recreate the SGLang container from scratch (weights kept)
+	$(DC_GPU) --profile gpu-sglang rm -sf sglang
+	$(DC_GPU) --profile gpu-sglang up -d --force-recreate sglang
+	@$(MAKE) --no-print-directory sglang-test
+
+sglang-downv:	## Stop SGLang AND delete the shared ~5GB weight cache
+	@echo "  WARNING: the weight cache is SHARED with vLLM - this costs both engines"
+	@echo "  their weights, and huggingface_hub does not resume across restarts."
+	$(DC_GPU) --profile gpu-sglang rm -sf sglang
+	-docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null || docker volume rm vllm-hf-cache 2>/dev/null
+	@echo "  SGLang removed and weight cache deleted."
+
+webui:	## Chat UI for BOTH engines (ChatGPT-style, model picker)
+	$(DC_GPU) --profile webui up -d open-webui
+	@echo ""
+	@echo "  Open WebUI   http://localhost:$${OPEN_WEBUI_PORT:-5024}"
+	@echo "  No login. Pick the model top-left to switch vLLM <-> SGLang."
+	@echo "  This is the RAW engine: no retrieval, no citations, no medical guardrails."
+	@echo "  The guarded product UI is http://localhost:$${WEB_PORT:-5008}."
+
+vllm-test:	## How to verify vLLM is really generating (UI + CLI)
+	@$(MAKE) --no-print-directory engine-guide ENGINE=vLLM PORT=$${VLLM_LOCAL_PORT:-5009} MODEL=$${VLLM_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+
+sglang-test:	## How to verify SGLang is really generating (UI + CLI)
+	@$(MAKE) --no-print-directory engine-guide ENGINE=SGLang PORT=$${SGLANG_LOCAL_PORT:-5010} MODEL=$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+
+engine-guide:
+	@echo ""
+	@echo "  ============================================================"
+	@echo "   $(ENGINE) on http://localhost:$(PORT)"
+	@echo "  ============================================================"
+	@echo ""
+	@echo "  FIRST BOOT downloads ~5GB and can take 10-20 min. Do NOT interrupt it:"
+	@echo "  huggingface_hub does not resume, so a broken pull restarts from zero."
+	@echo "    watch it:   docker logs -f $$(echo $(ENGINE) | tr A-Z a-z)"
+	@echo ""
+	@echo "  -- 1. is it up? (liveness, NOT capacity) -------------------"
+	@echo "    curl -s localhost:$(PORT)/health"
+	@echo "    curl -s localhost:$(PORT)/v1/models | python -m json.tool"
+	@echo ""
+	@echo "  -- 2. does it actually GENERATE? (the real check) ----------"
+	@echo "    curl -s localhost:$(PORT)/v1/chat/completions \\"
+	@echo "      -H 'content-type: application/json' \\"
+	@echo "      -d '{\"model\":\"$(MODEL)\",\"messages\":[{\"role\":\"user\",\"content\":\"Name three symptoms of asthma.\"}],\"max_tokens\":80}'"
+	@echo ""
+	@echo "  -- 3. chat with it in a browser ----------------------------"
+	@echo "    make webui     ->  http://localhost:$${OPEN_WEBUI_PORT:-5024}"
+	@echo "    ChatGPT-style. Model picker switches vLLM <-> SGLang on the same prompt."
+	@echo "    RAW engine: no retrieval, no citations, no guardrails."
+	@echo ""
+	@echo "  -- 4. is it on the GPU, and how fast? ----------------------"
+	@echo "    nvidia-smi                 # the process and its VRAM"
+	@echo "    make bench-local           # vLLM   k6: TTFT, tok/s, p99"
+	@echo "    make bench-sglang          # SGLang k6: same harness, same prompts"
+	@echo ""
+	@echo "  -- 5. is the APP actually using it? -----------------------"
+	@echo "    grep '^SERVING_CHAIN=' .env"
+	@echo "    docker logs medbot-api 2>&1 | grep -i 'serving chain'"
+	@echo "    curl -s -X POST localhost:$${API_PORT:-5007}/api/v1/query \\"
+	@echo "      -H 'content-type: application/json' \\"
+	@echo "      -d '{\"question\":\"What is chickenpox?\",\"stream\":false}' | grep -o '\"model_id\":\"[^\"]*\"'"
+	@echo ""
+	@echo "  Full guide: docs/VERIFY_STACK.md"
+	@echo ""
