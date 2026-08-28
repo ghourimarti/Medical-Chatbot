@@ -2,10 +2,16 @@
 # Every target is a documented, reproducible command (no tribal knowledge).
 
 .DEFAULT_GOAL := help
-.PHONY: web web-ci web-a11y web-mobile web-e2e web-shots web-stop web-preview web-design web-build web-verify help sync lint type test check eval-mock baseline validate api reindex smoke         db app obs up upv down downv ps logs migrate seed worker urls langfuse cache-clear cache-flush cache-ls kill-on kill-off audit audit-fresh audit-chaos kill-status up-vllm up-sglang up-vllm-sglang which-engine \
-        eval-pipeline eval-gate eval-delta rescore bench-groq bench-local bench-sglang \
-        load-cache load-full load-guard audit chaos backup-drill \
-        images kind-up kind-load kind-install kind-smoke kind-down chart-lint \n        service_ls clean-images clean-models clean-all kind-sync gpu gpu-down \n        kind-start kind-stop kind-status vllm-up vllm-down vllm-upv vllm-downv \n        sglang-up sglang-down sglang-upv sglang-downv webui vllm-test sglang-test engine-guide
+.PHONY: api app audit audit-chaos audit-fresh backup-drill baseline bench-groq bench-local \
+        bench-sglang cache-clear cache-flush cache-ls chaos chart-lint check clean-all \
+        clean-images clean-models db down downv engine-guide eval-delta eval-gate eval-mock \
+        eval-pipeline gpu gpu-down help images kill-off kill-on kill-status kind-down \
+        kind-install kind-load kind-smoke kind-start kind-status kind-stop kind-sync kind-up \
+        langfuse lint load-cache load-full load-guard logs migrate obs ps reindex rescore \
+        seed service_ls sglang-down sglang-downv sglang-test sglang-up sglang-upv smoke sync \
+        test type up up-sglang up-vllm up-vllm-sglang upv urls validate vllm-down vllm-downv \
+        vllm-test vllm-up vllm-upv web web-a11y web-build web-ci web-design web-e2e \
+        web-mobile web-preview web-shots web-stop web-verify webui which-engine worker
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -186,6 +192,8 @@ GPU_PROFILE := $(ENGINE_PROFILE)
 # and side-loads ~6.6GB of images, which is minutes of work that a routine `make up`
 # should not silently do.
 #   KIND=0 make up   skip the cluster entirely (pure compose loop)
+ENGINE_HINT = @echo ""; echo "  Test it:"; echo ""
+
 KIND ?= 1
 KIND_CLUSTER := medbot
 KIND_NODES   := $(KIND_CLUSTER)-control-plane $(KIND_CLUSTER)-worker $(KIND_CLUSTER)-worker2
@@ -280,7 +288,8 @@ down:	## Stop every tier (KEEPS all data volumes, images and model weights)
 # ClickHouse holds the spans, MinIO holds the raw payloads. Wiping Postgres alone
 # re-runs the headless bootstrap into a fresh project while ClickHouse still holds
 # traces pointing at the old one - a UI that shows nothing and a store that is full.
-DATA_VOLS  := pg_data qdrant_data localstack_data hf_models prom_data grafana_data \n              redisinsight_data langfuse_clickhouse langfuse_minio
+DATA_VOLS  := pg_data qdrant_data localstack_data hf_models prom_data grafana_data \
+              redisinsight_data langfuse_clickhouse langfuse_minio
 # NOT wiped by `make downv`, on purpose. `vllm-hf-cache` holds the ~5GB of LLM weights
 # shared by vLLM and SGLang. S3b blocker #3: huggingface_hub does not resume across
 # process restarts, so replacing this volume costs one uninterrupted download, not a
@@ -349,3 +358,307 @@ audit-fresh:	## Same, but clear the answer cache first so nothing is served from
 
 audit-chaos:	## Same, plus stop/start dependencies to prove degradation (restarts them)
 	@python scripts/audit.py --fresh --chaos
+
+# ── kind (local Kubernetes) ───────────────────────────────────────────────────────────
+# kind runs its nodes as ORDINARY DOCKER CONTAINERS (medbot-control-plane, medbot-worker,
+# medbot-worker2). Without these targets they survive `make down` and sit there holding
+# RAM while looking like part of the stack - which is exactly what happened: every kind
+# target lost its recipe, and because the names were still listed in .PHONY, make reported
+# "Nothing to be done for 'kind-stop'" and exited 0. A target that no longer exists should
+# fail loudly; one that exists with no recipe succeeds silently.
+#
+# The preserve/destroy split mirrors the data volumes:
+#   make down   -> STOP the nodes, cluster and its state preserved
+#   make downv  -> DELETE the cluster entirely
+#   KIND=0      -> ignore kind completely
+
+kind-start:	## Start (or create) the kind cluster and refresh kubeconfig
+	@if ! kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	  echo "  creating kind cluster '$(KIND_CLUSTER)' (~2 min)"; \
+	  kind create cluster --config infra/k8s/kind-cluster.yaml --wait 180s; \
+	else \
+	  docker start $(KIND_NODES) >/dev/null 2>&1 || true; \
+	  echo "  kind cluster '$(KIND_CLUSTER)' nodes started"; \
+	fi
+	@# ALWAYS re-export: a restarted control-plane gets a new API-server port, and the
+	@# stale kubeconfig then fails with "current-context is not set" - which reads like a
+	@# broken cluster rather than a stale pointer at a healthy one.
+	@kind export kubeconfig --name $(KIND_CLUSTER) >/dev/null 2>&1 || true
+
+kind-stop:	## Stop the kind nodes, PRESERVING the cluster and its state
+	@docker stop $(KIND_NODES) >/dev/null 2>&1 || true
+	@echo "  kind nodes stopped (cluster preserved - 'make downv' deletes it)"
+
+kind-status:	## Nodes and pods, or a clear reason why not
+	@if ! kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+	  echo "  no kind cluster '$(KIND_CLUSTER)' - 'make kind-start' creates one"; \
+	else \
+	  kubectl get nodes 2>/dev/null || echo "  nodes unreachable; try 'make kind-start'"; \
+	  kubectl get pods 2>/dev/null || true; \
+	fi
+
+kind-down:	## DESTRUCTIVE: delete the kind cluster entirely
+	@helm uninstall medbot >/dev/null 2>&1 || true
+	@kind delete cluster --name $(KIND_CLUSTER) >/dev/null 2>&1 || true
+	@echo "  kind cluster '$(KIND_CLUSTER)' deleted"
+
+kind-load:	## Side-load images into kind (nodes cannot see the host daemon)
+	kind load docker-image medbot-api:0.1.0    --name $(KIND_CLUSTER)
+	kind load docker-image medbot-ml:0.1.0     --name $(KIND_CLUSTER)
+	kind load docker-image medbot-worker:0.1.0 --name $(KIND_CLUSTER)
+
+kind-install:	## helm install into kind (needs GROQ_API_KEY exported)
+	helm upgrade --install medbot infra/k8s/medbot -f infra/k8s/medbot/values-kind.yaml --set secrets.groqApiKey="$$GROQ_API_KEY" --set secrets.sessionSecret="kind-dev-session-secret-not-for-prod"
+	kubectl get pods
+
+kind-sync:	## Rebuild images, side-load them, and roll the deployments
+	@$(MAKE) --no-print-directory kind-load
+	kubectl rollout restart deployment/medbot-api deployment/medbot-ml 2>/dev/null || true
+
+kind-smoke:	## Port-forward + health check (run kind-install first)
+	@echo "  kubectl port-forward svc/medbot-api 8000:80"
+	@echo "  curl -s localhost:8000/healthz"
+
+kind-up: kind-start	## Alias for kind-start (kept: older docs and scripts call it)
+
+# ── RECOVERED (S20.8) ─────────────────────────────────────────────────────────────────
+# 42 targets were destroyed by patch scripts during S20 and their names left in
+# .PHONY, so `make <target>` kept exiting 0 with "Nothing to be done". Restored
+# verbatim from 97035a5. scripts/audit.py now fails on a recipe-less target so this
+# cannot happen silently again.
+
+# ── Native dev (run the API on the host against the containerized data tier) ────────────
+api:  ## Run the query service on $$API_PORT (default 5007)
+	uv run uvicorn medapi.main:app --host 127.0.0.1 --port $${API_PORT:-5007}
+
+backup-drill:  ## P5.4 backup/restore drill with measured RTO (restores to PARALLEL targets)
+	uv run python tests/chaos/backup_restore.py
+
+chaos:  ## P5.3 chaos drills: stop/start each dependency (NEVER deletes volumes)
+	uv run python tests/chaos/drill.py --targets $${TARGETS:-redis,qdrant,postgres,provider}
+
+chart-lint:  ## helm lint + render object census (no cluster needed)
+	helm lint infra/k8s/medbot -f infra/k8s/medbot/values-kind.yaml
+	helm template medbot infra/k8s/medbot -f infra/k8s/medbot/values-kind.yaml --set secrets.groqApiKey=test --set secrets.sessionSecret=test-secret | grep '^kind:' | sort | uniq -c
+
+clean-all: clean-images clean-models	## DESTRUCTIVE: images AND weights. The full reset.
+	@echo "  Everything removed. Next 'make upv' is a cold build: expect 30-60 min."
+
+# ── Images and model weights: destructive, and deliberately NOT part of downv ──────────
+clean-images:	## DESTRUCTIVE: remove this project's images (app + vLLM + SGLang). Keeps weights.
+	@echo "  Removing medbot images and the inference engine images."
+	@echo "  Rebuild: 'make images' (~10-25 min).  Re-pull vLLM/SGLang: ~10GB."
+	-docker rmi medbot-api:0.1.0 medbot-ml:0.1.0 medbot-worker:0.1.0 2>/dev/null
+	-docker rmi vllm/vllm-openai:latest lmsysorg/sglang:latest 2>/dev/null
+	@echo "  Model WEIGHTS were kept. 'make clean-models' removes those."
+
+clean-models:	## DESTRUCTIVE: delete the ~5GB LLM weight cache shared by vLLM and SGLang
+	@echo "  Deleting vllm-hf-cache (~5GB of weights)."
+	@echo "  Re-downloading needs ONE uninterrupted run: huggingface_hub does not resume"
+	@echo "  across process restarts (S3b blocker #3), so a broken pull starts from zero."
+	-docker volume rm vllm-hf-cache 2>/dev/null || docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null
+	@echo "  Weight cache removed."
+
+engine-guide:
+	@echo ""
+	@echo "  ============================================================"
+	@echo "   $(ENGINE) on http://localhost:$(PORT)"
+	@echo "  ============================================================"
+	@echo ""
+	@echo "  FIRST BOOT downloads ~5GB and can take 10-20 min. Do NOT interrupt it:"
+	@echo "  huggingface_hub does not resume, so a broken pull restarts from zero."
+	@echo "    watch it:   docker logs -f $$(echo $(ENGINE) | tr A-Z a-z)"
+	@echo ""
+	@echo "  -- 1. is it up? (liveness, NOT capacity) -------------------"
+	@echo "    curl -s localhost:$(PORT)/health"
+	@echo "    curl -s localhost:$(PORT)/v1/models | python -m json.tool"
+	@echo ""
+	@echo "  -- 2. does it actually GENERATE? (the real check) ----------"
+	@echo "    curl -s localhost:$(PORT)/v1/chat/completions \\"
+	@echo "      -H 'content-type: application/json' \\"
+	@echo "      -d '{\"model\":\"$(MODEL)\",\"messages\":[{\"role\":\"user\",\"content\":\"Name three symptoms of asthma.\"}],\"max_tokens\":80}'"
+	@echo ""
+	@echo "  -- 3. chat with it in a browser ----------------------------"
+	@echo "    make webui     ->  http://localhost:$${OPEN_WEBUI_PORT:-5024}"
+	@echo "    ChatGPT-style. Model picker switches vLLM <-> SGLang on the same prompt."
+	@echo "    RAW engine: no retrieval, no citations, no guardrails."
+	@echo ""
+	@echo "  -- 4. is it on the GPU, and how fast? ----------------------"
+	@echo "    nvidia-smi                 # the process and its VRAM"
+	@echo "    make bench-local           # vLLM   k6: TTFT, tok/s, p99"
+	@echo "    make bench-sglang          # SGLang k6: same harness, same prompts"
+	@echo ""
+	@echo "  -- 5. is the APP actually using it? -----------------------"
+	@echo "    grep '^SERVING_CHAIN=' .env"
+	@echo "    docker logs medbot-api 2>&1 | grep -i 'serving chain'"
+	@echo "    curl -s -X POST localhost:$${API_PORT:-5007}/api/v1/query \\"
+	@echo "      -H 'content-type: application/json' \\"
+	@echo "      -d '{\"question\":\"What is chickenpox?\",\"stream\":false}' | grep -o '\"model_id\":\"[^\"]*\"'"
+	@echo ""
+	@echo "  Full guide: docs/VERIFY_STACK.md"
+	@echo ""
+
+# ── GPU tier on its own (when you want the engines without the rest) ───────────────────
+gpu:	## Start vLLM + SGLang only (needs an NVIDIA GPU; first run pulls ~10GB)
+	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker. Aborting."; exit 1; }
+	$(DC_GPU) --profile gpu up -d
+	@echo "  vLLM   http://localhost:$${VLLM_LOCAL_PORT:-5009}/v1/models"
+	@echo "  SGLang http://localhost:$${SGLANG_LOCAL_PORT:-5010}/v1/models"
+	@echo "  First boot downloads ~5GB of weights - do NOT interrupt it (S3b blocker #3)."
+
+gpu-down:	## Stop vLLM + SGLang (KEEPS the weight cache)
+	$(DC_GPU) --profile gpu down
+	@echo "  Engines stopped. Weight cache kept - 'make clean-models' deletes it."
+
+# ── S15 / Phase 6: kind ───────────────────────────────────────────────────────────────
+images:  ## Build all three service images (heavy: torch; first run 10-25 min)
+	docker build -f apps/api/Dockerfile        -t medbot-api:0.1.0    .
+	docker build -f apps/ml-service/Dockerfile -t medbot-ml:0.1.0     .
+	docker build -f apps/worker/Dockerfile     -t medbot-worker:0.1.0 .
+	docker images --filter=reference='medbot-*'
+
+load-cache:  ## P5.2 tier A: cache-hit path - HTTP/async/Redis ceiling (no LLM)
+	k6 run -e TIER=cache -e PEAK_RATE=$${PEAK_RATE:-200} tests/load/system_load.js
+
+load-full:  ## P5.2 tier B: full pipeline, every request a cache miss (needs vLLM)
+	k6 run -e TIER=full -e PEAK_RATE=$${PEAK_RATE:-8} tests/load/system_load.js
+
+load-guard:  ## P5.2 tier C: abuse traffic - cost of refusing before retrieval
+	k6 run -e TIER=guard -e PEAK_RATE=$${PEAK_RATE:-200} tests/load/system_load.js
+
+reindex:  ## Ingest corpus -> new collection -> atomic alias swap (D11). LIMIT=N for dev only
+	uv run medworker-ingest --direct $${LIMIT:+--limit $$LIMIT}
+
+sglang-down:	## Stop SGLang (weights kept)
+	$(DC_GPU) --profile gpu-sglang stop sglang
+	@echo "  SGLang stopped. Weight cache kept."
+
+sglang-downv:	## Stop SGLang AND delete the shared ~5GB weight cache
+	@echo "  WARNING: the weight cache is SHARED with vLLM - this costs both engines"
+	@echo "  their weights, and huggingface_hub does not resume across restarts."
+	$(DC_GPU) --profile gpu-sglang rm -sf sglang
+	-docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null || docker volume rm vllm-hf-cache 2>/dev/null
+	@echo "  SGLang removed and weight cache deleted."
+
+sglang-test:	## How to verify SGLang is really generating (UI + CLI)
+	@$(MAKE) --no-print-directory engine-guide ENGINE=SGLang PORT=$${SGLANG_LOCAL_PORT:-5010} MODEL=$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+
+sglang-up:	## Start SGLang alone, then print how to test it
+	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
+	$(DC_GPU) --profile gpu-sglang up -d sglang
+	@$(MAKE) --no-print-directory sglang-test
+
+sglang-upv:	## Recreate the SGLang container from scratch (weights kept)
+	$(DC_GPU) --profile gpu-sglang rm -sf sglang
+	$(DC_GPU) --profile gpu-sglang up -d --force-recreate sglang
+	@$(MAKE) --no-print-directory sglang-test
+
+smoke:  ## Query the running API (shell-quoting-proof; needs `make api` in another shell)
+	@echo "--- in-corpus (expect kind=grounded, citations) ---"
+	@curl -s -X POST localhost:$${API_PORT:-5007}/api/v1/query \
+		-H 'content-type: application/json' \
+		--data-binary '{"question":"What is an abscess?","stream":false}'
+	@echo "\n--- out-of-corpus (expect kind=no_answer, 0 citations) ---"
+	@curl -s -X POST localhost:$${API_PORT:-5007}/api/v1/query \
+		-H 'content-type: application/json' \
+		--data-binary '{"question":"How does CRISPR gene editing work?","stream":false}'
+	@echo ""
+
+# ── S16: Terraform ────────────────────────────────────────────────────────────────────
+tf-init:  ## terraform init (providers only; no backend, no credentials needed)
+	terraform -chdir=infra/terraform/aws init -backend=false -input=false
+
+tf-plan:  ## terraform plan - NEEDS AWS credentials (Track D); never applies
+	terraform -chdir=infra/terraform/aws plan -input=false
+
+tf-validate:  ## terraform fmt + validate - proves the HCL is correct OFFLINE
+	terraform -chdir=infra/terraform/aws fmt -check -recursive
+	terraform -chdir=infra/terraform/aws validate
+
+vllm-down:	## Stop vLLM (weights kept)
+	$(DC_GPU) --profile gpu stop vllm
+	@echo "  vLLM stopped. Weight cache kept."
+
+vllm-downv:	## Stop vLLM AND delete the shared ~5GB weight cache
+	@echo "  WARNING: the weight cache is SHARED with SGLang - this costs both engines"
+	@echo "  their weights, and huggingface_hub does not resume across restarts."
+	$(DC_GPU) --profile gpu rm -sf vllm
+	-docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null || docker volume rm vllm-hf-cache 2>/dev/null
+	@echo "  vLLM removed and weight cache deleted."
+
+vllm-test:	## How to verify vLLM is really generating (UI + CLI)
+	@$(MAKE) --no-print-directory engine-guide ENGINE=vLLM PORT=$${VLLM_LOCAL_PORT:-5009} MODEL=$${VLLM_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+
+vllm-up:	## Start vLLM alone, then print how to test it
+	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
+	$(DC_GPU) --profile gpu up -d vllm
+	@$(MAKE) --no-print-directory vllm-test
+
+vllm-upv:	## Recreate the vLLM container from scratch (weights kept)
+	$(DC_GPU) --profile gpu rm -sf vllm
+	$(DC_GPU) --profile gpu up -d --force-recreate vllm
+	@$(MAKE) --no-print-directory vllm-test
+
+# --- S10 web tier -------------------------------------------------------------
+# apps/web is Node, deliberately EXCLUDED from the uv workspace (see pyproject.toml):
+# the `apps/*` glob would claim it as a Python member and break `uv run` repo-wide.
+web:	## Run the Next.js dev server on $$WEB_PORT (default 5008); needs `make app`
+	cd apps/web && pnpm install --silent && pnpm dev
+
+web-a11y:	## WCAG 2.2 AA audit: axe on every route + keyboard and screen-reader checks
+	cd apps/web && pnpm exec playwright test --project=chromium e2e/a11y.spec.ts
+
+web-build:	## Web gate: contrast + contract drift + typecheck + build
+	cd apps/web && pnpm install --silent && pnpm check
+
+web-ci:	## The subset CI runs: everything that does NOT need a live backend
+	cd apps/web && pnpm exec playwright test --project=chromium --grep-invert "@live"
+
+web-design:	## Open the design-system gallery (needs `make web`)
+	@echo "http://localhost:$${WEB_PORT:-5008}/design
+
+web-e2e:	## Browser verification of the four answer kinds (needs the full stack up)
+	cd apps/web && pnpm exec playwright test --project=chromium e2e/answer-kinds.spec.ts
+
+web-mobile:	## Mobile layout checks on a Pixel 7 viewport
+	cd apps/web && pnpm exec playwright test --project=mobile e2e/mobile.spec.ts
+
+web-preview: web-stop	## Build AND serve the production web tier (always builds first)
+	@echo 'note: plain next-start fails when .next is missing or a build was interrupted;'
+	@echo 'this target always builds first, and web-stop frees the port before binding.'
+	cd apps/web && pnpm install --silent && API_BASE_URL=$${API_BASE_URL:-http://localhost:5007} pnpm preview
+
+web-shots:	## Regenerate docs/screenshots in both themes
+	cd apps/web && pnpm exec playwright test e2e/screenshots.spec.ts --project=chromium
+
+web-stop:	## Free $$WEB_PORT by stopping whatever is listening on it
+	@PORT=$${WEB_PORT:-5008}; 	PID=$$(netstat -ano 2>/dev/null | grep ":$$PORT " | grep -i LISTENING | head -1 | awk '{print $$NF}'); 	if [ -n "$$PID" ]; then 		echo "stopping PID $$PID on :$$PORT"; 		taskkill //PID $$PID //F >/dev/null 2>&1 || kill -9 $$PID 2>/dev/null || true; 	else echo "nothing listening on :$$PORT"; fi
+
+web-verify:	## PROVE the BFF proxy streams SSE rather than buffering (D23)
+	@echo "Start the web server first: (cd apps/web && API_BASE_URL=http://localhost:5099 pnpm start)"
+	cd apps/web && node scripts/verify-stream.mjs http://localhost:$${WEB_PORT:-5008}
+
+webui:	## Chat UI for BOTH engines (ChatGPT-style, model picker)
+	$(DC_GPU) --profile webui up -d open-webui
+	@echo ""
+	@echo "  Open WebUI   http://localhost:$${OPEN_WEBUI_PORT:-5024}"
+	@echo "  No login. Pick the model top-left to switch vLLM <-> SGLang."
+	@echo "  This is the RAW engine: no retrieval, no citations, no medical guardrails."
+	@echo "  The guarded product UI is http://localhost:$${WEB_PORT:-5008}."
+
+langfuse:	## Open Langfuse and print the ONE login it needs (no anonymous mode exists)
+	@echo ""
+	@echo "  Langfuse   http://localhost:$${LANGFUSE_WEB_PORT:-5015}"
+	@echo ""
+	@echo "  Sign in ONCE - Langfuse has no anonymous/viewer mode the way Grafana does,"
+	@echo "  so this is the one dashboard that cannot be made login-free. The session"
+	@echo "  then persists in the browser."
+	@echo ""
+	@echo "    email     $${LANGFUSE_INIT_USER_EMAIL:-admin@medbot.local}"
+	@echo "    password  $${LANGFUSE_INIT_USER_PASSWORD:-medbot-admin-1234}"
+	@echo ""
+	@echo "  You do NOT create a project and you do NOT copy any API keys: the org,"
+	@echo "  project and BOTH keys are bootstrapped from .env on first boot, and the API"
+	@echo "  already sends with the same pair. Traces are there when you land."
+	@echo ""
+	@python -c "import webbrowser,os;webbrowser.open('http://localhost:'+os.environ.get('LANGFUSE_WEB_PORT','5015'))" 2>/dev/null || true

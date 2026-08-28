@@ -50,6 +50,15 @@ W = 102
 
 CRITICAL, HIGH, MEDIUM, INFO = "CRITICAL", "HIGH", "MEDIUM", "INFO"
 
+# Built with chr() rather than an escape, because this file is itself frequently patched by
+# scripts and a literal backslash in source is exactly what corrupted the Makefile.
+BACKSLASH = chr(92)
+WHY_HOLLOW = (
+    "make prints \"Nothing to be done\" and EXITS 0 - `make down` reported success while "
+    "leaving three kind node containers running"
+)
+WHY_ORPHAN = "a .PHONY name with no rule behaves identically: resolved, silent, exit 0"
+
 
 # ── env ────────────────────────────────────────────────────────────────────────────────
 def load_env() -> dict[str, str]:
@@ -745,6 +754,66 @@ def audit_config(_: argparse.Namespace) -> Section:
           "the docs said `answers_total{...}` for a metric actually named "
           "`medbot_answers_total{...}` - a query that returns nothing looks like a broken "
           "feature")
+
+    # A .PHONY name whose target has NO RECIPE is the quietest failure in this repo.
+    # Make resolves the name, finds nothing to run, prints "Nothing to be done for 'X'"
+    # and EXITS 0 - so `make down` reported success while leaving three kind node
+    # containers running. A target that no longer exists fails loudly; one that exists
+    # with no recipe does not.
+    #
+    # Same shape as the four Prometheus metrics that existed with count 0, and as
+    # trace_answer() with no caller: declared, referenced, and doing nothing.
+    mk_lines = (REPO / "Makefile").read_text(encoding="utf-8").splitlines()
+
+    phony: set[str] = set()
+    for i, ln in enumerate(mk_lines):
+        if not ln.startswith(".PHONY:"):
+            continue
+        j = i
+        while j < len(mk_lines):
+            body = mk_lines[j].replace(".PHONY:", " ").rstrip()
+            more = body.endswith(BACKSLASH)
+            phony.update(w for w in body.rstrip(BACKSLASH).split() if w)
+            if not more:
+                break
+            j += 1
+
+    defined: set[str] = set()
+    with_recipe: set[str] = set()
+    for i, ln in enumerate(mk_lines):
+        if not ln or ln[0] in " \t#" or ":" not in ln or ln.startswith(".PHONY"):
+            continue
+        name = ln.split(":", 1)[0].strip()
+        if not name or "=" in name or " " in name:
+            continue
+        defined.add(name)
+        if ln.split(":", 1)[1].split("#")[0].strip():
+            with_recipe.add(name)      # an alias target delegates to its prerequisite
+        for nxt in mk_lines[i + 1:]:
+            if nxt.startswith("\t"):
+                with_recipe.add(name)
+                break
+            if nxt.strip() and not nxt.startswith("#"):
+                break
+
+    hollow = sorted((phony & defined) - with_recipe)
+    orphan = sorted(n for n in phony - defined if not n.startswith("."))
+    s.add("no recipe-less make targets", HIGH, not hollow,
+          ", ".join(hollow) or "none", "every defined .PHONY target has a recipe",
+          WHY_HOLLOW)
+    s.add("no .PHONY name without a rule", MEDIUM, not orphan,
+          (", ".join(orphan[:6]) + (" ..." if len(orphan) > 6 else "")) or "none",
+          "every .PHONY name is defined", WHY_ORPHAN)
+
+    # A LITERAL backslash-n means a patch wrote an escape sequence where a line
+    # continuation belonged. It corrupted BOTH .PHONY and DATA_VOLS here - silently
+    # injecting a bogus volume name and swallowing half the target list.
+    token = BACKSLASH + "n"
+    corrupt = [i + 1 for i, ln in enumerate(mk_lines)
+               if token in ln and not ln.startswith("\t")]
+    s.add("no literal backslash-n in Makefile", MEDIUM, not corrupt,
+          f"lines {corrupt}" if corrupt else "none", "none",
+          "two characters where a line continuation was meant")
 
     for m in ("medbot_refusals_total", "medbot_no_answers_total"):
         s.add(f"{m} deployed", MEDIUM, m in families,
