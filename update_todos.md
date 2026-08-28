@@ -1447,3 +1447,111 @@ Read back from Postgres, not from a test: 14 refused / 6 no_answer / 3 grounded.
      🔵 I8.6 After the fixes, the ONLY remaining safety failure is self-harm -> no_answer,
           which is the I7.1 guardrail fix waiting on the rebuild. Everything else in
           sections 3 and 7 passes: 16 passed / 1 failed.
+
+---
+
+## S20 — Defect correction, observability depth, and a one-command audit
+
+Everything below came out of running the app rather than reading it.
+
+### S20.1 — MULTI-TURN WAS NOT IMPLEMENTED  ✅
+     Found in the user's own session: "Describe the treatment options for pneumonia."
+     answered correctly; the follow-up "What causes it?" returned no_answer.
+     RagPipeline.answer(question: str) took only a string. routes.py passed req.question
+     raw. History was stored in Postgres, rendered in the sidebar, and never reached
+     retrieval - a chat UI over a stateless engine, embedding the literal text
+     "What causes it?" which matches nothing in a medical encyclopedia.
+     `StageTimings.condense_ms` had been in the schema since it was written and was SUMMED
+     INTO total_ms by a stage that did not exist - the third instance of the
+     declared-but-dead pattern after trace_answer (I4.3) and the four metrics (I5.4).
+     Fixed: a `condense` stage at the head of the prep chain.
+       - GATED on cheap signals (anaphora, or <=3 words). TTFT is already ~6s; a first
+         question must not buy a model round-trip it cannot use.
+       - `search_question` is SEPARATE from `question`. Retrieval uses the rewrite;
+         the user, the model and Langfuse all still see what was typed. Overwriting it
+         would corrupt the transcript AND the history feeding the next condense.
+       - Wired into BOTH routes - the UI streams, so fixing only the non-streaming path
+         would have left the actual product broken.
+       - Degrades to the literal question on failure; rejects a "rewrite" that is really
+         an answer, because embedding an essay poisons retrieval outright.
+     7 tests. Also fixed the stream_parity doubles, which lacked `load`.
+
+### S20.2 — QDRANT COLLECTION LEAK (I3.7, open since found)  ✅
+     prune_superseded(alias, keep=1), called AFTER the alias swap so a crash leaves extra
+     collections rather than deleting one still serving traffic. Never deletes the live
+     target; deletes NOTHING when the alias cannot be resolved, because acting while you
+     do not know what is live is how a re-index becomes an outage.
+     Keeping exactly ONE previous version is the point of the D11 indirection: rollback
+     stays a single alias operation. 5 tests. Live cleanup: 6 -> 2 collections.
+
+### S20.3 — THE SAFETY BLIND SPOT THAT HID I7.1  ✅
+     medbot_refusals_total{category} - `answers_total{kind="refused"}` cannot tell an
+     emergency from a dosage question, so a guardrail that STOPS MATCHING looks identical
+     to one nobody triggered. That is exactly how the self-harm rule shipped broken.
+     medbot_no_answers_total{path} - retrieval_gate (free) vs model_abstained (~1,000
+     prompt tokens to say "I don't know"). Collapsed into one counter, a rising bill from
+     adjacent-but-absent questions is invisible.
+
+### S20.4 — GRAFANA REBUILT  ✅
+     14 -> 20 panels, 4 titled sections, and EVERY panel carries a description saying what
+     the number is, what good looks like, and what a bad reading MEANS. A panel you cannot
+     read without asking its author is not observability.
+
+### S20.5 — docs/OBSERVABILITY_DEEP.md  ✅
+     The document the earlier ones should have been. Part 1 is Jaeger in depth because the
+     user said they could not read it: what a trace IS (one HTTP REQUEST, not one question
+     - which is why one browser query yields 3-4 traces), all seven spans, the three tree
+     shapes and what each one PROVES, span tags, and why a fast request may be absent.
+     Part 2 is all 14 metrics with exact PromQL. Part 3 is 13 queries x 4 tools.
+     ALL 33 PromQL queries were extracted and EXECUTED against live Prometheus: 33/33 valid.
+     This also fixes the systematic error the user caught - the docs wrote
+     `answers_total{...}` for a metric actually named `medbot_answers_total{...}`, and a
+     query returning nothing looks exactly like a broken feature.
+
+### S20.6 — scripts/audit.py, one command  ✅
+     11 sections, 77 checks, CRITICAL/HIGH/MEDIUM/INFO. Deeper than inspect_stack.py:
+     that asks "is it alive", this asks "is it CORRECT" - are citations ON TOPIC or merely
+     present, are refusals excluded from the cache, does over-refusal happen, does the
+     engine serve the model the API names, is every DECLARED metric actually written, do
+     the docs reference metrics that exist.
+     Guardrails are probed with phrasings the rules were NOT written against.
+     SAFE BY CONSTRUCTION: the kill switch is restored in a `finally` and re-asserted as
+     CRITICAL, so an exception cannot leave generation disabled; container stops need
+     --chaos; cache clearing needs --fresh; nothing writes to Postgres or Qdrant.
+     make audit / audit-fresh / audit-chaos.
+
+     Two real findings on its first runs:
+       - CONDENSE_MAX_TOKENS was undocumented in the gen_env spec (MY regression from
+         S20.1). gen_env's own guard caught it: regenerating would have DELETED it
+         from .env.
+       - My kill-switch check was wrong, not the system: it reused a fixed question, and
+         kill-switch mode is CACHE-ONLY, so a cached question correctly returns its cached
+         grounded answer. Now uses a UUID question guaranteed to miss.
+     Verified repeatable: identical 64/3/10 across consecutive runs.
+
+### S20.7 — Gate and doc consistency  ✅
+     Stale claims corrected: ROUND2 still said Q6/Q7 "need the rebuild" after they were
+     deployed and verified; Q10's Langfuse note claimed the trace would show the RESOLVED
+     question, which my own fix made false - it shows what the user typed, deliberately.
+     Both inspection docs now link OBSERVABILITY_DEEP.md, which nothing referenced.
+     Every relative doc link verified to resolve.
+
+     Gate: 449 passed - ruff clean - mypy clean (67 files) - .env.example in sync
+     Stack after all of it: readyz=200, 17 containers, kill switch ENABLED.
+
+     🔵 REMAINING, one cause: the condense stage and the two new metrics are in source but
+        not in the running image.
+            docker build -f apps/api/Dockerfile -t medbot-api:0.1.0 .
+            docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml \
+              up -d --force-recreate --no-deps api
+            make audit-fresh          # expect 67 passed / 0 failed
+
+     🔵 STILL OPEN and honestly red:
+        - TTFT p50 <= 0.8s is UNREACHABLE here: embed (~1.6s) + rerank (~2.3s) run on CPU
+          before generation starts. Either the reranker moves to GPU or the NFR is wrong
+          for this hardware. Do NOT "fix" it by tightening timeouts - that is what broke
+          the reranker in I6.5.
+        - Qwen2.5-7B regurgitates the top chunk on multi-hop questions where retrieval is
+          weak (1/4 chunks on topic); gpt-oss-20b synthesises correctly. A model capability
+          gap, not a bug - visible only in Langfuse, since Prometheus records a healthy
+          `grounded` either way.

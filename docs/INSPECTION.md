@@ -8,9 +8,13 @@ reading actually means.
 Automated version of the same sweep:
 
 ```bash
-python scripts/inspect_stack.py            # every section, exit code = failures
+make audit                                 # BRUTAL: 77 checks, restores what it changes
+python scripts/inspect_stack.py            # lighter sweep, exit code = failures
 python scripts/inspect_stack.py --no-probe # read-only, sends no queries of its own
 ```
+
+> Deeper reading of the same instruments — every metric, every span, every panel:
+> [OBSERVABILITY_DEEP.md](OBSERVABILITY_DEEP.md).
 
 **The rule this whole document is built on:** never accept a health check as evidence. Four
 times in this project a component reported healthy while doing nothing — unenforced

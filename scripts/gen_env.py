@@ -108,6 +108,13 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "exceeded under a burst - a 503, because without a vector there is",
                 "nothing to retrieve.",
             )),
+            ("CONDENSE_MAX_TOKENS", "64", (
+                "Budget for rewriting a follow-up into a standalone question.",
+                "A standalone question is a SENTENCE, so this is a ceiling on a model that",
+                "ignores the instruction and starts answering - not a target. Small on",
+                "purpose: condense runs BEFORE retrieval, so every token here lands",
+                "directly on time-to-first-token.",
+            )),
             ("RERANK_TIMEOUT", "4.0", (
                 "Seconds. On timeout the pipeline DEGRADES (skips rerank), never fails.",
                 "MEASURED, not guessed: this was 2.0 while the reranker's own p95 was",

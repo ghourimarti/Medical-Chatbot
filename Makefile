@@ -2,7 +2,7 @@
 # Every target is a documented, reproducible command (no tribal knowledge).
 
 .DEFAULT_GOAL := help
-.PHONY: web web-ci web-a11y web-mobile web-e2e web-shots web-stop web-preview web-design web-build web-verify help sync lint type test check eval-mock baseline validate api reindex smoke         db app obs up upv down downv ps logs migrate seed worker urls langfuse cache-clear cache-flush cache-ls kill-on kill-off kill-status up-vllm up-sglang up-vllm-sglang which-engine \
+.PHONY: web web-ci web-a11y web-mobile web-e2e web-shots web-stop web-preview web-design web-build web-verify help sync lint type test check eval-mock baseline validate api reindex smoke         db app obs up upv down downv ps logs migrate seed worker urls langfuse cache-clear cache-flush cache-ls kill-on kill-off audit audit-fresh audit-chaos kill-status up-vllm up-sglang up-vllm-sglang which-engine \
         eval-pipeline eval-gate eval-delta rescore bench-groq bench-local bench-sglang \
         load-cache load-full load-guard audit chaos backup-drill \
         images kind-up kind-load kind-install kind-smoke kind-down chart-lint \n        service_ls clean-images clean-models clean-all kind-sync gpu gpu-down \n        kind-start kind-stop kind-status vllm-up vllm-down vllm-upv vllm-downv \n        sglang-up sglang-down sglang-upv sglang-downv webui vllm-test sglang-test engine-guide
@@ -340,3 +340,12 @@ kill-off:	## Kill switch OFF = generation ENABLED (the normal state)
 
 kill-status:	## Is generation currently enabled?
 	@N=$$($(NS)); V=$$(docker exec $(REDIS_CTR) redis-cli get "$$N:killswitch:llm_enabled"); if [ "$$V" = "0" ]; then echo "  DISABLED (kill switch set)"; else echo "  ENABLED"; fi
+
+audit:	## BRUTAL full-application audit, one command. Restores anything it changes.
+	@python scripts/audit.py $(ARGS)
+
+audit-fresh:	## Same, but clear the answer cache first so nothing is served from cache
+	@python scripts/audit.py --fresh
+
+audit-chaos:	## Same, plus stop/start dependencies to prove degradation (restarts them)
+	@python scripts/audit.py --fresh --chaos
