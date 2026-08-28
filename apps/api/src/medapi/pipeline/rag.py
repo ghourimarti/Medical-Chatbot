@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
@@ -26,6 +27,7 @@ from medapi.guardrails import (
     classify_input,
     contains_dosage_instruction,
 )
+from medapi.observability.metrics import degradations_total
 from medapi.observability.tracing import question_fingerprint, set_attrs, stage_span
 from medapi.pipeline.context import build_context
 from medcore.config import Settings
@@ -77,6 +79,14 @@ class PipelineState:
     """State threaded through the LCEL stages. Immutable-ish: stages return updated copies."""
 
     question: str
+    # Prior turns, oldest-first. Empty for a first question and for any caller that
+    # does not thread history - the pipeline stays usable standalone.
+    history: list[Message] = field(default_factory=list)
+    # What RETRIEVAL searches for. Usually identical to `question`; for a follow-up it
+    # is the condensed standalone form. Kept separate on purpose: the user must be
+    # shown, and the model must answer, the question they actually TYPED - not our
+    # rewrite of it.
+    search_question: str = ""
     query_vector: list[float] = field(default_factory=list)
     chunks: list[RetrievedChunk] = field(default_factory=list)
     context: str = ""
@@ -104,6 +114,7 @@ class RagPipeline:
         self._sparse = sparse
         self._system_prompt = load_prompt("system", settings.prompt_version)
         self._answer_prompt = load_prompt("answer", settings.prompt_version)
+        self._condense_prompt = load_prompt("condense", settings.prompt_version)
         # Self-authored stages, composed with LCEL. Each is inspectable and unit-testable.
         # Explicit generic params pin the async-callable overload (LCEL's RunnableLambda
         # stubs otherwise infer Never — the framework-indirection tax D6 acknowledged).
@@ -112,6 +123,7 @@ class RagPipeline:
         _RL = RunnableLambda[PipelineState, PipelineState]
         self._prep_chain: Runnable[PipelineState, PipelineState] = (
             _RL(self._traced("guard", self._guard))
+            | _RL(self._traced("condense", self._condense))
             | _RL(self._traced("embed", self._embed))
             | _RL(self._traced("retrieve", self._retrieve))
             | _RL(self._traced("rerank", self._rerank))
@@ -148,8 +160,12 @@ class RagPipeline:
 
         return _run
 
-    async def answer(self, question: str) -> Answer:
-        state: PipelineState = await self._chain.ainvoke(PipelineState(question=question))
+    async def answer(
+        self, question: str, history: Sequence[Message] | None = None
+    ) -> Answer:
+        state: PipelineState = await self._chain.ainvoke(
+            PipelineState(question=question, history=list(history or []))
+        )
         assert state.answer is not None
         return state.answer
 
@@ -166,7 +182,7 @@ class RagPipeline:
         return state.answer, [c.text for c in state.chunks]
 
     async def stream_answer(
-        self, question: str
+        self, question: str, history: Sequence[Message] | None = None
     ) -> AsyncIterator[SourcesEvent | TokenEvent | DoneEvent]:
         """Streaming counterpart of answer().
 
@@ -175,7 +191,9 @@ class RagPipeline:
         from its non-streamed equivalent. Only the generate stage differs.
         """
         t_start = time.perf_counter()
-        state: PipelineState = await self._prep_chain.ainvoke(PipelineState(question=question))
+        state: PipelineState = await self._prep_chain.ainvoke(
+            PipelineState(question=question, history=list(history or []))
+        )
 
         # No-answer gate fired during prep: emit an empty source set and finish.
         if state.answer is not None:
@@ -293,11 +311,91 @@ class RagPipeline:
             ),
         )
 
+    # A follow-up is short and leans on the previous turn. Gating on that shape is
+    # deliberate: an unconditional LLM rewrite would add a model round-trip to EVERY
+    # question, and TTFT is already ~6s because embed+rerank run on CPU before
+    # generation even starts. First questions - the overwhelming majority - must not
+    # pay for a feature they cannot use.
+    _ANAPHORA = re.compile(
+        r"\b(it|its|that|this|those|these|they|them|their|he|she|him|her|"
+        r"the (condition|disease|drug|treatment|illness|infection|one))\b",
+        re.IGNORECASE,
+    )
+
+    def _needs_condense(self, question: str) -> bool:
+        """True when the question cannot stand on its own.
+
+        Two signals, both cheap. A question is a follow-up if it REFERS to something
+        (anaphora) or is too short to name a subject at all ("why?", "and the
+        causes?"). Neither is perfect, and that is fine: a false positive costs one
+        small rewrite that returns the question unchanged, while a false negative just
+        restores the old behaviour of searching the literal text.
+        """
+        if len(question.split()) <= 3:
+            return True
+        return bool(self._ANAPHORA.search(question))
+
+    async def _condense(self, state: PipelineState) -> PipelineState:
+        """Rewrite a follow-up into a standalone question, for RETRIEVAL ONLY.
+
+        S20: "Describe the treatment options for pneumonia." answered correctly, and
+        the follow-up "What causes it?" returned no_answer - because the pipeline
+        embedded the literal string "What causes it?", which matches nothing in a
+        medical encyclopedia. History was stored, shown in the sidebar, and never
+        reached retrieval: a chat UI over a stateless engine. `condense_ms` had been
+        in StageTimings since the schema was written, and was summed into total_ms by
+        a stage that did not exist - the same declared-but-dead shape as trace_answer
+        (I4.3) and the four unwritten metrics (I5.4).
+
+        `state.question` is NEVER overwritten. The user is shown, and the model
+        answers, what they actually typed; only the retrieval query is rewritten.
+        Overwriting it would put words in the user's mouth in the transcript, in the
+        Langfuse trace, and in the stored history that feeds the NEXT condense.
+        """
+        state.search_question = state.question
+        if not state.history or not self._needs_condense(state.question):
+            return state
+
+        t0 = time.perf_counter()
+        transcript = "\n".join(
+            f"{m.role}: {m.content[:400]}" for m in state.history[-6:]
+        )
+        prompt = self._condense_prompt.render(
+            history=transcript, question=state.question
+        )
+        try:
+            completion = await self._model.complete(
+                messages=[Message(role="user", content=prompt)],
+                max_tokens=self._s.condense_max_tokens,
+                temperature=0.0,
+            )
+            rewritten = completion.text.strip().strip('"').splitlines()[0].strip()
+        except Exception:  # noqa: BLE001
+            # Degrade to the literal question rather than failing the request: a
+            # broken rewrite must cost CONTEXT, never the answer (D21).
+            logger.warning("condense failed; searching the literal question")
+            return state
+
+        # Guard against a model that ignores the instruction and ANSWERS instead of
+        # rewriting. A "rewrite" many times longer than the original is not a rewrite,
+        # and feeding an essay into the embedder would poison retrieval outright.
+        if rewritten and len(rewritten) <= max(200, len(state.question) * 6):
+            state.search_question = rewritten
+        # model_copy, not dataclasses.replace: StageTimings is a pydantic model. The
+        # surrounding stages use replace() on PipelineState, which IS a dataclass - two
+        # different objects, two different update calls.
+        state.timings = state.timings.model_copy(
+            update={"condense_ms": (time.perf_counter() - t0) * 1000}
+        )
+        return state
+
     async def _embed(self, state: PipelineState) -> PipelineState:
         if state.answer is not None:  # refused by the guardrail
             return state
         t0 = time.perf_counter()
-        vec = await self._embedder.embed_query(state.question)
+        # The CONDENSED question, not the literal one: this is the whole point of
+        # the condense stage. Generation still answers state.question.
+        vec = await self._embedder.embed_query(state.search_question or state.question)
         return replace(
             state,
             query_vector=vec,
@@ -312,14 +410,14 @@ class RagPipeline:
         t0 = time.perf_counter()
         kwargs: dict[str, object] = {
             "query_vector": state.query_vector,
-            "query_text": state.question,
+            "query_text": state.search_question or state.question,
             "top_k": self._s.retrieval_top_k,
         }
         # Hybrid (D3): BM25 sparse alongside dense, fused server-side by RRF. Optional so
         # the pipeline still works dense-only (tests, or before a hybrid re-index).
         if self._sparse is not None:
             kwargs["sparse_vector"] = await asyncio.to_thread(
-                self._sparse.encode_query, state.question
+                self._sparse.encode_query, state.search_question or state.question
             )
         chunks = await self._store.search(**kwargs)  # type: ignore[arg-type]
         return replace(
@@ -341,9 +439,18 @@ class RagPipeline:
         t0 = time.perf_counter()
         try:
             ranked = await self._reranker.rerank(
-                query=state.question, chunks=state.chunks, top_k=self._s.rerank_top_k
+                query=state.search_question or state.question,
+                chunks=state.chunks,
+                top_k=self._s.rerank_top_k,
             )
         except RerankerError:
+            # METERED, not just logged. Skipping the reranker changes which passages
+            # ground the answer - it is a quality regression the user cannot see and the
+            # caller is never told about. A log line cannot be graphed or alerted on, so
+            # with RERANK_TIMEOUT below the reranker's own p95 this path became the NORMAL
+            # path while every dashboard stayed green. A degradation that publishes no
+            # signal is indistinguishable from working.
+            degradations_total.labels(component="reranker", reason="unavailable").inc()
             logger.warning("reranker unavailable; serving fusion order (quality degraded)")
             return state
         return replace(

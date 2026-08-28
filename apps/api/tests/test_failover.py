@@ -255,6 +255,15 @@ def test_all_known_venues_are_configurable() -> None:
     model = build_failover_model(
         _settings(
             serving_chain=",".join(KNOWN_VENUES),
+            # PINNED, not left to the default. This test is about VENUE coverage, and the
+            # URLs it sets are vllm_*, so a bare `runpod` leg has to resolve to the vLLM
+            # engine for the assertion to mean anything. It used to inherit whatever
+            # SERVING_ENGINE happened to be — and `_env_file=None` does NOT isolate that,
+            # because something in the import graph calls load_dotenv() and puts .env into
+            # os.environ, which pydantic-settings reads regardless. So the suite's result
+            # depended on the developer's own .env: switching the default to sglang made
+            # every GPU leg look for SGLANG_*_URL, find nothing, and be skipped.
+            serving_engine="vllm",
             vllm_runpod_url="http://runpod.test/v1",
             vllm_aws_url="http://aws.test/v1",
             openai_api_key="sk-test-not-real",

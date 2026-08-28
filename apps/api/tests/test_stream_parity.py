@@ -37,6 +37,7 @@ from medcore.schema import (
     AnswerKind,
     Citation,
     DoneEvent,
+    Message,
     SourcesEvent,
     StageTimings,
     Usage,
@@ -90,12 +91,19 @@ class _History:
     async def record_turn(self, session_id: UUID, **kw: Any) -> None:
         self.turns.append({"session_id": session_id, **kw})
 
+    async def load(self, session_id: UUID) -> list[Message]:
+        """Both query routes read history now, to condense follow-ups before retrieval.
+        The double returns nothing: these tests assert stream/non-stream PARITY, and a
+        double that invented turns would make the two paths differ for a reason that has
+        nothing to do with what is under test."""
+        return []
+
 
 class _Pipeline:
-    async def answer(self, question: str) -> Answer:
+    async def answer(self, question: str, history: Any = None) -> Answer:
         return GROUNDED
 
-    async def stream_answer(self, question: str):  # noqa: ANN201 - async generator
+    async def stream_answer(self, question: str, history: Any = None):  # noqa: ANN201 - async generator
         yield SourcesEvent(citations=GROUNDED.citations)
         yield DoneEvent(
             kind=GROUNDED.kind,

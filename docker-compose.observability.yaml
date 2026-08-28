@@ -63,17 +63,56 @@ services:
   # 15. Langfuse — the ONE sanctioned store for prompt/completion content (D18).
   # Everything else (app logs, OTel spans, metrics) carries only fingerprints, never the
   # question text, which is what makes this the single place to control for PII.
+  #
+  # VERSION 3, AND THE VERSION MATCH IS THE WHOLE POINT (INFRA-4). This ran `langfuse:2`
+  # against SDK 4.14.4 and recorded ZERO traces while looking perfectly healthy: the
+  # container was up, /api/public/health returned OK, the bootstrapped keys authenticated
+  # with HTTP 200 — and every span was silently discarded. The v3+ SDK ships over OTLP to
+  # /api/public/otel, which a v2 server does not implement, and llm_trace.py swallows
+  # exporter errors on purpose so a broken tracer cannot fail a medical answer. Correct
+  # behaviour, but it means a version mismatch has NO symptom other than an empty trace
+  # list. Pin BOTH sides or verify by counting traces; never infer it from a health check.
+  #
+  # v3 splits ingestion from serving, so it needs more than a database:
+  #   clickhouse  columnar store for spans/observations (Postgres keeps only metadata)
+  #   minio       S3-compatible blob store for raw event payloads
+  #   redis       ingestion queue  (db 1 — db 0 is the app cache, see REDIS_URL)
+  #   worker      drains the queue into ClickHouse; without it the UI stays empty
   langfuse:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:3
     ports:
       - "${LANGFUSE_WEB_PORT:-5015}:3000"
-    environment:
+    environment: &langfuse_env
       # Plain `postgresql://` — Langfuse is a Node app and does not know asyncpg.
       DATABASE_URL: postgresql://${POSTGRES_USER:-medbot}:${POSTGRES_PASSWORD:-medbot}@postgres:5432/${LANGFUSE_POSTGRES_DB:-langfuse}
       NEXTAUTH_URL: http://localhost:${LANGFUSE_WEB_PORT:-5015}
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-dev-secret-change-me}
       SALT: ${LANGFUSE_SALT:-langfuse-dev-salt-change-me}
+      # New and REQUIRED in v3: 64 hex chars (32 bytes). The server refuses to start
+      # without it, which is the one v3 setting that fails loudly rather than silently.
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # db 1, NOT db 0: the app cache lives in db 0 and Langfuse's queue keys would sit
+      # beside `medbot:*`, so a cache flush would eat un-ingested traces.
+      REDIS_DB: 1
+
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-minioadmin}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-minioadmin}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+
       # T5 — HEADLESS BOOTSTRAP. Langfuse creates the org, project, user AND pins the API
       # keys to the values below on first boot of an empty database. Because the API reads
       # those same two keys from .env, tracing works the moment the stack is up: no signup,
@@ -91,6 +130,64 @@ services:
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@medbot.local}
       LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-Medbot Admin}
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-medbot-admin-1234}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+
+  # 15b. The ingestion worker. The UI reads ClickHouse; only this process writes to it.
+  # Omit it and the stack looks completely healthy while every trace stops at the queue.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    environment: *langfuse_env
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-clickhouse}
+      # NOT CLICKHOUSE_SKIP_USER_SETUP=1. That flag skips applying CLICKHOUSE_PASSWORD,
+      # leaving `default` password-less while Langfuse still connects WITH the password:
+      # "Authentication failed: password is incorrect, or there is no user with such name"
+      # — after all 200+ Postgres migrations had already succeeded, so the failure looked
+      # like a Langfuse bug rather than a ClickHouse one.
+    volumes:
+      - langfuse_clickhouse:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      # wget, not curl: the ClickHouse image ships busybox wget and no curl.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  langfuse-minio:
+    image: minio/minio:latest
+    # `minio server` alone does not create the bucket, and Langfuse does not create it
+    # either — it assumes the bucket exists and fails ingestion if it does not.
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && exec minio server /data --address ":9000" --console-address ":9001"'
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${LANGFUSE_MINIO_CONSOLE_PORT:-5025}:9001"
+    volumes:
+      - langfuse_minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
   # 16. Jaeger — the distributed TRACE view (T8).
   #
@@ -149,6 +246,8 @@ services:
     restart: "no"
 
 volumes:
+  langfuse_clickhouse:
+  langfuse_minio:
   prom_data:
   grafana_data:
   redisinsight_data:

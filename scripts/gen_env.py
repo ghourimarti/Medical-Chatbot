@@ -101,10 +101,23 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "Cross-encoder. Dominates query latency",
                 "(S5.9).",
             )),
-            ("EMBED_TIMEOUT", "5.0", ("Seconds.",)),
-            ("RERANK_TIMEOUT", "2.0", (
-                "Seconds. On timeout the pipeline DEGRADES (skips rerank),",
-                "never fails.",
+            ("EMBED_TIMEOUT", "8.0", (
+                "Seconds. Was 5.0 against a measured p95 of 2.35s, which looks like",
+                "ample headroom until several queries arrive at once: ml-service runs",
+                "bge-large on CPU, so concurrency serialises and the 5s budget was",
+                "exceeded under a burst - a 503, because without a vector there is",
+                "nothing to retrieve.",
+            )),
+            ("RERANK_TIMEOUT", "4.0", (
+                "Seconds. On timeout the pipeline DEGRADES (skips rerank), never fails.",
+                "MEASURED, not guessed: this was 2.0 while the reranker's own p95 was",
+                "2.425s. A timeout BELOW the p95 of the thing it guards makes the",
+                "degraded path the NORMAL path - the cross-encoder was being skipped on",
+                "well over 5% of queries, silently serving fusion order instead of",
+                "reranked order, with every dashboard green.",
+                "The real fix is a GPU reranker; this only stops the fallback firing",
+                "as routine behaviour. Re-derive it from",
+                "medbot_stage_duration_seconds if the hardware changes.",
             )),
         )),
         ("RETRIEVAL — hybrid search + no-answer floor (D3)", "", (
@@ -124,7 +137,7 @@ TIERS: list[tuple[str, list[Section]]] = [
     ]),
     ("INFERENCE", [
         ("SERVING CHAIN — ordered failover preference (D4b)", "first reachable leg answers", (
-            ("SERVING_CHAIN", "local-vllm,local-sglang,groq", (
+            ("SERVING_CHAIN", "local-sglang,groq", (
                 "AN ORDERED PREFERENCE LIST. Comma-separated, tried left to right; a leg with",
                 "no URL or key is SKIPPED, so you can name venues before their accounts exist.",
                 "",
@@ -133,9 +146,11 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "  Engines:     vllm, sglang        (GPU venues only)",
                 "",
                 "  Examples:",
-                "    local-vllm,local-sglang,groq   self-host first, hosted as the safety net",
+                "    local-sglang,groq               THE DEFAULT: SGLang, hosted safety net",
+                "    local-vllm,groq                 vLLM instead",
+                "    local-vllm,local-sglang,groq    both engines - a REHEARSAL, not steady",
+                "                                    state: one GPU is one failure domain",
                 "    groq                            hosted only (no GPU needed)",
-                "    local-sglang,openai             SGLang first, OpenAI behind it",
                 "",
                 "WHY A LIST AND NOT PRIORITY NUMBERS: numbers split identity from order into",
                 "two places that can disagree, and inserting a leg means renumbering the rest.",
@@ -145,9 +160,14 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "a bad build) but NOT a dead GPU or a dead box — both legs share those.",
                 "Independence begins at the hosted legs, so keep one of them last.",
             )),
-            ("SERVING_ENGINE", "vllm", (
+            ("SERVING_ENGINE", "sglang", (
                 "Default engine for a chain entry that does NOT name one (`local` -> this).",
                 "Ignored by hosted venues: there is no engine of ours to choose.",
+                "Kept in step with the Makefile's ENGINE default on purpose: this value is",
+                "what applies when the stack is started WITHOUT `make` (a bare",
+                "`docker compose up`, or a container restart), and a disagreement there is",
+                "how a chain ends up naming an engine that is not running - every request",
+                "then pays a connect timeout on a dead leg before failing over.",
             )),
             ("CIRCUIT_FAILURE_THRESHOLD", "3", ("Consecutive failures before a leg is skipped.",)),
             ("CIRCUIT_COOLDOWN_SECONDS", "30", (
@@ -160,7 +180,19 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("VLLM_LOCAL_URL", "http://localhost:5009/v1", (
                 "MUST match VLLM_LOCAL_PORT. In-container the API uses http://vllm:8000/v1.",
             )),
-            ("VLLM_LOCAL_MODEL", "Qwen/Qwen2.5-7B-Instruct-AWQ", ("AWQ INT4 — fits a 12GB card.",)),
+            ("VLLM_LOCAL_MODEL", "Qwen/Qwen2.5-7B-Instruct-AWQ", (
+                "AWQ INT4 — fits a 12GB card. CHANGE IT HERE and nowhere else: this one",
+                "value is both the engine's --model argument AND the model name the API",
+                "puts in every OpenAI-compatible request.",
+                "RESTART BOTH SIDES, or they disagree:",
+                "    make down && make up-vllm",
+                "Restarting only the engine leaves the API asking for a model that is no",
+                "longer loaded -> 404 -> the leg fails -> failover to the HOSTED venue.",
+                "You then think you are benchmarking a self-hosted engine while paying",
+                "for every token. `make which-engine` and inspect_stack.py both check",
+                "that the two agree.",
+                "Bigger model = more VRAM: a 12GB card fits ~7B at INT4, not FP16.",
+            )),
             ("VLLM_GPU_MEMORY_UTILIZATION", "0.80", (
                 "Headroom for the KV cache at 8k context on",
                 "12GB.",
@@ -175,8 +207,11 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("SGLANG_LOCAL_PORT", "5010", ("Host port; the container listens on 30000.",)),
             ("SGLANG_LOCAL_URL", "http://localhost:5010/v1", ("MUST match SGLANG_LOCAL_PORT.",)),
             ("SGLANG_LOCAL_MODEL", "Qwen/Qwen2.5-7B-Instruct-AWQ", (
-                "Same weights as vLLM — one download, one cache",
-                "volume.",
+                "Same weights as vLLM — one download, one cache volume.",
+                "Same rule as VLLM_LOCAL_MODEL: change it here, then restart BOTH the",
+                "engine and the API (`make down && make up-sglang`). Keeping the two",
+                "engines on the SAME model is what makes a failover comparison mean",
+                "anything — different weights would compare models, not engines.",
             )),
             ("SGLANG_MEM_FRACTION", "0.45", (
                 "Deliberately lower than vLLM's 0.80: if BOTH engines run on one card they",
@@ -336,10 +371,18 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("OTEL_GRPC_PORT", "5012", ("OTLP/gRPC; container listens on 4317.",)),
             ("OTEL_ENDPOINT", "http://otel-collector:4318", ()),
             ("OTEL_SERVICE_NAME", "medbot-api", ("Stamped on every span.",)),
-            ("OTEL_SAMPLE_RATIO", "0.05", (
-                "HEAD sampling in the SDK. The interesting policy — keep 100% of errors and",
-                "slow requests — is TAIL sampling and lives in the Collector, because the app",
-                "must decide at span creation, before the outcome is known.",
+            ("OTEL_SAMPLE_RATIO", "1.0", (
+                "SDK HEAD sampling. Keep this at 1.0: the Collector does TAIL sampling, and",
+                "it can only decide about traces it actually receives.",
+                "",
+                "MEASURED at 0.05: Jaeger showed a 'trace' containing ONE span (rerank,",
+                "1205ms) with no parent HTTP span. Head sampling does not give you 5% of",
+                "whole traces — it drops individual spans and leaves ORPHAN FRAGMENTS, so",
+                "the collector's 'keep 100% of errors and slow requests' policy silently",
+                "cannot apply to what never arrived.",
+                "",
+                "Send everything, let the Collector decide. That is the entire point of",
+                "putting tail_sampling in otel-collector.yaml.",
             )),
         )),
         ("JAEGER — distributed trace UI", "http://localhost:5023", (
@@ -399,6 +442,16 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("LANGFUSE_INIT_USER_PASSWORD", "medbot-admin-1234", ("SECRET (local dev value).",)),
             ("LANGFUSE_NEXTAUTH_SECRET", "langfuse-dev-secret-change-me", ("SECRET.",)),
             ("LANGFUSE_SALT", "langfuse-dev-salt-change-me", ("SECRET.",)),
+            ("LANGFUSE_ENCRYPTION_KEY", "0" * 64, (
+                "SECRET. Required by Langfuse v3: exactly 64 hex chars (32 bytes).",
+                "Generate: openssl rand -hex 32",
+            )),
+            # v3 splits ingestion from serving, so Langfuse needs its own columnar store
+            # and blob store. These back the trace pipeline, not the app.
+            ("LANGFUSE_CLICKHOUSE_PASSWORD", "clickhouse", ("SECRET (local dev value).",)),
+            ("LANGFUSE_MINIO_ROOT_USER", "minioadmin", ()),
+            ("LANGFUSE_MINIO_ROOT_PASSWORD", "minioadmin", ("SECRET (local dev value).",)),
+            ("LANGFUSE_MINIO_CONSOLE_PORT", "5025", ("MinIO console UI.",)),
         )),
         ("REDISINSIGHT — Redis GUI, databases pre-registered", "http://localhost:5022", (
             ("REDISINSIGHT_PORT", "5022", ()),
@@ -539,6 +592,10 @@ FILL_IF_EMPTY = {
     "LANGFUSE_INIT_USER_PASSWORD",
     "LANGFUSE_NEXTAUTH_SECRET",
     "LANGFUSE_SALT",
+    "LANGFUSE_ENCRYPTION_KEY",
+    "LANGFUSE_CLICKHOUSE_PASSWORD",
+    "LANGFUSE_MINIO_ROOT_USER",
+    "LANGFUSE_MINIO_ROOT_PASSWORD",
     "SESSION_SECRET",
     # An empty OTEL_ENDPOINT means spans are created and exported NOWHERE. Jaeger then
     # shows an empty trace list forever while every container reports healthy — the

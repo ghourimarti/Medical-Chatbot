@@ -12,6 +12,7 @@ of a serving index.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 
@@ -19,6 +20,8 @@ from qdrant_client import AsyncQdrantClient, models
 
 from medcore.errors import RetrievalError
 from medcore.schema import RetrievedChunk
+
+logger = logging.getLogger("medapi.vector_store")
 
 # Qdrant point IDs must be uint or UUID. Our chunk IDs are content hashes (strings), so we
 # derive a STABLE UUID from each and keep the original id in the payload. uuid5 is
@@ -208,6 +211,70 @@ class QdrantVectorStore:
                 return entry.collection_name
         return None
 
+    async def prune_superseded(
+        self, alias: str, *, keep: int = 1, prefix: str | None = None
+    ) -> list[str]:
+        """Delete versioned collections the alias no longer points at, keeping `keep`.
+
+        I3.7: a re-ingest builds `gale_live_vN`, repoints the alias, and left every
+        previous collection in place FOREVER - five stale copies of a 7,080-chunk
+        corpus were sitting in Qdrant at ~29MB each, growing without bound on a
+        schedule nobody watches. Storage is the visible cost; the real one is that
+        `GET /collections` becomes unreadable, so the question the D11 design exists
+        to answer - WHICH collection is live? - gets harder every time you re-index.
+
+        Keeping exactly one previous version is deliberate, not a compromise:
+        rollback is then a single alias operation with no re-ingest, which is the
+        whole reason the alias indirection exists. Keeping ALL of them buys nothing
+        beyond that - you would never roll back four versions to a corpus you have
+        since re-cut twice.
+
+        NEVER deletes the live target, and never deletes anything when the alias
+        cannot be resolved: an unresolvable alias means we do not know what is live,
+        and deleting collections in that state is how a re-index becomes an outage.
+        Returns the names actually removed, so the caller can log them.
+        """
+        live = await self.resolve_alias(alias)
+        if live is None:
+            logger.warning(
+                "alias %s does not resolve; pruning NOTHING", alias
+            )
+            return []
+
+        stem = prefix or f"{alias}_v"
+        try:
+            existing = await self._client.get_collections()
+        except Exception:  # noqa: BLE001 - housekeeping must not fail an ingest
+            logger.warning("could not list collections; skipping prune", exc_info=True)
+            return []
+
+        # Newest first. The suffix is a unix timestamp, so lexical order on a
+        # fixed-width number is chronological - but sort on the parsed integer
+        # anyway, because a width change would silently reverse the meaning of
+        # 'newest' and start deleting the wrong end.
+        def _version(name: str) -> int:
+            tail = name[len(stem):]
+            return int(tail) if tail.isdigit() else -1
+
+        candidates = sorted(
+            (c.name for c in existing.collections
+             if c.name.startswith(stem) and c.name != live),
+            key=_version,
+            reverse=True,
+        )
+
+        removed: list[str] = []
+        for name in candidates[keep:]:
+            try:
+                await self._client.delete_collection(name)
+                removed.append(name)
+            except Exception:  # noqa: BLE001
+                logger.warning("could not delete %s; leaving it", name, exc_info=True)
+        if removed:
+            logger.info(
+                "pruned %d superseded collection(s): %s", len(removed), ", ".join(removed)
+            )
+        return removed
     async def delete_collection(self, collection: str) -> None:
         await self._client.delete_collection(collection)
 

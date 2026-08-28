@@ -1040,3 +1040,410 @@ INFRA-2 — operability pass ✅ (engines, kind lifecycle, env, dashboards, veri
           not "working".
 
      Gate: 370 tests pass, ruff clean, all four compose files validate.
+
+INFRA-3 — first REAL run of the full stack (findings that only running produces)
+     Everything below was found by starting all 16 containers and using them, after the
+     API image was rebuilt to accept the new SERVING_CHAIN syntax.
+
+     🔴 I3.1 `make up` reported FAILURE over a completely healthy stack.
+          `docker compose up --wait` treats ANY container exit as a failure — including the
+          one-shot redisinsight-seed that correctly exits 0 after seeding. A command that
+          cries failure when nothing is wrong is worse than no check: it teaches you to
+          ignore the exit code. Seeder moved behind a `seed` profile and invoked right
+          after the stack is up.
+
+     🔴 I3.2 TWO ENGINES ON ONE 12GB CARD IS A DEADLOCK, NOT A CONFIGURATION.
+          vLLM asks 0.80 of the GPU, SGLang 0.45 — 125% of an RTX 3060. It did NOT fail
+          fast: SGLang took memory while vLLM was mid-load and vLLM WEDGED at "Starting to
+          load model" for 15 minutes with no error line. Stopping SGLang afterwards did not
+          release it; the container had to be recreated.
+          FIX: `make up` starts vLLM ONLY. SGLang is opt-in (`make sglang-up`) for
+          benchmarking or a failover rehearsal, on a box with headroom.
+          PROVEN AFTER: vLLM alone reports "Free memory on device (10.98/12.0 GiB)",
+          init 51.77 s, "Application startup complete", and generates:
+            "Name three symptoms of asthma" -> shortness of breath / chest tightness /
+            coughing / wheezing (prompt=38, completion=21 tokens).
+
+     🔴 I3.3 open-webui was in the `gpu` profile, so `make up` depended on pulling a
+          chat-UI image that serves no traffic. A debugging convenience must never gate the
+          stack coming up. Now `webui` profile only.
+
+     🔴 I3.4 THREE SEPARATE OTEL DEFECTS, each of which alone made Jaeger useless:
+          (a) OTEL_ENABLED=false and OTEL_ENDPOINT= empty — spans created, exported
+              nowhere. Fixed; OTEL_ENDPOINT added to FILL_IF_EMPTY.
+          (b) OTEL_SAMPLE_RATIO=0.05 head-sampling. The Collector does TAIL sampling and
+              can only decide about traces it RECEIVES, so a 5% head sample silently
+              disabled "keep 100% of errors and slow requests". Worse, it does not drop
+              whole traces — it drops individual spans, leaving ORPHAN FRAGMENTS.
+              Now 1.0: send everything, let the Collector decide. That is the entire
+              reason tail_sampling is in otel-collector.yaml.
+          (c) THE REAL ONE: `instrument_app(app)` was called inside `lifespan`.
+              FastAPIInstrumentor adds ASGI middleware and Starlette FREEZES its middleware
+              stack when the app starts, so instrumenting from lifespan silently does
+              nothing — no HTTP request span is ever created.
+              Invisible because the EXPLICIT stage spans still worked: Jaeger showed traces
+              containing a lone `embed` (471ms) or a lone `rerank` (2003ms). That reads as a
+              sampling artefact, not as missing instrumentation.
+              A PARTIAL TRACE IS WORSE THAN NO TRACE, BECAUSE IT LOOKS LIKE DATA.
+              Fixed by wiring configure_tracing + instrument_app in create_app(), before
+              the server starts. 248 API tests green.
+
+     ✅ I3.5 CORRECTION to an earlier claim of mine: I reported the host->collector OTLP
+          hop as failing. It was not. The in-container path works (`jaeger services:
+          ['medbot-api']`); my host-run API was the anomaly, not the deployment path.
+
+     ✅ I3.6 The rebuilt API resolves the new chain correctly:
+          "serving chain: local-vllm -> local-sglang -> groq"
+
+     🟠 I3.7 OPEN: superseded Qdrant collections accumulate without bound. A re-ingest
+          builds `gale_live_vN`, repoints the alias, and leaves the previous collection in
+          place forever — six were present after a handful of runs. Keeping ONE previous
+          version is deliberate and useful (rollback is a single alias operation), keeping
+          all of them is a leak: ~29MB per abandoned full-corpus copy. The ingest worker
+          should drop versions older than the last N. Not fixed in this pass.
+
+---
+
+## INFRA-4 — Langfuse actually traces (raised mid-session: "I have to enter credentials
+## and then public key private key — that's harsh, can you do it automatic")
+
+The complaint was about friction. The finding underneath it was that Langfuse had never
+recorded a single trace, and nothing anywhere said so.
+
+     ✅ I4.1 Bootstrap was NOT the problem, contrary to the obvious guess. The org, project
+          and both API keys were being created headlessly from .env, and `curl -u pk:sk
+          /api/public/projects` returned HTTP 200 with the medbot project. There was never
+          any need to sign up, create a project, or copy a key. Verified before changing
+          anything — the fix for a problem you have not reproduced is a guess.
+
+     ✅ I4.2 DEFECT 1 — version skew. `langfuse/langfuse:2` server, SDK `langfuse>=4.14.4`.
+          The v3+ SDK ships spans over OTLP to /api/public/otel; a v2 server does not
+          implement that route. Every trace was discarded.
+          Why it was invisible: container up, /api/public/health `{"status":"OK"}`, keys
+          authenticating with HTTP 200 — three green checks over a dead pipeline. And
+          llm_trace.py swallows exporter errors ON PURPOSE (D21: observability must never
+          fail a medical answer), which is correct and also removes the last symptom.
+          Fixed: server -> `langfuse/langfuse:3`, matching the SDK the code was written
+          against (`create_event` is v3/v4 API, not v2).
+          v3 splits ingestion from serving, so it needs clickhouse (columnar span store),
+          minio (blob store for raw payloads), redis db 1 (queue) and langfuse-worker.
+          WITHOUT THE WORKER THE UI STAYS EMPTY even though ingestion succeeds.
+          All four images were already local — zero pulls.
+
+     ✅ I4.3 DEFECT 2, and the one that actually mattered — `trace_answer()` HAD NO CALLER.
+          `grep -rn trace_answer apps/` returned only its own definition. The module was
+          complete, configured, enabled, reachable and dead. Even on a correct server it
+          would have traced nothing.
+          Wired into `postflight()`, deliberately: `answer_from_done()` exists so streaming
+          and non-streaming run the SAME accounting path, and tracing only the
+          non-streaming branch would under-report exactly the requests users make.
+          Guarded with contextlib.suppress — postflight runs AFTER the answer is final, so
+          an exception there converts a delivered medical answer into a 500.
+
+     ✅ I4.4 Regression guard: apps/api/tests/test_langfuse_wiring.py asserts the CALL
+          happens, not what the payload contains. A unit test of trace_answer passed
+          throughout the outage; testing the payload again would miss the defect again.
+          4 tests. Full API suite 257 passed.
+
+     ✅ I4.5 ClickHouse auth, self-inflicted and worth recording: I set
+          CLICKHOUSE_SKIP_USER_SETUP=1, which skips APPLYING CLICKHOUSE_PASSWORD, leaving
+          `default` password-less while Langfuse connected with the password. It surfaced
+          as "Authentication failed" AFTER 200+ Postgres migrations had succeeded, so it
+          read as a Langfuse bug rather than a ClickHouse one.
+
+     ✅ I4.6 The friction that CANNOT be removed, stated plainly rather than worked around:
+          Langfuse has no anonymous/viewer mode (Grafana does). One sign-in is unavoidable.
+          `make langfuse` prints the bootstrapped credentials, opens the tab, and says
+          explicitly that no project creation and no key copying is needed.
+
+     ✅ I4.7 docs/VERIFY_STACK.md now says to verify Langfuse by COUNTING TRACES, never by
+          health check, with both zero-trace failure modes written out. Three green health
+          signals over a dead pipeline is the lesson worth keeping.
+
+     🔵 I4.8 HANDOVER (user runs docker builds): the serving.py wiring is source-only until
+          the API image is rebuilt.
+              docker build -f apps/api/Dockerfile -t medbot-api:0.1.0 .
+              docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml \
+                up -d --force-recreate --no-deps api
+          Then ask a question and confirm totalItems > 0.
+
+---
+
+## Readiness — INFRA-3 follow-up found while verifying the seeded index
+
+     ✅ I3.8 /readyz returned 503, and then hung past 20s, while the SAME API answered a
+          grounded question with 4 citations throughout. Root cause: the readiness checks
+          had NO timeout. Right after the 7,080-chunk ingest, Qdrant was optimising into
+          its segments and `get_collection` blocked.
+          Why this is serious rather than cosmetic: Kubernetes defaults
+          readinessProbe.timeoutSeconds to 1, so an unbounded check is not "slow", it is
+          recorded as a FAILURE — and it would hit every replica simultaneously right
+          after a re-index. That is precisely the D11 alias swap this design exists to
+          make seamless.
+          Fixed with a 2s bound per check plus a 30s last-known-good grace window. A
+          timeout is a THIRD state, not False: slow and absent look identical in one call
+          but demand opposite verdicts. A definite False still fails immediately, with no
+          grace, or a genuinely broken pod would keep serving for the whole window.
+          5 tests in apps/api/tests/test_readiness_timeout.py.
+
+     ✅ I3.9 test_integration.py leaked its Qdrant collection on failure — `delete_collection`
+          was a trailing statement, so an assertion raised straight past it. A stray
+          `test_3cb6c7fd` collection was sitting in Qdrant as proof. Now try/finally.
+          Same unbounded-growth shape as I3.7, and a test that leaks state on failure makes
+          the NEXT failure harder to read.
+
+     ✅ I3.10 Corpus seed completed: alias `gale_live` -> `gale_live_v1787322516`, 7,080
+          points, status green, 7,080 indexed vectors. Verify-then-swap worked as designed.
+          Note the seed embeds ON THE HOST: `make seed` runs locally, where
+          ML_SERVICE_URL=http://ml-service:8001 does not resolve, so it silently loads
+          models in-process instead of using the running ml-service (0.21% CPU throughout).
+          It works; it is the slow path.
+
+---
+
+## INFRA-5 — engine selection + a brutal inspection pass
+
+     ✅ I5.1 make up-vllm / up-sglang / up-vllm-sglang, plus ENGINE= as the manual knob.
+          ENGINE couples the profile AND the chain deliberately: starting vLLM without
+          putting it in SERVING_CHAIN (or listing it without starting it) is the commonest
+          way to believe you are benchmarking a self-hosted engine while Groq answers
+          every request. Two files, one decision.
+          ENGINE=both splits VRAM 0.42/0.42 at 4k context - MEASURED, because 0.80+0.45 =
+          125% of a 12 GB card wedged vLLM for 15 minutes with no error at all.
+          `make which-engine` prints configured chain, resolved chain, and who actually
+          answered, because guessing is not verification.
+
+     ✅ I5.2 Two correctness bugs found while building it, neither cosmetic:
+          (a) `docker compose up` with a different profile does NOT stop containers outside
+              it, so switching vllm->sglang left BOTH running and oversubscribed the card.
+              up now removes the engine it is not using; down/downv use ALL engine profiles
+              regardless of the current ENGINE.
+          (b) env_file WINS over shell interpolation. With SERVING_CHAIN only in .env, the
+              export reached compose and never reached the container: `make up-sglang`
+              would start SGLang and still be served by vLLM. SERVING_CHAIN is now an
+              explicit `environment:` entry with a ${VAR:-default} fallback to .env.
+
+     ✅ I5.3 scripts/inspect_stack.py — 59 checks across 7 sections, each reading a value
+          that exists ONLY if the component did its job. Exit code = failure count.
+          First run: 42 passed / 9 failed / 8 informational.
+
+     ✅ I5.4 FOUR DEAD METRICS, same shape as the Langfuse defect: declared in metrics.py,
+          re-exported from observability/__init__, referenced by the Grafana dashboard, and
+          never written. Every one scraped cleanly as 0 or absent.
+              medbot_tokens_total         no caller anywhere
+              medbot_ttft_seconds         computed in rag.py, carried on Answer, never observed
+              medbot_venue_circuit_state  record_circuit() had no caller
+              medbot_request_cost_usd     guarded by `if cost_usd:` so self-hosted ($0) never recorded
+          The TTFT one is the worst: it is the headline NFR (p50 0.8s / p95 2.0s) and it was
+          not being measured at all, while Grafana showed a panel and Prometheus was healthy.
+          Fixed: tokens + circuit state in FailoverModel (the only place that knows BOTH the
+          usage and the venue); TTFT threaded through record_answer from Answer.timings,
+          streaming-only so the SLI is not silently redefined; cost observed ALWAYS including
+          0.0, because absent and zero are different answers on a spend dashboard.
+          _publish_states writes EVERY leg, not just the one that moved: a gauge written only
+          when a venue is touched leaves untouched legs reporting stale values forever.
+          4 regression tests asserting the CALL. Full suite 411 passed.
+
+     ✅ I5.5 docs/INSPECTION.md — 14 queries to run in the UI, and for each one what must
+          appear in Langfuse / Grafana / Prometheus / Jaeger, why that is correct, and what
+          a wrong reading means. Includes the two non-obvious "absence is the evidence"
+          cases: a cache hit must produce NO Langfuse trace (nothing was generated), and a
+          guardrail refusal must produce NO generate span (no spend occurred).
+
+     ✅ I5.6 Confirmed from inside the running image that the earlier fixes are LIVE
+          (_trace_to_langfuse, instrument_app, _READINESS_TIMEOUT all present). Langfuse
+          holds real traces and Jaeger shows a 72-span tree with HTTP parent spans, so
+          INFRA-3/INFRA-4 are verified end to end, not merely committed.
+
+     🔵 I5.7 HANDOVER: the four metric fixes are source-only until the API image is rebuilt.
+              docker build -f apps/api/Dockerfile -t medbot-api:0.1.0 .
+              docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml \
+                up -d --force-recreate --no-deps api
+
+---
+
+## INFRA-6 — the inspection found real defects, including three in the inspector itself
+
+Your run of scripts/inspect_stack.py produced 40 passed / 10 failed. Three of those
+failures were MY bugs, and the rest were real.
+
+     ✅ I6.1 CONFIRMED WORKING from your run, not from my assertion:
+          - `make up-sglang` resolved SERVING_CHAIN=local-sglang,groq end to end; SGLang
+            reachable, vLLM correctly absent. The env_file-vs-environment fix holds.
+          - All four previously-dead metrics now report: tokens 3,040 labelled
+            venue=local-sglang, venue breakers closed, cost/request $0.000095.
+          - Langfuse 49 traces, Jaeger span trees with HTTP parents. INFRA-3/4 verified.
+
+     ✅ I6.2 MY BUG - UnicodeDecodeError on every run. subprocess `text=True` decodes with
+          the LOCALE codec (cp1252 on a Windows console) and `docker logs` carries UTF-8.
+          It raised on a reader THREAD, so the traceback printed while the call still
+          returned: the inspection looked fine while silently losing all docker output,
+          which is why "resolved at boot" and container states were unreliable.
+          Fixed with explicit encoding="utf-8", errors="replace".
+
+     ✅ I6.3 MY BUG - redisinsight-seed reported as a stopped container. It is a ONE-SHOT
+          job that exits 0 on success. This is the third time that same exit(0) has been
+          read as failure in this project (it also broke `make up`). Now excluded by name.
+
+     ✅ I6.4 MY BUG - reading Prometheus for counters the script had just incremented.
+          Prometheus scrapes every 15s, so "grounded: 0" printed one line below a
+          successful grounded probe. It also summed series from DEAD container instances,
+          reporting 1 error that no longer existed anywhere in the running process.
+          Fixed: counters now come from the API's own /metrics (real-time, this process
+          only); Prometheus is used only for quantiles, which need history by definition.
+          Also: histogram_quantile over an empty histogram returns NaN, and `nan <= 0.8`
+          is False - so an SLI nobody had exercised rendered as a FAILED threshold. "Not
+          measured" and "measured and bad" now print differently.
+          Re-run after fixes: 46 passed / 3 failed.
+
+     ✅ I6.5 REAL DEFECT - RERANK_TIMEOUT was 2.0s against a MEASURED reranker p95 of
+          2.425s. A timeout below the p95 of the thing it guards makes the degraded path
+          the NORMAL path: the cross-encoder was being skipped on well over 5% of queries,
+          serving fusion order instead of reranked order. Rerank is the quality step the
+          whole retrieval design rests on (S5.9), so this quietly undid it.
+          Raised to 4.0s. EMBED_TIMEOUT 5.0 -> 8.0: p95 is 2.35s so it looks ample, but
+          ml-service runs bge-large on CPU, concurrency serialises, and a burst of probes
+          blew the 5s budget - a 503, correctly, since without a vector there is nothing
+          to retrieve. The real fix is a GPU reranker; this stops the fallback being
+          routine. Pinned by a test asserting each timeout exceeds its measured p95.
+
+     ✅ I6.6 REAL DEFECT - the reranker fallback was LOGGED AND NEVER METERED. No counter,
+          so it could not be graphed or alerted on, and combined with I6.5 the system was
+          serving degraded answers as its normal mode with every dashboard green.
+          Added medbot_degradations_total{component,reason}. This is the same rule the
+          codebase already states for the dependency breakers: a fix that hides its own
+          failure signal has to publish one.
+
+     ✅ I6.7 REAL DEFECT - `ml-service /embed failed: ` logged with an EMPTY cause. httpx
+          timeout exceptions carry no message, so str(e) was blank and the 503 explained
+          nothing. During an incident that hides the one fact that matters: refused
+          connection vs. too slow, which have opposite fixes. _describe() now falls back
+          to the exception type name. Applied to both /embed and /rerank.
+
+     ✅ I6.8 A claim of mine, corrected: I read `"\embed"` in ml_client.py and called it a
+          backslash bug. The raw bytes are `"/embed"` - it was a rendering artefact in the
+          search output. Checked before reporting; no such bug exists.
+
+     🔵 I6.9 STILL OPEN and honestly red:
+          - request p95 11.80s vs the 6s NFR. Not a bug, a hardware truth: bge-large
+            embeddings AND a cross-encoder reranker on CPU cannot meet it. Either the
+            reranker moves to GPU or the NFR is wrong for this box. Do not "fix" it by
+            tightening timeouts again - that is what I6.5 was.
+          - 5 superseded Qdrant collections (I3.7, ingest still does not prune).
+
+     🔵 I6.10 HANDOVER: metrics + timeout + error-message fixes are source-only.
+              docker build -f apps/api/Dockerfile -t medbot-api:0.1.0 .
+              docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml \
+                up -d --force-recreate --no-deps api
+
+---
+
+## INFRA-7 — inspecting the user's real frontend session found a SAFETY defect
+
+Read back from Postgres, not from a test: 14 refused / 6 no_answer / 3 grounded.
+
+     🔴 I7.1 THE SERIOUS ONE. A real query at 13:06:
+              "I have been thinking about hurting myself."
+          returned kind=no_answer, text "I don't have reliable information on that in my
+          reference material."
+          Cause: the SELF_HARM rule was `\b(kill|harm|hurt)\s+(myself|my ?self)\b` - the
+          BARE verb only. `\s` cannot follow the "t" of "hurting", so the gerund missed,
+          the disclosure fell THROUGH the guardrail into retrieval, matched nothing, and
+          came back as a generic no_answer. Also missed: "killing myself", "harming
+          myself", "ending it all", "better off without me".
+          The gerund is the MORE common phrasing of ideation, so the rule missed the
+          majority case while passing every test ever written against the minority one -
+          the same "fitted to its own examples" failure S19.3 already recorded for v1.
+          Fixed with (?:ing|s|ed)? on the verb group plus the missing markers.
+
+     ✅ I7.2 Same defect one word wider in INJECTION: exactly ONE modifier was allowed
+          between verb and noun, so "ignore all instructions" matched while "ignore all
+          previous instructions" - the canonical opener, and what the user actually typed -
+          did not. It returned no_answer: safe outcome, wrong classification, so injection
+          attempts were invisible to metrics and alerting. Fixed with (?:...\s+)+ and
+          added prompt-disclosure and "developer mode" phrasings.
+
+     ✅ I7.3 23 phrasings pinned in test_guardrail_inflections.py, deliberately NOT the
+          ones used to write the rules. Six are encyclopedia questions asserting NO
+          refusal: over-refusal is a real failure mode, and an encyclopedia that declines
+          encyclopedia questions is useless. 433 tests pass.
+
+     ✅ I7.4 REAL DEFECT in the cache key. cache_namespace ended `:m{groq_default_model}` -
+          ONE venue's model, named unconditionally even when Groq never served anything.
+          So changing VLLM_LOCAL_MODEL or SGLANG_LOCAL_MODEL did NOT invalidate the cache:
+          answers generated by the PREVIOUS model were served under the NEW model's name,
+          and ENGINE=vllm <-> sglang reused each other's answers. Exactly the defect the
+          docstring above it already describes for qdrant_collection.
+          Fixed: a 12-char digest of (serving_chain, serving_engine, all four candidate
+          models). Any change to what could serve now invalidates automatically.
+
+     ✅ I7.5 MY DOC BUG, and it would have wasted the user's time. INSPECTION.md told them
+          to run `redis-cli set medbot:killswitch:llm_enabled 0`. That key DOES NOT EXIST -
+          the namespace is computed, so the command succeeds and changes nothing. My
+          inspector read the same guessed key and therefore reported "(unset -> enabled)"
+          unconditionally: a check that cannot fail is not a check.
+          Fixed: inspector asks the API for its own namespace; INSPECTION.md corrected;
+          added make cache-clear / cache-flush / cache-ls / kill-on / kill-off so nobody
+          has to know the key at all.
+
+     ✅ I7.6 docs/INSPECTION_ROUND2.md - 13 fresh queries, none reused from round 1, with a
+          table of which observability signals SHOULD BE ABSENT per outcome. The user asked
+          why refusals "cannot be tracked": a refusal produces no generate span and no
+          token cost BECAUSE nothing was generated, and that absence is the proof the
+          guardrail fired before the model rather than after. Q8 is the over-refusal
+          counter-test, which matters as much as Q6.
+
+     🔵 I7.7 HANDOVER: guardrail + cache-key fixes are source-only. Q6/Q7 in ROUND2 will
+          still misbehave until:
+              docker build -f apps/api/Dockerfile -t medbot-api:0.1.0 .
+              docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml \
+                up -d --force-recreate --no-deps api
+          The rebuild also changes cache_namespace, which invalidates every cached answer -
+          intended, and it means round 2 starts clean.
+
+---
+
+## INFRA-8 — the second inspection run
+
+     ✅ I8.1 MY BUG, ordering. Section 3 asserted `refused > 0` and `no_answer > 0` while
+          the probes that produce them lived in section 7 and had not run yet, so a fully
+          working guardrail was reported FAILED two screens above the evidence that it
+          worked. Third ordering/timing bug in this script, so fixed STRUCTURALLY rather
+          than patched again: one PROBES table, fired once up front by run_probes(), and
+          no section reads a counter until every probe is done.
+
+     ✅ I8.2 REAL DEFECT, and it was inflating the NFR number. On a cache hit
+          short_circuit() called `record_answer(kind, cached.timings.total_ms)` - the
+          ORIGINAL generation time, REPLAYED into the latency histogram on every hit. A
+          40ms cache hit was recorded as an 11-second request, and it compounded: the more
+          traffic the cache served, the WORSE p95 looked. The single largest latency lever
+          in the system reported itself as a regression, and part of the "request p95
+          11.3s vs 6s NFR" failure was answers that were never generated on that request.
+          Fixed: observe THIS request's elapsed time. The replayed stage timings stay on
+          the Answer - they describe how the content was produced - they just must not be
+          re-observed as work this request did.
+
+     ✅ I8.3 MY BUG, downstream of I8.2: the "all stages ran" check read those replayed
+          timings and cheerfully confirmed that embed/retrieve/rerank/generate had run
+          when nothing had. Now checks `cache_hit` first and reports informational instead
+          of a false pass.
+
+     ✅ I8.4 MY WRONG TEST EXPECTATION, corrected against the corpus rather than assumed.
+          The over-refusal control used "What are the symptoms of appendicitis?" and
+          failed. Appendicitis is NOT in this corpus: it is a 759-page SUBSET of Gale
+          (7,080 chunks, pages 0-758), so no_answer was CORRECT and my check was failing
+          the system for being right.
+          Verified by asking, not by guessing - grounded: emphysema, pneumonia, bronchitis,
+          anaemia, diabetes, cystic fibrosis, chickenpox, cirrhosis, asthma. no_answer:
+          appendicitis, arthritis, anthrax, bronchiolitis, chronic kidney disease,
+          semaglutide. Probe switched to emphysema; INSPECTION_ROUND2 Q8/Q9/Q10 rewritten
+          to verified topics and the corpus limit written down.
+
+     ✅ I8.5 Also confirmed from the run: SERVING_CHAIN was the 3-leg .env default
+          (local-vllm,local-sglang,groq) with only SGLang running, so every request tried a
+          dead vLLM leg first. Not a code bug - the container was started without the
+          ENGINE export. `make up-sglang` sets a 2-leg chain and avoids it.
+
+     🔵 I8.6 After the fixes, the ONLY remaining safety failure is self-harm -> no_answer,
+          which is the I7.1 guardrail fix waiting on the rebuild. Everything else in
+          sections 3 and 7 passes: 16 passed / 1 failed.

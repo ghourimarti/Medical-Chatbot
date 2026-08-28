@@ -86,6 +86,27 @@ request_cost = Histogram(
     registry=REGISTRY,
 )
 
+refusals_total = Counter(
+    "medbot_refusals_total",
+    "Guardrail refusals BY CATEGORY - the safety signal, not just the count",
+    labelnames=("category",),  # emergency|self_harm|dosage|diagnosis|injection|...
+    registry=REGISTRY,
+)
+
+no_answers_total = Counter(
+    "medbot_no_answers_total",
+    "Declines by WHICH gate produced them - the two paths cost different money",
+    labelnames=("path",),  # retrieval_gate (free) | model_abstained (full prompt)
+    registry=REGISTRY,
+)
+
+degradations_total = Counter(
+    "medbot_degradations_total",
+    "Times the pipeline silently served a WORSE answer rather than failing",
+    labelnames=("component", "reason"),
+    registry=REGISTRY,
+)
+
 venue_state = Gauge(
     "medbot_venue_circuit_state",
     "Serving-venue circuit breaker (0=closed, 1=half_open, 2=open) — D4b failover health",
@@ -115,11 +136,48 @@ def record_stage(stage: str, milliseconds: float | None) -> None:
         stage_duration.labels(stage=stage).observe(milliseconds / 1000.0)
 
 
-def record_answer(kind: str, total_ms: float, cost_usd: float = 0.0) -> None:
+def record_answer(
+    kind: str,
+    total_ms: float,
+    cost_usd: float = 0.0,
+    ttft_ms: float | None = None,
+    refusal_category: str | None = None,
+    no_answer_path: str | None = None,
+) -> None:
     answers_total.labels(kind=kind).inc()
+
+    # WHICH safety rule fired, not merely that one did. `answers_total{kind="refused"}`
+    # cannot tell an emergency from a dosage question, so a guardrail that silently
+    # stopped matching would look identical to one nobody triggered - which is exactly
+    # how the self-harm rule shipped broken (I7.1): every gerund phrasing fell through to
+    # retrieval and returned a no_answer, and no counter moved to say so.
+    if refusal_category:
+        refusals_total.labels(category=refusal_category).inc()
+
+    # The two decline paths cost different money and mean different things:
+    #   retrieval_gate   nothing scored above threshold; the model was never called
+    #   model_abstained  retrieval cleared the gate, the model read a full prompt and
+    #                    said it had nothing - ~1,000 prompt tokens to say "I don't know"
+    # Collapsed into one counter, a rising bill from adjacent-but-absent questions is
+    # invisible.
+    if no_answer_path:
+        no_answers_total.labels(path=no_answer_path).inc()
     request_duration.labels(outcome=kind).observe(total_ms / 1000.0)
-    if cost_usd:
-        request_cost.observe(cost_usd)
+
+    # ALWAYS observed, including 0.0. The old `if cost_usd:` guard skipped every
+    # self-hosted request, because a local venue costs $0 by construction — so the one
+    # configuration this project actually runs recorded NO cost samples at all, and the
+    # "cost/request" panel read "No data" rather than the true and useful "$0.000000".
+    # Absent and zero are different answers; a spend dashboard must not confuse them.
+    request_cost.observe(cost_usd)
+
+    # TTFT is the perceived-latency SLI and the headline NFR (p50 0.8s / p95 2.0s). It was
+    # computed in the pipeline, carried on Answer.timings, exported from this module — and
+    # never observed, so the metric existed with count 0 and the NFR was unmeasurable.
+    # Streaming only: on a non-streaming call there is no "first token" to time, and
+    # feeding total_ms in as a substitute would quietly redefine the SLI.
+    if ttft_ms is not None:
+        ttft.observe(ttft_ms / 1000.0)
 
 
 def record_circuit(venue: str, state: str) -> None:

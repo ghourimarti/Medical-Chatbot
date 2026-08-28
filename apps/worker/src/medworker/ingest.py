@@ -135,6 +135,19 @@ async def ingest_corpus(
 
     await store.ensure_alias(alias, target)
     logger.info("alias %s -> %s (%s chunks)", alias, target, actual)
+
+    # AFTER the swap, never before: the alias must already point at the new collection,
+    # so a crash here leaves extra collections (harmless, and the next run cleans them)
+    # rather than deleting something still serving traffic.
+    #
+    # I3.7: without this, every re-ingest left its predecessor behind forever - five
+    # stale copies of the corpus at ~29MB each. Keeping ONE previous version is what
+    # makes rollback a single alias operation, which is the entire point of the D11
+    # indirection; keeping all of them just makes `GET /collections` unreadable.
+    pruned = await store.prune_superseded(alias, keep=1)
+    if pruned:
+        logger.info("pruned %d superseded collection(s): %s", len(pruned), ", ".join(pruned))
+
     await store.close()
     await probe.close()
 

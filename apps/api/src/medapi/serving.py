@@ -20,6 +20,8 @@ control added later cannot be added to one endpoint and forgotten in the other.
 
 from __future__ import annotations
 
+import contextlib
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -34,12 +36,14 @@ from medapi.observability import (
     cache_events,
     fingerprint,
     get_logger,
+    llm_trace,
     rate_limited_total,
     record_answer,
     record_stage,
 )
 from medapi.pricing import cost_usd
 from medcore.errors import QuotaExceededError
+from medcore.prompts import load_prompt
 from medcore.schema import Answer, AnswerKind, DoneEvent
 
 logger = get_logger("medapi.serving")
@@ -142,11 +146,27 @@ async def short_circuit(question: str, svc: Services, pre: Preflight) -> Answer 
     DEGRADED, never an error (D20/D21): the kill switch and the daily spend breaker both
     arrive here.
     """
+    t0 = time.perf_counter()
     cached = await svc.cache.get(question)
     if cached is not None:
         cache_events.labels(layer="response", result="hit").inc()
-        record_answer(cached.kind.value, cached.timings.total_ms)
-        pre.log.info("cache_hit", kind=cached.kind.value)
+        # THIS request's duration, not the one it avoided.
+        #
+        # It used to pass `cached.timings.total_ms` - the ORIGINAL generation time, replayed
+        # on every hit. So a 40ms cache hit was recorded into the latency histogram as an
+        # 11-second request, and the effect compounded: the more traffic the cache served,
+        # the WORSE p95 looked. The single largest latency lever in the system reported
+        # itself as a regression, and request p95 was inflated by answers that were never
+        # generated.
+        #
+        # The replayed stage timings stay ON THE ANSWER (they describe how that content was
+        # produced, which is useful) - they simply must not be re-observed as if this
+        # request had done the work.
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        record_answer(cached.kind.value, elapsed_ms)
+        pre.log.info(
+            "cache_hit", kind=cached.kind.value, elapsed_ms=round(elapsed_ms, 1)
+        )
         return cached
     cache_events.labels(layer="response", result="miss").inc()
 
@@ -192,7 +212,25 @@ async def postflight(
         ("generate", t.generate_ms),
     ):
         record_stage(stage, ms)
-    record_answer(answer.kind.value, t.total_ms, answer.usage.cost_usd)
+    # ttft_ms is None on the non-streaming path, which is exactly right: there is no
+    # first token to time, and record_answer skips the observation rather than
+    # substituting total_ms and silently redefining the SLI.
+    # no_answer_path is derived from whether a prompt was actually spent: the retrieval
+    # gate declines before the model, so prompt_tokens is 0; a model abstention has read
+    # a full context to reach the same word. Same kind, very different bill.
+    no_answer_path = None
+    if answer.kind is AnswerKind.NO_ANSWER:
+        no_answer_path = (
+            "model_abstained" if answer.usage.prompt_tokens else "retrieval_gate"
+        )
+    record_answer(
+        answer.kind.value,
+        t.total_ms,
+        answer.usage.cost_usd,
+        t.ttft_ms,
+        refusal_category=answer.refusal_category,
+        no_answer_path=no_answer_path,
+    )
     pre.log.info(
         "answered",
         kind=answer.kind.value,
@@ -206,6 +244,18 @@ async def postflight(
     # Only GROUNDED answers are stored; Answer.is_cacheable refuses refusals, no-answers
     # and degraded responses (D10 safety rule, enforced by the type rather than this call).
     await svc.cache.set(question, answer)
+
+    # D13/D18: the LLM-shaped record. This call is what makes Langfuse show anything at
+    # all - the module was fully written, configured and enabled, and had NO CALLER, so
+    # every container reported healthy while the trace list stayed empty (INFRA-4).
+    #
+    # It sits in postflight so the streaming path gets it too: answer_from_done() exists
+    # precisely so both paths run this one function, and tracing only the non-streaming
+    # branch would under-report exactly the requests users actually make.
+    #
+    # Never awaited and never allowed to raise: trace_answer swallows its own errors, and
+    # observability must not be able to fail a medical answer.
+    _trace_to_langfuse(answer, question=question, pre=pre)
 
     # Persistence is a SIDE EFFECT of answering, never a precondition (D21): a database
     # outage costs history, not availability.
@@ -222,6 +272,53 @@ async def postflight(
         conversation_id=pre.conversation_id,
     )
     return answer
+
+
+
+def _trace_to_langfuse(answer: Answer, *, question: str, pre: Preflight) -> None:
+    """Assemble the Langfuse payload. Separate from postflight so the accounting path
+    stays readable and so a change here cannot disturb cost or history."""
+    if not llm_trace.is_enabled():
+        return
+    try:
+        prompt = load_prompt("answer")
+        version, sha = prompt.version, prompt.sha256
+    except Exception:  # noqa: BLE001 - a missing prompt file must not lose the trace
+        version, sha = "unknown", ""
+
+    # trace_answer already swallows its own errors; this is the second layer, and it is
+    # not redundant. postflight runs AFTER the answer is final, so anything that escapes
+    # here converts a delivered medical answer into a 500 - the tracer would take down the
+    # exact request it exists to explain.
+    with contextlib.suppress(Exception):  # observability must never fail an answer
+        _emit(answer, question=question, version=version, sha=sha)
+
+
+def _emit(answer: Answer, *, question: str, version: str, sha: str) -> None:
+    llm_trace.trace_answer(
+        question=question,
+        answer_text=answer.text,
+        kind=answer.kind.value,
+        prompt_version=version,
+        prompt_sha=sha,
+        model_id=answer.model_id,
+        # Citation snippets, not the full retrieved chunks: Answer does not carry the raw
+        # context, and widening the response contract to feed a tracer would be the wrong
+        # trade. Enough to see WHICH passages grounded the answer, which is the question
+        # a faithfulness regression actually asks.
+        contexts=[c.snippet for c in answer.citations],
+        prompt_tokens=answer.usage.prompt_tokens,
+        completion_tokens=answer.usage.completion_tokens,
+        cost_usd=answer.usage.cost_usd or 0.0,
+        timings={
+            "embed_ms": answer.timings.embed_ms,
+            "retrieve_ms": answer.timings.retrieve_ms,
+            "rerank_ms": answer.timings.rerank_ms,
+            "generate_ms": answer.timings.generate_ms,
+            "total_ms": answer.timings.total_ms,
+        },
+        cache_hit=answer.cache_hit,
+    )
 
 
 def answer_from_done(event: DoneEvent) -> Answer:

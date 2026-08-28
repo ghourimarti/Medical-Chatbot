@@ -23,9 +23,10 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 
+from medapi.observability.metrics import record_circuit, tokens_total
 from medcore.errors import AllProvidersDownError, ProviderError
 from medcore.ports import ModelPort
-from medcore.schema import Completion, Message
+from medcore.schema import Completion, Message, Usage
 
 logger = logging.getLogger("medapi.failover")
 
@@ -75,6 +76,36 @@ class VenueLeg:
     breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
 
 
+
+def _record_tokens(venue: str, usage: Usage) -> None:
+    """Publish token counts per direction and venue. Never raises: a metrics failure must
+    not turn a successful generation into an error."""
+    try:
+        if usage.prompt_tokens:
+            tokens_total.labels(direction="prompt", venue=venue).inc(usage.prompt_tokens)
+        if usage.completion_tokens:
+            tokens_total.labels(direction="completion", venue=venue).inc(
+                usage.completion_tokens
+            )
+    except Exception:  # noqa: BLE001 - observability must never fail a request
+        logger.debug("token metric failed", exc_info=True)
+
+
+def _publish_states(legs: Sequence[VenueLeg]) -> None:
+    """Publish EVERY leg's breaker state after any transition.
+
+    All legs, not just the one that moved: `medbot_venue_circuit_state` is a Gauge, and a
+    gauge that is only written when a venue is touched leaves the untouched ones reporting
+    a stale value forever. The dashboard would then show a leg as closed long after it
+    stopped being tried.
+    """
+    try:
+        for leg in legs:
+            record_circuit(leg.name, leg.breaker.state)
+    except Exception:  # noqa: BLE001
+        logger.debug("circuit metric failed", exc_info=True)
+
+
 class FailoverModel:
     """ModelPort that walks an ordered chain of venues (D4b).
 
@@ -112,11 +143,20 @@ class FailoverModel:
                     messages=messages, max_tokens=max_tokens, temperature=temperature
                 )
                 leg.breaker.record_success()
+                # Token accounting belongs HERE, not in postflight: this is the only place
+                # that knows BOTH the usage and which venue produced it. Answer carries no
+                # venue, so a postflight recorder could only label them "unknown" — and a
+                # token count you cannot attribute to a venue cannot answer the question
+                # the metric exists for ("what is local serving vs what are we paying for").
+                _record_tokens(leg.name, result.usage)
+                _publish_states(self._legs)
                 return result
             except ProviderError as e:
                 leg.breaker.record_failure()
+                _publish_states(self._legs)
                 errors.append(f"{leg.name}: {e.internal_message}")
                 logger.warning("venue %s failed, trying next leg", leg.name)
+        _publish_states(self._legs)
         raise AllProvidersDownError("; ".join(errors))
 
     async def stream(
@@ -135,6 +175,7 @@ class FailoverModel:
                     if not started:
                         started = True
                         leg.breaker.record_success()
+                        _publish_states(self._legs)
                     yield chunk
                 return
             except ProviderError as e:
@@ -143,9 +184,11 @@ class FailoverModel:
                     # Switching venues now would change the answer mid-sentence, so this
                     # failure is terminal and becomes an in-band error event (S4).
                     leg.breaker.record_failure()
+                    _publish_states(self._legs)
                     logger.error("venue %s failed MID-STREAM; cannot fail over", leg.name)
                     raise
                 leg.breaker.record_failure()
+                _publish_states(self._legs)
                 errors.append(f"{leg.name}: {e.internal_message}")
                 logger.warning("venue %s failed before first token; trying next", leg.name)
         raise AllProvidersDownError("; ".join(errors))

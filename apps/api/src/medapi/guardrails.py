@@ -114,12 +114,26 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
     (
         RefusalCategory.SELF_HARM,
         re.compile(
-            r"\b(kill|harm|hurt)\s+(myself|my ?self)\b|\bend (my|his|her) life\b"
-            r"|\bsuicid|\bself[- ]harm\b|\bwant to die\b|\bending my life\b"
+            # S19.4 — INFLECTION. The verb group was `(kill|harm|hurt)\s+`, which
+            # requires the BARE form: "hurt myself" matched, "hurting myself" did not,
+            # because `\s` cannot follow the "t" of "hurting". Found in PRODUCTION
+            # DATA, not in a test: a real user typed "I have been thinking about
+            # hurting myself" and was answered "I don't have reliable information on
+            # that in my reference material" — the disclosure fell through the
+            # guardrail into RETRIEVAL, missed, and returned a no_answer.
+            # The gerund is the MORE common phrasing of ideation ("thinking about
+            # killing myself"), so the rule missed the majority case while passing
+            # every test written against the minority one.
+            r"\b(kill|harm|hurt)(?:ing|s|ed)?\s+(myself|my ?self)\b"
+            r"|\bend(?:ing)?\s+(my|his|her)\s+life\b"
+            r"|\bsuicid|\bself[- ]harm(?:ing)?\b|\bwant to die\b"
             # added in S19.3 — real phrasings the v1 list missed outright
             r"|\b(don'?t|do not|no longer)\s+want\s+to\s+(be alive|live|wake up)\b"
-            r"|\bwant to be dead\b|\btake my own life\b|\bend it all\b"
-            r"|\bnot\s+(to\s+)?wake up\b|\bnot be alive\b",
+            r"|\bwant to be dead\b|\btak(?:e|ing)\s+my own life\b"
+            r"|\bend(?:ing)?\s+it\s+all\b"
+            r"|\bnot\s+(to\s+)?wake up\b|\bnot be alive\b"
+            # a recognised ideation marker that names no verb at all
+            r"|\bbetter\s+off\s+without\s+me\b",
             re.IGNORECASE,
         ),
         False,
@@ -143,11 +157,22 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
         # so a hostile passage never reaches the model.
         RefusalCategory.INJECTION,
         re.compile(
-            r"\bignore\s+(your|all|previous|prior|the)\s+(instruction|rule|prompt|direction)"
+            # S19.4 — STACKED MODIFIERS. Both verb rules allowed exactly ONE word
+            # between the verb and the noun, so "ignore all instructions" matched
+            # while "ignore all previous instructions" — the canonical injection
+            # opener, and the phrasing an attacker actually types — did not.
+            # `(?:...\s+)+` accepts any run of modifiers instead of exactly one.
+            r"\bignore\s+(?:(?:your|all|any|the|above|prior|previous|earlier)\s+)+"
+            r"(instruction|rule|prompt|direction|guideline)"
             r"|\bfollow\s+the\s+context,?\s+not\s+your\b"
-            r"|\b(disregard|override|bypass)\s+(your|the|all)\s+"
-            r"(instruction|rule|guideline|safety|system)"
-            r"|\byou\s+are\s+no\s+longer\b|\bpretend\s+(you|to be)\b",
+            r"|\b(disregard|override|bypass|forget)\s+"
+            r"(?:(?:your|the|all|any|above|prior|previous|earlier)\s+)+"
+            r"(instruction|rule|guideline|safety|system|prompt)"
+            # asking for the prompt IS the attack, whatever verb introduces it
+            r"|\b(reveal|print|show|repeat|output|display|recite)\s+"
+            r"(?:(?:your|the|its|full|entire)\s+)*(system\s+)?prompt\b"
+            r"|\byou\s+are\s+no\s+longer\b|\bpretend\s+(you|to be)\b"
+            r"|\b(developer|debug|god|admin|jailbreak)\s+mode\b",
             re.IGNORECASE,
         ),
         False,

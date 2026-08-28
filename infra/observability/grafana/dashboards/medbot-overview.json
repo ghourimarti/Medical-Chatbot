@@ -1,442 +1,77 @@
 {
   "uid": "medbot-overview",
-  "title": "Medbot \u2014 service overview",
+  "title": "Medbot - service overview",
   "tags": [
     "medbot",
-    "provisioned"
+    "rag",
+    "slo"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 3,
   "refresh": "10s",
   "time": {
     "from": "now-1h",
     "to": "now"
   },
   "editable": true,
+  "description": "Read TOP-DOWN. Section 1 answers 'is the product meeting its promises', section 2 'is it refusing what it must', section 3 'where does the time go', section 4 'are the parts underneath healthy'. Every panel has an (i) description saying what good looks like and what a bad reading MEANS - a dashboard you cannot read without asking its author is not observability.",
   "panels": [
     {
-      "title": "TTFT p50 (NFR \u2264 0.8s)",
+      "type": "row",
+      "title": "1 - Is the product meeting its promises? (Phase 1 NFRs)",
+      "id": 1,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
       "type": "stat",
+      "title": "TTFT p50  (NFR <= 0.8s)",
+      "id": 2,
       "datasource": {
         "type": "prometheus",
         "uid": "medbot-prometheus"
       },
-      "description": "Perceived latency. The NFR that matters to a reader watching tokens appear.",
+      "description": "Time to FIRST streamed token, median. The perceived-latency SLI: it is how fast the app FEELS, not how long the answer takes.\n\nSTREAMING ONLY - non-streaming requests have no first token, so curl tests leave this empty. Empty means 'nobody streamed', not 'fast'.\n\nBad reading: on this hardware embed (~1.6s) and rerank (~2.3s) both run on CPU BEFORE generation starts, so TTFT cannot go below ~4s. The NFR and the architecture are incompatible until the reranker moves to GPU.",
       "gridPos": {
-        "x": 0,
-        "y": 0,
+        "h": 4,
         "w": 4,
-        "h": 4
+        "x": 0,
+        "y": 1
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
           "expr": "histogram_quantile(0.50, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p50",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
         }
       ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0.8
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "TTFT p95 (NFR \u2264 2.0s)",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "",
-      "gridPos": {
-        "x": 4,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p95",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 2.0
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Cost / request (NFR \u2264 $0.001)",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "Unit economics as a dashboard rather than a spreadsheet (D20).",
-      "gridPos": {
-        "x": 8,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_cost_usd_bucket[30m])) by (le))",
-          "legendFormat": "p95",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 5,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0.001
-              }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Requests / sec",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "",
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_answers_total[5m]))",
-          "legendFormat": "rps",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Error rate (5xx only)",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "4xx is EXCLUDED on purpose: a 429 is quota enforcement working. Counting it against availability lets abusive traffic page the on-call (P5.5).",
-      "gridPos": {
-        "x": 16,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_errors_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(medbot_answers_total[5m])), 0.001)",
-          "legendFormat": "err",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Cache hit rate",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "The D10 cost lever.",
-      "gridPos": {
-        "x": 20,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_cache_events_total{result=\"hit\"}[5m])) / clamp_min(sum(rate(medbot_cache_events_total[5m])), 0.001)",
-          "legendFormat": "hit",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Stage latency p95 \u2014 where the time goes",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "embed / retrieve / rerank / generate. S5.9 measured rerank as the dominant cost, so this is the panel that would show a regression.",
-      "gridPos": {
-        "x": 0,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum(rate(medbot_stage_duration_seconds_bucket[5m])) by (le, stage))",
-          "legendFormat": "{{stage}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "End-to-end latency p95 by outcome",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "A refusal is fast and a grounded answer is slow; averaging them together hides both.",
-      "gridPos": {
-        "x": 12,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le, outcome))",
-          "legendFormat": "{{outcome}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Answers by kind",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "grounded / no_answer / refused / degraded. The abstention and refusal rates are QUALITY signals \u2014 a jump in no_answer usually means retrieval broke.",
-      "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 8,
-        "h": 7
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_answers_total[5m])) by (kind)",
-          "legendFormat": "{{kind}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Rate limiting by scope",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "",
-      "gridPos": {
-        "x": 8,
-        "y": 12,
-        "w": 8,
-        "h": 7
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_rate_limited_total[5m])) by (scope)",
-          "legendFormat": "{{scope}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Tokens/sec by venue and direction",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "Which serving leg is actually answering \u2014 the D4b failover made visible.",
-      "gridPos": {
-        "x": 16,
-        "y": 12,
-        "w": 8,
-        "h": 7
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_tokens_total[5m])) by (venue, direction)",
-          "legendFormat": "{{venue}} {{direction}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "Serving venue circuit breakers",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "medbot-prometheus"
-      },
-      "description": "0 closed \u00b7 1 half-open \u00b7 2 OPEN. A leg sitting at 2 means the chain is running on its fallbacks \u2014 working as designed, but not silently.",
-      "gridPos": {
-        "x": 0,
-        "y": 19,
-        "w": 12,
-        "h": 7
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "medbot-prometheus"
-          },
-          "expr": "medbot_venue_circuit_state",
-          "legendFormat": "{{venue}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "max": 2,
-          "min": 0,
+          "decimals": 2,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -446,48 +81,63 @@
               },
               {
                 "color": "orange",
-                "value": 1
+                "value": 0.8
               },
               {
                 "color": "red",
-                "value": 2
+                "value": 2.0
               }
             ]
+          },
+          "color": {
+            "mode": "thresholds"
           }
         },
         "overrides": []
       }
     },
     {
-      "title": "Infra dependency circuit breakers",
-      "type": "timeseries",
+      "type": "stat",
+      "title": "TTFT p95  (NFR <= 2.0s)",
+      "id": 3,
       "datasource": {
         "type": "prometheus",
         "uid": "medbot-prometheus"
       },
-      "description": "Redis / Postgres. Open here means DEGRADED, not down: the service keeps answering with cache bypassed or history disabled (D21).",
+      "description": "Slowest 5% of first-token times. p50 tells you the typical experience; p95 tells you the one people complain about.\n\nA p95 far above p50 means a queue or a cold path, not uniform slowness.",
       "gridPos": {
-        "x": 12,
-        "y": 19,
-        "w": 12,
-        "h": 7
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
       },
       "targets": [
         {
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "medbot-prometheus"
-          },
-          "expr": "medbot_dependency_circuit_state",
-          "legendFormat": "{{dependency}}",
-          "refId": "A"
+          }
         }
       ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "max": 2,
-          "min": 0,
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -496,43 +146,1137 @@
                 "value": null
               },
               {
+                "color": "orange",
+                "value": 2.0
+              },
+              {
                 "color": "red",
-                "value": 2
+                "value": 4.0
               }
             ]
+          },
+          "color": {
+            "mode": "thresholds"
           }
         },
         "overrides": []
       }
     },
     {
-      "title": "Errors by type",
-      "type": "timeseries",
+      "type": "stat",
+      "title": "Request p95  (<= 6s)",
+      "id": 4,
       "datasource": {
         "type": "prometheus",
         "uid": "medbot-prometheus"
       },
-      "description": "`degradable` separates handled degradation from real failure.",
+      "description": "Full end-to-end time, all outcomes mixed.\n\nCache hits are included and record THEIR OWN duration, not the generation they avoided - that was a real bug (I8.2): replaying the original 11s on every hit made the cache look like a regression, and p95 got worse the more traffic it served.",
       "gridPos": {
-        "x": 0,
-        "y": 26,
-        "w": 24,
-        "h": 7
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
       },
       "targets": [
         {
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le))",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "medbot-prometheus"
-          },
-          "expr": "sum(rate(medbot_errors_total[5m])) by (error_type, degradable, status)",
-          "legendFormat": "{{error_type}} (degradable={{degradable}}, {{status}})",
-          "refId": "A"
+          }
         }
       ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps"
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 6
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Cost / request p95  (<= $0.001)",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Spend for the 95th-percentile request.\n\n$0.000000 is the CORRECT reading when self-hosted: local venues price at $0 by construction. Anything above zero means a hosted leg served - either you chose it, or your local engine failed over without you noticing.\n\nZero is always observed now, never skipped: absent and zero are different answers on a spend dashboard (I5.4).",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_cost_usd_bucket[5m])) by (le))",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 6,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.001
+              },
+              {
+                "color": "red",
+                "value": 0.005
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Requests / sec",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Answered queries per second, every outcome. The denominator for every rate on this dashboard - read the panels below as fractions OF this.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_answers_total[5m]))",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "5xx error rate",
+      "id": 7,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Server errors as a fraction of answers.\n\nA refusal is NOT an error and must never appear here: declining to give a dosage is the product working. Only 5xx counts.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_errors_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(medbot_answers_total[5m])), 0.001)",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "2 - SAFETY: is the product refusing what it must? (D18)",
+      "id": 8,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Refusals by category",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "WHICH safety rule fired: emergency, self_harm, dosage, diagnosis, injection, prescription, medication_change, harmful.\n\nWHY BY CATEGORY: `answers_total{kind=\"refused\"}` cannot tell an emergency from a dosage question, so a guardrail that quietly STOPPED matching looks exactly like one nobody triggered. That is precisely how the self-harm rule shipped broken (I7.1) - every gerund phrasing ('thinking about hurting myself') fell through into retrieval and returned 'I don't have reliable information', and no counter moved.\n\nWatch for a category going to zero and STAYING there.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_refusals_total[5m])) by (category)",
+          "legendFormat": "{{category}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Answers by kind",
+      "id": 10,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "The product's shape: grounded / no_answer / refused / degraded.\n\nAll grounded  -> guardrails are not firing; test a dosage question.\nAll no_answer -> retrieval is broken, or the index is empty.\nAny degraded  -> the kill switch or the daily spend cap is active.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_answers_total[5m])) by (kind)",
+          "legendFormat": "{{kind}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Declines by path - and which one costs money",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Two different gates produce the same word to the user:\n\nretrieval_gate    nothing scored above no_answer_threshold; the model was NEVER called. Free. ('What is the capital of France?')\nmodel_abstained   retrieval cleared the coarse gate, the model read a FULL prompt (~1,000 tokens) and said it had nothing. ('Side effects of semaglutide?' - the corpus has diabetes text that scores plausibly.)\n\nRising model_abstained is a real bill for saying 'I don't know'. If it dominates, raise no_answer_threshold so the free gate catches more.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_no_answers_total[5m])) by (path)",
+          "legendFormat": "{{path}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Silent quality degradation",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Times the pipeline served a WORSE answer instead of failing.\n\nToday that means the reranker timed out and fusion order was served instead - the user cannot see it and the response says nothing.\n\nThis must sit near ZERO. It was invisible until now: RERANK_TIMEOUT was 2.0s against a measured rerank p95 of 2.425s, so the fallback fired on well over 5% of queries while every dashboard stayed green (I6.5/I6.6). A timeout below the p95 of what it guards makes the degraded path the NORMAL path.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_degradations_total[5m])) by (component, reason)",
+          "legendFormat": "{{component}} / {{reason}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "3 - Where does the time actually go?",
+      "id": 13,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage latency p95",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Per-stage p95: condense, embed, retrieve, rerank, generate.\n\nEXPECTED SHAPE: rerank dominates, then generate. embed and retrieve should be small.\n\nembed climbing  -> ml-service is CPU-starved or being called per-request instead of batched.\nretrieve climbing -> Qdrant is optimising after an ingest, or the index outgrew RAM.\ncondense present -> a follow-up was rewritten; it only runs for anaphoric or very short questions, so it should be rare and small.\n\nThis panel is where you look when Jaeger says a request was slow and you want to know whether it is slow for everyone.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_stage_duration_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "End-to-end latency p95 by outcome",
+      "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Same latency, split by what the request produced.\n\nrefused should be the FASTEST line by far - guardrails fire before retrieval and before the model. If refusals cost as much as grounded answers, the guardrail is running too late to save you money or liability.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le, outcome))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache hit rate",
+      "id": 16,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Fraction of requests served without generating.\n\nOnly GROUNDED answers are cached (D10) - refusals and no_answers deliberately are not, so a heavy safety-testing session drags this down and that is correct.\n\nFlat zero on repeated identical questions means the cache KEY is changing when it should not. The key includes prompt version, corpus version, index version, collection and a digest of every model that could serve, so changing any of those invalidates on purpose.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_cache_events_total{layer=\"response\",result=\"hit\"}[5m])) / clamp_min(sum(rate(medbot_cache_events_total{layer=\"response\"}[5m])), 0.001)",
+          "legendFormat": "response",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        },
+        {
+          "expr": "sum(rate(medbot_cache_events_total{layer=\"embedding\",result=\"hit\"}[5m])) / clamp_min(sum(rate(medbot_cache_events_total{layer=\"embedding\"}[5m])), 0.001)",
+          "legendFormat": "embedding",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache events/sec",
+      "id": 17,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "The raw hit/miss counts behind the ratio, per layer.\n\nUseful when the ratio looks wrong: it separates 'few hits' from 'no traffic at all'.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_cache_events_total[5m])) by (layer, result)",
+          "legendFormat": "{{layer}} {{result}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens/sec by venue and direction",
+      "id": 18,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Token throughput, labelled by WHICH venue produced them.\n\nThe venue label is what separates self-hosted from paid: tokens on local-vllm or local-sglang are free, tokens on groq or openai are an invoice.\n\nIf local goes to zero while groq climbs, your engine died and failover is quietly paying for it - which is exactly what happened while SGLang was down.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_tokens_total[5m])) by (venue, direction)",
+          "legendFormat": "{{venue}} {{direction}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "4 - Are the parts underneath still healthy?",
+      "id": 19,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Serving venue circuit breakers",
+      "id": 20,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "0 = closed (healthy) - 1 = half-open (probing) - 2 = OPEN (skipped).\n\nAn OPEN leg is being bypassed entirely, so requests silently move down the chain. Find out WHY before dismissing it: a self-hosted leg opening means you are now paying a hosted one.\n\nEVERY leg is republished on every transition, not just the one that moved - a gauge written only when a venue is touched leaves the others reporting stale values forever (I5.4).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "medbot_venue_circuit_state",
+          "legendFormat": "{{venue}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Infra dependency circuit breakers",
+      "id": 21,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Redis and Postgres breakers. 0 closed, 2 OPEN.\n\nNeither is required to answer (D21): losing Redis costs the cache, losing Postgres costs history. The breakers make an outage CHEAP (~0ms instead of a timeout per call) - which also removes the latency symptom you would otherwise notice, so this panel is the only signal that anything is wrong.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "medbot_dependency_circuit_state",
+          "legendFormat": "{{dependency}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate limiting by scope",
+      "id": 22,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "429s by which limit tripped (per-session, per-IP, global).\n\nShould be flat zero during manual testing. Sustained rate limiting on a real deployment means either abuse or a limit set below normal traffic.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_rate_limited_total[5m])) by (scope)",
+          "legendFormat": "{{scope}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors by type",
+      "id": 23,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Typed domain errors, not raw exceptions.\n\ndegradable=true  the system had a fallback and used it (cache bypass, history off).\ndegradable=false the request genuinely failed.\n\nretrieval-unavailable is the one to watch: embedding is the FIRST step, so without a vector there is nothing to search and the request is fatal rather than degraded.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(medbot_errors_total[5m])) by (error_type, degradable)",
+          "legendFormat": "{{error_type}} (degradable={{degradable}})",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Answer volume by kind (cumulative)",
+      "id": 24,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Raw counters rather than rates - the totals since this process started.\n\nUseful for a manual test session, where 5-minute rates round to nothing but you still want to confirm each of the four outcomes actually happened at least once.\n\nNote these RESET on restart. Prometheus keeps the old series, which is why a long-dead container can still show errors that no longer exist anywhere (I6.4).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "targets": [
+        {
+          "expr": "sum(medbot_answers_total) by (kind)",
+          "legendFormat": "{{kind}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
         },
         "overrides": []
       }

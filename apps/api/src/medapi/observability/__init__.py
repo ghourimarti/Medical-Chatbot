@@ -11,11 +11,14 @@ from medapi.observability.logging import configure_logging, fingerprint, get_log
 from medapi.observability.metrics import (
     REGISTRY,
     cache_events,
+    degradations_total,
     errors_total,
+    no_answers_total,
     rate_limited_total,
     record_answer,
     record_circuit,
     record_stage,
+    refusals_total,
     tokens_total,
     ttft,
 )
@@ -31,6 +34,9 @@ __all__ = [
     "record_answer",
     "record_circuit",
     "record_stage",
+    "degradations_total",
+    "no_answers_total",
+    "refusals_total",
     "tokens_total",
     "ttft",
 ]

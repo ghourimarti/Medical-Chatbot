@@ -84,6 +84,7 @@ def build(env: dict[str, str]) -> list[Service]:
     lf_port = g("LANGFUSE_WEB_PORT", "5015")
     ri_port = g("REDISINSIGHT_PORT", "5022")
     jaeger_port = g("JAEGER_UI_PORT", "5023")
+    minio_console = g("LANGFUSE_MINIO_CONSOLE_PORT", "5025")
 
     return [
         # ---- data ------------------------------------------------------------------
@@ -168,7 +169,7 @@ def build(env: dict[str, str]) -> list[Service]:
         ),
         Service(
             "Langfuse", f"http://localhost:{lf_port}", "obs",
-            "LLM traces - prompts, completions, cost",
+            "LLM traces - prompts, completions, cost  (v3: web + worker + clickhouse)",
             [("email", g("LANGFUSE_INIT_USER_EMAIL", "admin@medbot.local")),
              ("password", g("LANGFUSE_INIT_USER_PASSWORD", "medbot-admin-1234")),
              ("public key", g("LANGFUSE_PUBLIC_KEY", "pk-lf-medbot-local")),
@@ -184,6 +185,13 @@ def build(env: dict[str, str]) -> list[Service]:
             "Redis GUI - databases pre-registered, no consent wall",
             [("auth", "none; terms pre-accepted"),
              ("registered", g("REDISINSIGHT_DATABASES", "medbot-cache|redis|6379"))],
+        ),
+        Service(
+            "MinIO (langfuse)", f"http://localhost:{minio_console}", "obs",
+            "blob store for raw trace payloads - Langfuse v3 requires it",
+            [("user", g("LANGFUSE_MINIO_ROOT_USER", "minioadmin")),
+             ("password", g("LANGFUSE_MINIO_ROOT_PASSWORD", "minioadmin")),
+             ("bucket", "langfuse")],
         ),
         Service(
             "OTel Collector", f"http://localhost:{otel_http}", "obs",

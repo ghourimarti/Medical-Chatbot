@@ -11,6 +11,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from sqlalchemy import text
@@ -36,15 +37,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # JSON to stdout with PII redaction (D13/D18). Console renderer locally for
     # readability; structured everywhere a log aggregator will consume it.
     configure_logging(settings.log_level, json_output=settings.environment != "local")
-    # Tracing before services: a span emitted during startup is still a span, and
-    # wiring it after would leave the most failure-prone phase uninstrumented.
-    configure_tracing(
-        enabled=settings.otel_enabled,
-        endpoint=settings.otel_endpoint,
-        service_name=settings.otel_service_name,
-        environment=settings.environment,
-        sample_ratio=settings.otel_sample_ratio,
-    )
+    # Tracing is already configured in create_app() — it has to be, because ASGI
+    # instrumentation must be attached before the middleware stack freezes. Repeating it
+    # here would be harmless (configure_tracing is idempotent) but misleading: it would
+    # suggest this is where tracing starts.
     configure_llm_tracing(
         public_key=settings.langfuse_public_key,
         secret_key=(
@@ -55,7 +51,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         host=settings.langfuse_host,
         environment=settings.environment,
     )
-    instrument_app(app)
     services = build_services(settings)
     # Verify, never create (P6.3.5). Creating the collection here would take the name
     # reserved for the D11 alias and turn a missing corpus into an empty one.
@@ -93,8 +88,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await services.engine.dispose()
 
 
+def _settings_for_tracing() -> Any:
+    """Settings at import time. get_settings() is lru_cached, so this is the same object
+    lifespan will use — no second read, no chance of the two disagreeing."""
+    return get_settings()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="P5 Medical RAG API", version="0.1.0", lifespan=lifespan)
+    # Tracing is wired HERE, not in lifespan, and the difference is not cosmetic.
+    #
+    # FastAPIInstrumentor adds ASGI middleware, and Starlette freezes its middleware stack
+    # when the application starts. `lifespan` runs AFTER that point, so instrumenting from
+    # inside it silently does nothing: no HTTP request span is ever created.
+    #
+    # The failure was invisible because the EXPLICIT stage spans still worked. Jaeger
+    # showed traces containing a lone `embed` or a lone `rerank` — orphans with no parent
+    # request — which reads like a sampling artefact rather than missing instrumentation.
+    # A partial trace is worse than no trace: it looks like data.
+    configure_tracing(
+        enabled=_settings_for_tracing().otel_enabled,
+        endpoint=_settings_for_tracing().otel_endpoint,
+        service_name=_settings_for_tracing().otel_service_name,
+        environment=_settings_for_tracing().environment,
+        sample_ratio=_settings_for_tracing().otel_sample_ratio,
+    )
+    instrument_app(app)
     register_error_handlers(app)  # RFC 7807 for every failure path (D18)
     app.include_router(router)
     app.include_router(conversations_router)

@@ -230,18 +230,41 @@ panel is driven by a real metric name from `metrics.py`. Check specifically:
 A panel showing "No data" while Prometheus has the metric means the datasource UID drifted.
 It is pinned to `medbot-prometheus` precisely so committed dashboards stay portable.
 
-### Langfuse — <http://localhost:5015>
-Credentials from `make service_ls` (bootstrapped, never created by hand).
+### Langfuse — `make langfuse`  (<http://localhost:5015>)
+One sign-in, and only one: Langfuse has no anonymous mode the way Grafana does. `make
+langfuse` prints the bootstrapped credentials and opens the tab. You never create a project
+and never copy an API key — the org, project and both keys come from `.env` on first boot,
+and the API already sends with that same pair.
 
 **Working looks like:** a trace per question with the prompt, completion, token counts and
 cost. Langfuse is the **one sanctioned store for prompt/completion text** (D18) — everything
 else carries fingerprints only, which is what makes this the single place to control for PII.
 
-Nothing appearing? The keys must match on both sides:
+**Verify by COUNTING, never by health check** — this is the important part:
 ```bash
-grep -E '^LANGFUSE_(PUBLIC|SECRET)_KEY=' .env
-docker logs medbot-api 2>&1 | grep -i langfuse
+curl -s -u "$(grep ^LANGFUSE_PUBLIC_KEY= .env | cut -d= -f2)":"$(grep ^LANGFUSE_SECRET_KEY= .env | cut -d= -f2)"   'http://localhost:5015/api/public/traces?limit=1' | grep -o '"totalItems":[0-9]*'
 ```
+`totalItems: 0` after asking a question is a FAULT, however healthy everything looks.
+
+**Two ways this has silently reported zero** (INFRA-4), both worth knowing because neither
+produced a single error anywhere:
+
+1. **Version skew.** `langfuse/langfuse:2` with SDK `4.14.4`. The v3+ SDK ships over OTLP
+   to `/api/public/otel`, which a v2 server does not implement. The container was up,
+   `/api/public/health` returned `{"status":"OK"}`, and the bootstrapped keys authenticated
+   with **HTTP 200** — every one of those checks passed while every span was discarded.
+   The server is now `:3`, which is also why ClickHouse, MinIO and `langfuse-worker` exist:
+   v3 splits ingestion from serving, and **without the worker the UI stays empty** even
+   though ingestion succeeds.
+
+2. **No caller.** `llm_trace.py` was complete, configured, enabled, and imported by nothing
+   on the request path. `trace_answer()` had zero call sites. A unit test of it passed.
+
+Both share one shape: the component reported healthy because it *was* healthy — it simply
+was not being used. `llm_trace` swallows exporter errors on purpose (observability must not
+fail a medical answer), so a mismatch has no symptom other than an empty list. Counting is
+the only check that catches either.
+
 The bootstrap only runs against an **empty** Langfuse database, so changing a key needs
 `make downv` to take effect.
 

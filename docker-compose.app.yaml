@@ -56,6 +56,12 @@ services:
       # inside the API while looking perfectly configured from outside.
       VLLM_LOCAL_URL: http://vllm:8000/v1
       SGLANG_LOCAL_URL: http://sglang:30000/v1
+      # Listed HERE and not left to env_file, because env_file WINS over shell
+      # interpolation: with SERVING_CHAIN only in .env, `make up-sglang` exported a chain
+      # the container never saw, started SGLang, and was still served by vLLM — the
+      # failure mode the ENGINE variable exists to prevent, reintroduced one layer down.
+      # The ${VAR:-default} form falls back to .env when nothing is exported.
+      SERVING_CHAIN: ${SERVING_CHAIN:-local-vllm,local-sglang,groq}
     ports:
       - "${API_PORT:-5007}:8000"
     depends_on:

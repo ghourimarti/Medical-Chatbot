@@ -16,6 +16,19 @@ from medcore.errors import RerankerError, RetrievalError
 from medcore.schema import RetrievedChunk
 
 
+def _describe(e: Exception) -> str:
+    """Never return an empty string for an exception.
+
+    httpx timeout exceptions carry NO message, so `f"...failed: {e}"` logged the literal
+    line `ml-service /embed failed: ` - a 503 whose cause was a blank space. During an
+    incident that is indistinguishable from a bug in the logging itself, and it hides the
+    one fact that matters: whether the dependency refused the connection or simply took
+    too long. Those have opposite fixes (start it vs. give it headroom).
+    """
+    text = str(e).strip()
+    return f"{type(e).__name__}: {text}" if text else type(e).__name__
+
+
 class HttpEmbedder:
     """EmbedderPort over HTTP. Embedding failure is fatal to a query — without a vector
     there is nothing to retrieve — so it raises RetrievalError (degradable: cache/no-answer)."""
@@ -46,7 +59,7 @@ class HttpEmbedder:
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
-            raise RetrievalError(f"ml-service /embed failed: {e}", cause=e) from e
+            raise RetrievalError(f"ml-service /embed failed: {_describe(e)}", cause=e) from e
         payload = resp.json()
         if payload["dimension"] != self._dimension:
             raise RetrievalError(
@@ -97,7 +110,7 @@ class HttpReranker:
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
-            raise RerankerError(f"ml-service /rerank failed: {e}", cause=e) from e
+            raise RerankerError(f"ml-service /rerank failed: {_describe(e)}", cause=e) from e
         ranked: list[RetrievedChunk] = []
         for row in resp.json()["results"]:
             chunk = items[row["index"]]

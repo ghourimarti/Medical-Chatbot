@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Awaitable
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -107,16 +108,80 @@ async def _always_true() -> bool:
     return True
 
 
+# A probe must always answer faster than the orchestrator is willing to wait. Kubernetes
+# defaults readinessProbe.timeoutSeconds to 1, so a check with no deadline of its own does
+# not "run long" - it is recorded as a FAILURE, and the pod leaves the load balancer.
+_READINESS_TIMEOUT = 2.0
+
+# How long a pod may coast on its last successful check while a dependency is merely slow.
+# Slow and absent look identical to a single timed-out call, but they demand opposite
+# verdicts, and this window is what separates them: a blip is ridden out, a real outage
+# still flips the pod NotReady once the window lapses.
+_READINESS_GRACE = 30.0
+
+_last_ready_ok: float | None = None
+
+
+async def _bounded(coro: Awaitable[bool]) -> bool | None:
+    """True/False if the dependency answered, None if it did not answer in time.
+
+    None is a third state on purpose. Collapsing "did not answer" into False is what makes
+    a slow dependency indistinguishable from a broken one.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=_READINESS_TIMEOUT)
+    except TimeoutError:
+        return None
+    except Exception:
+        return False
+
+
 async def _readiness_checks(services: Services) -> tuple[bool, bool]:
     """Single source of truth for "can this pod answer", shared by /readyz and the public
     status page. Two endpoints computing readiness independently WILL drift, and a status
-    page that reports healthy while the probe fails is worse than no status page."""
+    page that reports healthy while the probe fails is worse than no status page.
+
+    P6.5.4: with ml-service scaled to zero the API reported READY while every query failed,
+    because readiness only consulted the vector store. Both are checked now.
+
+    INFRA-3: and then the opposite failure. Immediately after a 7,080-chunk ingest, Qdrant
+    was optimising into its segments and `get_collection` blocked past 20s - while the pod
+    happily served a grounded query with citations throughout. Unbounded checks turn a
+    dependency's slow spell into a self-inflicted outage, and they do it to every replica
+    at once, right after a re-index: exactly the D11 alias swap this design exists to make
+    seamless. So each check is bounded, and a timeout falls back to the last good result
+    within _READINESS_GRACE rather than immediately declaring the pod unfit.
+    """
+    global _last_ready_ok
+
     embedder_health = getattr(services.embedder, "health", None)
-    store_ok, embedder_ok = await asyncio.gather(
-        services.store.health(),
-        embedder_health() if embedder_health else _always_true(),
+    store_res, embedder_res = await asyncio.gather(
+        _bounded(services.store.health()),
+        _bounded(embedder_health() if embedder_health else _always_true()),
     )
-    return store_ok, embedder_ok
+
+    now = time.monotonic()
+    if store_res is True and embedder_res is True:
+        _last_ready_ok = now
+        return True, True
+
+    # An outright False is a definite answer - no grace, the pod really cannot serve.
+    if store_res is False or embedder_res is False:
+        return bool(store_res), bool(embedder_res)
+
+    # Only timeouts remain. Coast on the last known-good result if it is still fresh.
+    if _last_ready_ok is not None and (now - _last_ready_ok) <= _READINESS_GRACE:
+        logger.warning(
+            "readiness check timed out; coasting on last good result",
+            extra={
+                "store": store_res,
+                "embedder": embedder_res,
+                "age_s": round(now - _last_ready_ok, 1),
+            },
+        )
+        return True, True
+
+    return store_res is True, embedder_res is True
 
 
 @router.get("/api/v1/status")
@@ -165,7 +230,11 @@ async def query(req: QueryRequest, request: Request, response: Response) -> Answ
     if short is not None:
         return short
 
-    answer = await svc.pipeline.answer(req.question)
+    # Prior turns, so a follow-up like "what causes it?" can be condensed into a
+    # standalone question before retrieval. Loaded AFTER short_circuit: a cache hit must
+    # not pay for a database read it will not use.
+    history = await svc.history.load(pre.session_id)
+    answer = await svc.pipeline.answer(req.question, history)
     return await postflight(answer, question=req.question, svc=svc, pre=pre)
 
 
@@ -300,6 +369,10 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
     svc = _services(request)
     pre = await preflight(req.question, request, svc, req.conversation_id)
     short = await short_circuit(req.question, svc, pre)
+    # Loaded here rather than inside event_source(): a database read must not happen
+    # after the response has started streaming, where a failure could no longer be
+    # turned into a clean HTTP status. Skipped entirely on a cache hit.
+    history = [] if short is not None else await svc.history.load(pre.session_id)
 
     async def event_source() -> AsyncIterator[str]:
         # A cached or degraded answer is delivered through the SAME event sequence as a
@@ -311,7 +384,7 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
 
         terminal: DoneEvent | None = None
         try:
-            async for event in svc.pipeline.stream_answer(req.question):
+            async for event in svc.pipeline.stream_answer(req.question, history):
                 if isinstance(event, DoneEvent):
                     terminal = event
                 yield _sse(_EVENT_NAMES[type(event)], event)

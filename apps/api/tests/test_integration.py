@@ -9,6 +9,7 @@ Run the real thing with:  RUN_QDRANT_TESTS=1 uv run pytest apps/api/tests/test_i
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 from collections.abc import Sequence
@@ -66,26 +67,37 @@ async def test_end_to_end_retrieval_at_1024_dim() -> None:
     store = QdrantVectorStore(settings.qdrant_url, coll, settings.embedding_dim)
     await store.ensure_collection()
 
-    docs = [
-        "Cirrhosis is a chronic degenerative disease in which normal liver cells are "
-        "damaged and replaced by scar tissue.",
-        "Asthma is a chronic respiratory condition that inflames and narrows the airways.",
-        "Chickenpox, also called varicella, is an infectious childhood disease.",
-    ]
-    vecs = await embedder.embed_documents(docs)
-    chunks = [
-        RetrievedChunk(id=f"d{i}", text=d, source="Gale", page=i, metadata={"_vector": v})
-        for i, (d, v) in enumerate(zip(docs, vecs, strict=True))
-    ]
-    assert await store.upsert(chunks, collection=coll) == 3
+    # try/finally, not a trailing cleanup line: an assertion below raises straight past
+    # any teardown that is merely the last statement, and the collection then survives in
+    # Qdrant forever. That is not hypothetical - a `test_3cb6c7fd` collection outlived a
+    # failed run and sat there until someone noticed, which is the same unbounded-growth
+    # problem the ingest worker has with superseded `gale_live_v*` collections (I3.7).
+    # A test that leaks state on failure makes the NEXT failure harder to read.
+    try:
+        docs = [
+            "Cirrhosis is a chronic degenerative disease in which normal liver cells are "
+            "damaged and replaced by scar tissue.",
+            "Asthma is a chronic respiratory condition that inflames and narrows the airways.",
+            "Chickenpox, also called varicella, is an infectious childhood disease.",
+        ]
+        vecs = await embedder.embed_documents(docs)
+        chunks = [
+            RetrievedChunk(id=f"d{i}", text=d, source="Gale", page=i, metadata={"_vector": v})
+            for i, (d, v) in enumerate(zip(docs, vecs, strict=True))
+        ]
+        assert await store.upsert(chunks, collection=coll) == 3
 
-    pipe = RagPipeline(settings=settings, embedder=embedder, store=store, model=StubModel())
-    ans = await pipe.answer("What is cirrhosis?")
+        pipe = RagPipeline(
+            settings=settings, embedder=embedder, store=store, model=StubModel()
+        )
+        ans = await pipe.answer("What is cirrhosis?")
 
-    assert ans.kind.value == "grounded"
-    assert ans.citations, "a grounded answer must cite"
-    # The top retrieved chunk for a cirrhosis query must be the cirrhosis passage.
-    assert "liver" in ans.citations[0].snippet.lower()
-
-    await store._client.delete_collection(coll)
-    await store.close()
+        assert ans.kind.value == "grounded"
+        assert ans.citations, "a grounded answer must cite"
+        # The top retrieved chunk for a cirrhosis query must be the cirrhosis passage.
+        assert "liver" in ans.citations[0].snippet.lower()
+    finally:
+        # Suppressed: a cleanup failure must not mask the assertion that actually failed.
+        with contextlib.suppress(Exception):
+            await store._client.delete_collection(coll)
+        await store.close()
