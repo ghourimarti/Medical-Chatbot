@@ -47,6 +47,10 @@ class Services:
     conversations: ConversationService | None = None
     verifier: AuthVerifier | None = None
     reranker: RerankerPort | None = None
+    # Held on Services purely so lifespan can WARM it. Without a reference here the BM25
+    # model stayed a lazy cached_property inside the pipeline, downloaded on the first
+    # real user query, and took that request down when the network blipped (S20.10).
+    sparse: Bm25Encoder | None = None
     engine: AsyncEngine | None = None
     redis: Any | None = None
 
@@ -136,6 +140,7 @@ def build_services(settings: Settings) -> Services:
         embedder=embedder,
         store=store,
         model=model,
+        sparse=sparse,
         pipeline=pipeline,
         cache=ResponseCache(
             redis_client, settings.cache_namespace, settings.cache_ttl_seconds

@@ -233,7 +233,7 @@ async def query(req: QueryRequest, request: Request, response: Response) -> Answ
     # Prior turns, so a follow-up like "what causes it?" can be condensed into a
     # standalone question before retrieval. Loaded AFTER short_circuit: a cache hit must
     # not pay for a database read it will not use.
-    history = await svc.history.load(pre.session_id)
+    history = await svc.history.load_thread(pre.session_id, pre.conversation_id)
     answer = await svc.pipeline.answer(req.question, history)
     return await postflight(answer, question=req.question, svc=svc, pre=pre)
 
@@ -372,7 +372,8 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
     # Loaded here rather than inside event_source(): a database read must not happen
     # after the response has started streaming, where a failure could no longer be
     # turned into a clean HTTP status. Skipped entirely on a cache hit.
-    history = [] if short is not None else await svc.history.load(pre.session_id)
+    history = ([] if short is not None
+               else await svc.history.load_thread(pre.session_id, pre.conversation_id))
 
     async def event_source() -> AsyncIterator[str]:
         # A cached or degraded answer is delivered through the SAME event sequence as a

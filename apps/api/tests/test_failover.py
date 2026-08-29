@@ -229,7 +229,15 @@ def test_unconfigured_venues_are_skipped_not_fatal() -> None:
 def test_openai_leg_is_skipped_without_a_key() -> None:
     """An unconfigured hosted leg must be SKIPPED at startup, not added and then 401 on
     the first real question."""
-    assert build_failover_model(_settings(serving_chain="openai,groq")).venues == ["groq"]
+    # openai_api_key PINNED EMPTY. `_env_file=None` does NOT isolate the environment:
+    # something in the import graph calls load_dotenv(), which puts .env into os.environ,
+    # and pydantic-settings reads that regardless. So this test passed or failed depending
+    # on whether the developer happened to have an OPENAI_API_KEY - the same ambient-state
+    # fragility that broke test_all_known_venues_are_configurable (S20).
+    model = build_failover_model(
+        _settings(serving_chain="openai,groq", openai_api_key="")
+    )
+    assert model.venues == ["groq"]
 
 
 def test_openai_leg_is_used_when_a_key_is_present() -> None:

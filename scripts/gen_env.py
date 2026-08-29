@@ -36,6 +36,51 @@ REPO = Path(__file__).resolve().parent.parent
 Var = tuple[str, str, tuple[str, ...]]
 Section = tuple[str, str, tuple[Var, ...]]  # (title, subtitle, vars)
 
+# Prose for each tier banner. A tier used to be a bare heading, so you could read every
+# variable underneath it and still not know why the tier existed or what depended on it.
+# Kept SHORT: the detail belongs on the individual variables, this is orientation.
+TIER_ORDER = ["INFERENCE", "DATA", "APPLICATION", "OBSERVABILITY",
+              "COST, SAFETY AND AUTH"]
+
+TIER_DOCS: dict[str, tuple[str, ...]] = {
+    "INFERENCE": (
+        "Who generates the answer, and in what order they are tried.",
+        "",
+        "SERVING_CHAIN is the whole failover policy in one line. It ends at a PAID leg on",
+        "purpose: openai is the venue that will still answer when everything free is down.",
+        "The Makefile's ENGINE variable sets this per-invocation, and the two must agree -",
+        "a chain naming an engine you did not start costs every request a connect timeout.",
+    ),
+    "DATA": (
+        "Everything that stores state: Postgres, Qdrant, Redis, LocalStack.",
+        "",
+        "Nothing above this tier starts usefully without it. The API's readiness probe",
+        "requires a NON-EMPTY vector index, so an app pointed at an unseeded Qdrant gives",
+        "you a container that never becomes ready - which reads like a broken app rather",
+        "than an empty database.",
+    ),
+    "APPLICATION": (
+        "The request path: web -> api -> ml-service, and the pipeline knobs between them.",
+        "",
+        "Ports are remapped on the HOST only; container ports stay standard. That is why",
+        "an in-network URL says `postgres:5432` while a host URL says `localhost:5001`.",
+    ),
+    "OBSERVABILITY": (
+        "Prometheus, Grafana, Langfuse, Jaeger, OTel Collector, RedisInsight.",
+        "",
+        "The Langfuse keys are not secrets you obtain from anywhere - they are arbitrary",
+        "strings that must simply MATCH on both sides: the container is bootstrapped with",
+        "them and the API sends them. Blank them and tracing silently stops while every",
+        "container still reports healthy.",
+    ),
+    "COST, SAFETY AND AUTH": (
+        "Spend caps, the kill switch, rate limits, guardrail behaviour, session auth.",
+        "",
+        "LLM_ENABLED is a FLOOR, not a toggle: shipped false, no runtime Redis value can",
+        "turn generation back on. An operator's static decision outranks a stale flag.",
+    ),
+}
+
 TIERS: list[tuple[str, list[Section]]] = [
     ("APPLICATION", [
         ("RUNTIME", "process-wide behaviour", (
@@ -144,7 +189,7 @@ TIERS: list[tuple[str, list[Section]]] = [
     ]),
     ("INFERENCE", [
         ("SERVING CHAIN — ordered failover preference (D4b)", "first reachable leg answers", (
-            ("SERVING_CHAIN", "local-sglang,groq", (
+            ("SERVING_CHAIN", "local-sglang,groq,openai", (
                 "AN ORDERED PREFERENCE LIST. Comma-separated, tried left to right; a leg with",
                 "no URL or key is SKIPPED, so you can name venues before their accounts exist.",
                 "",
@@ -153,11 +198,21 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "  Engines:     vllm, sglang        (GPU venues only)",
                 "",
                 "  Examples:",
-                "    local-sglang,groq               THE DEFAULT: SGLang, hosted safety net",
-                "    local-vllm,groq                 vLLM instead",
-                "    local-vllm,local-sglang,groq    both engines - a REHEARSAL, not steady",
+                "    local-sglang,groq,openai        THE DEFAULT: free local first, then a",
+                "                                    cheap hosted leg, then a PAID one that",
+                "                                    will actually be up",
+                "    local-vllm,groq,openai          vLLM instead of SGLang",
+                "    local-vllm,local-sglang,groq,openai",
+                "                                    both engines - a REHEARSAL, not steady",
                 "                                    state: one GPU is one failure domain",
-                "    groq                            hosted only (no GPU needed)",
+                "    groq,openai                     hosted only (no GPU needed)",
+                "",
+                "  WHY OPENAI LAST: it is the leg you PAY for, so it is the one that will",
+                "  answer when everything free is down. Ordering it last means you only",
+                "  spend when the alternatives have actually failed - and the moment it",
+                "  starts serving, `medbot_tokens_total{venue=\"openai\"}` climbs and",
+                "  `medbot_request_cost_usd` stops reading $0. That transition is your",
+                "  signal that a local engine died, long before anyone reports a slow app.",
                 "",
                 "WHY A LIST AND NOT PRIORITY NUMBERS: numbers split identity from order into",
                 "two places that can disagree, and inserting a leg means renumbering the rest.",
@@ -529,11 +584,16 @@ HEADER = """# ==================================================================
 #  GENERATED FILE. Edit scripts/gen_env.py and re-run it; hand edits to layout
 #  are overwritten. VALUES are preserved when regenerating .env.
 #
-#  Layout rules, both enforced by the generator:
+#  Layout rules, all enforced by the generator:
 #    1. One boxed section per SERVICE - everything that service needs is together.
-#    2. Comments sit ABOVE their variable, never trailing. `PORT=5001  # note` is
-#       parsed differently by python-dotenv, a shell `source`, and everything else;
-#       this repo has already been bitten by it once.
+#    2. Each section reads TITLE -> DOCUMENTATION -> VALUES, the same shape the
+#       Makefile uses. All the prose for a section is stated ONCE, up front and
+#       indexed by variable name, so the assignments below it are a clean block you
+#       can scan. Interleaving notes with assignments meant you could not see the
+#       actual configuration without reading every paragraph between the lines.
+#    3. NEVER a trailing comment. `PORT=5001  # note` is parsed differently by
+#       python-dotenv, a shell `source`, and everything else; this repo has already
+#       been bitten by it once.
 #
 #  Host ports are grouped by tier: data 5001-5005, app 5006-5008,
 #  inference 5009-5010, observability 5011-5023. Only HOST ports are remapped -
@@ -551,23 +611,49 @@ BOX = 74
 def render(values: dict[str, str] | None = None) -> str:
     """Render the file. `values` overrides example values (used to preserve .env)."""
     out: list[str] = [HEADER]
-    for tier_name, sections in TIERS:
+    # Ordered like the Makefile's sections, which is also dependency order. Two
+    # files describing one system should be readable in the same direction.
+    ordered = sorted(
+        TIERS, key=lambda t: TIER_ORDER.index(t[0]) if t[0] in TIER_ORDER else 99
+    )
+    for tier_name, sections in ordered:
         out.append("")
         out.append("# " + "#" * BOX)
         out.append(f"# ##  {tier_name}".ljust(BOX) + "##")
         out.append("# " + "#" * BOX)
+        for line in TIER_DOCS.get(tier_name, ()):
+            out.append(f"#  {line}".rstrip())
+        if tier_name in TIER_DOCS:
+            out.append("# " + "-" * BOX)
         for title, subtitle, variables in sections:
-            out.append("")
+            # ---- 1. BOXED TITLE ------------------------------------------------------
             # Border is "# +" + BOX dashes + "+"  = BOX + 4 chars.
             # Content is "# | " + text + padding + "|", so the pad target is BOX + 3.
+            out.append("")
             out.append("# +" + "-" * BOX + "+")
             out.append(f"# | {title}".ljust(BOX + 3) + "|")
             if subtitle:
                 out.append(f"# | {subtitle}".ljust(BOX + 3) + "|")
             out.append("# +" + "-" * BOX + "+")
-            for key, example, comments in variables:
+
+            # ---- 2. DOCUMENTATION, ALL OF IT, ONCE -----------------------------------
+            # Every note for this section lives here rather than above its variable.
+            # Interleaving prose with assignments meant you could not see the actual
+            # CONFIGURATION without reading every paragraph between the lines of it.
+            # Each entry is indexed by variable name, so the block doubles as a
+            # contents list for the value block below.
+            documented = [(k, c) for k, _, c in variables if c]
+            for i, (key, comments) in enumerate(documented):
+                if i:
+                    out.append("#")
+                out.append(f"#  {key}")
                 for line in comments:
-                    out.append(f"# {line}".rstrip())
+                    out.append(f"#      {line}".rstrip())
+            if documented:
+                out.append("# " + "-" * BOX)
+
+            # ---- 3. THE VALUES, uninterrupted ----------------------------------------
+            for key, example, _comments in variables:
                 if values is None:
                     value = example
                 else:

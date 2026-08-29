@@ -133,18 +133,32 @@ def test_env_example_documents_only_names_something_reads() -> None:
     tagged = set(re.findall(r"^([A-Z][A-Z0-9_]*)=.*?\[(?:inert|infra)\]", text, re.M))
     tagged |= set(re.findall(r"^# ([A-Z][A-Z0-9_]*) — .*", text, re.M))
 
+    # Layout change #2 (S21): documentation no longer sits directly above its variable.
+    # Each section now reads TITLE -> DOCUMENTATION -> VALUES, with the prose stated once
+    # up front and indexed by variable name:
+    #
+    #     #  AWS_ACCESS_KEY_ID
+    #     #      [infra] boto3 reads this straight from the environment...
+    #     # ------------------------------------------------------------
+    #     AWS_ACCESS_KEY_ID=test
+    #
+    # So the tag is found by reading the doc ENTRY for a name, not by walking back from
+    # the assignment. This guard has now been taught the layout twice; that is the cost
+    # of a parser that depends on formatting, and it is still cheaper than losing the
+    # check — a name nothing reads is silent, because Settings uses extra="ignore".
     lines = text.splitlines()
-    for index, line in enumerate(lines):
-        match = re.match(r"^([A-Z][A-Z0-9_]*)=", line)
-        if not match:
+    current: str | None = None
+    for line in lines:
+        entry = re.match(r"^#  ([A-Z][A-Z0-9_]*)\s*$", line)
+        if entry:
+            current = entry.group(1)
             continue
-        # Walk back over the contiguous comment block that documents this variable.
-        for above in range(index - 1, -1, -1):
-            if not lines[above].startswith("#"):
-                break
-            if "[infra]" in lines[above] or "[inert]" in lines[above]:
-                tagged.add(match.group(1))
-                break
+        if not line.startswith("#"):
+            current = None
+            continue
+        if current and ("[infra]" in line or "[inert]" in line):
+            tagged.add(current)
+            current = None
 
     unknown = sorted(
         k for k in dotenv_values(ENV_EXAMPLE)

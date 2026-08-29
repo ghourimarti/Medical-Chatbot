@@ -79,6 +79,41 @@ class HistoryService:
         self._breaker.record_success()
         return result
 
+    async def load_thread(
+        self, session_id: uuid.UUID, conversation_id: uuid.UUID | None
+    ) -> list[Message]:
+        """Prior turns for CONDENSING a follow-up — scoped to the thread when there is one.
+
+        S20.9: condense was fed `load(session_id)`, which returns everything in the session
+        ACROSS ALL THREADS. So "What causes it?" was rewritten against whatever question
+        happened to be most recent anywhere in that session — a different topic entirely,
+        and in testing, against safety probes about chest pain and self-harm. The user saw
+        a follow-up answered from an unrelated earlier question.
+        A session is a browser identity; a conversation is a TRAIN OF THOUGHT. Only the
+        second one gives a pronoun its referent.
+
+        Falls back to the session when no conversation is set, because the anonymous
+        single-thread path has no conversation_id and its session IS the thread.
+        """
+        if conversation_id is None:
+            return await self.load(session_id)
+        if self._factory is None or self._breaker.is_open:
+            return []
+        try:
+            async with session_scope(self._factory) as s:
+                result = await MessageRepository(s).history_for_conversation(
+                    conversation_id, limit=self._max_turns
+                )
+        except Exception:
+            self._breaker.record_failure()
+            _throttled.warning(
+                "history-load", "thread history load failed; continuing statelessly",
+                exc_info=True,
+            )
+            return []
+        self._breaker.record_success()
+        return result
+
     async def record_turn(
         self,
         session_id: uuid.UUID,

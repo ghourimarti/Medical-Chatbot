@@ -46,6 +46,61 @@
   --kind-degraded-wash: #f5f4f2;
 
   --focus: #0f766e;
+
+  /* ── Shadows are the one token family that CANNOT be theme-independent ─────────
+     A black shadow on a #12140f surface is invisible: dark UIs separate surfaces with
+     LIGHT and border contrast, not cast shadows. Defined per-theme below, same as colour. */
+  --shadow-sm: 0 1px 2px rgb(28 28 26 / 0.06);
+  --shadow-md: 0 2px 8px rgb(28 28 26 / 0.08), 0 1px 2px rgb(28 28 26 / 0.04);
+  --shadow-lg: 0 8px 28px rgb(28 28 26 / 0.12), 0 2px 6px rgb(28 28 26 / 0.06);
+  --scrim: rgb(28 28 26 / 0.32);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAYOUT, SPACE, MOTION (F2) — theme-INDEPENDENT, so defined exactly once.
+   Colour needs three definition sites; these need one. Repeating them per theme
+   would be three places to drift with no benefit.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* 4px base. A health UI reads calmer on a consistent rhythm than on ad-hoc padding. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* Shell geometry. Named because three components need to agree on them, and a
+     magic `w-64` repeated in three files is how a sidebar and its offset drift apart. */
+  --sidebar-w: 17rem;
+  --sidebar-collapsed-w: 3.5rem;
+  --header-h: 3rem;
+  --measure: 68ch;      /* prose line length  (.answer-prose) */
+  --content-max: 52rem; /* the column the prose sits INSIDE: card, heading, composer */
+
+  /* Motion. Durations stay short: this is a reference tool, not a showcase, and every
+     value here is neutralised entirely by the prefers-reduced-motion block below. */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* One scale, so a drawer can never render above the emergency disclaimer by accident. */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-header: 20;
+  --z-drawer: 30;
+  --z-overlay: 40;
+  --z-palette: 50;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -75,6 +130,13 @@
     --kind-degraded-wash: #1c1b19;
 
     --focus: #5eead4;
+
+    /* Dark surfaces separate by LIGHT, not by cast shadow: a deeper black shadow is
+       invisible here. Elevation reads as a lifted surface plus a stronger border. */
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 2px 10px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.04);
+    --shadow-lg: 0 10px 34px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.06);
+    --scrim: rgb(0 0 0 / 0.6);
   }
 }
 
@@ -101,6 +163,10 @@
   --kind-degraded: #d6d3d1;
   --kind-degraded-wash: #1c1b19;
   --focus: #5eead4;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 2px 10px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --shadow-lg: 0 10px 34px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --scrim: rgb(0 0 0 / 0.6);
 }
 
 /* `@theme inline` makes Tailwind utilities resolve to the RUNTIME variable rather than
@@ -127,6 +193,14 @@
   --color-emergency-contrast: var(--kind-emergency-contrast);
   --color-degraded: var(--kind-degraded);
   --color-degraded-wash: var(--kind-degraded-wash);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
@@ -203,4 +277,75 @@ body {
   background: var(--surface-sunken);
   padding: 0.1em 0.35em;
   border-radius: 3px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PRINT / SAVE AS PDF (F3)
+
+   Deliberately a stylesheet rather than a PDF library. jsPDF is ~100kB against
+   23kB of headroom on `/`, and it would REDRAW the answer — losing the real
+   typography, the citation markers and the text layer that makes a saved answer
+   searchable and selectable. The browser's own "Save as PDF" keeps all three,
+   costs nothing, and honours the reader's paper size and margins.
+
+   What survives onto paper is chosen, not inherited: a printed medical answer
+   that has lost its sources is exactly the artefact this product exists not to
+   produce, so evidence prints EXPANDED even where the screen collapses it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media print {
+  /* Chrome that means nothing on paper. The disclaimer is NOT in this list. */
+  nav[aria-label="Saved conversations"],
+  header,
+  footer,
+  [data-print="hide"] {
+    display: none !important;
+  }
+
+  /* Backgrounds are not printed by default in most browsers, so anything that
+     relied on a dark surface for contrast would come out unreadable. Force the
+     document to a light, high-contrast rendering regardless of the theme the
+     reader happens to be using. */
+  :root {
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --surface-sunken: #ffffff;
+    --ink: #000000;
+    --ink-muted: #333333;
+    --line: #cccccc;
+  }
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  main {
+    padding: 0 !important;
+  }
+
+  /* Evidence prints OPEN. A <details> that is collapsed on screen prints
+     collapsed too, which would silently drop the sources from the page. */
+  details {
+    display: block !important;
+  }
+  details > summary {
+    list-style: none;
+  }
+  details[open] > *,
+  details > * {
+    display: revert !important;
+  }
+
+  /* A citation split across a page break is unreadable, and an answer separated
+     from its evidence is worse than useless. */
+  section,
+  li,
+  .answer-prose {
+    break-inside: avoid;
+  }
+
+  a[href]::after {
+    content: "";
+  }
 }

@@ -18,9 +18,10 @@ a leg already known to be down. The breaker converts a slow failure into a fast 
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 
 from medapi.observability.metrics import record_circuit, tokens_total
@@ -160,22 +161,61 @@ class FailoverModel:
         raise AllProvidersDownError("; ".join(errors))
 
     async def stream(
-        self, *, messages: Sequence[Message], max_tokens: int, temperature: float
+        self,
+        *,
+        messages: Sequence[Message],
+        max_tokens: int,
+        temperature: float,
+        on_venue: Callable[[str, str], None] | None = None,
     ) -> AsyncIterator[str]:
+        """`on_venue(venue_name, model_id)` fires once, when a leg produces its first token.
+
+        S20.12: without it the streaming path had NO WAY to learn which leg served. The
+        pipeline fell back to `self._model.model_id`, and FailoverModel.model_id returns
+        `self._legs[0].model.model_id` - the FIRST CONFIGURED leg, whoever actually
+        answered. So with SGLang stopped, Groq served and every streamed answer still
+        reported Qwen: in the response body, in the stored transcript, and in Langfuse.
+
+        That is worse than a cosmetic mislabel. The whole failover design is verified by
+        asking "which model_id came back?", and the browser uses the streaming path - so
+        the one path real users take was the one that could not answer that question, and
+        cost attribution silently credited a hosted answer to the free local engine.
+
+        A CALLBACK rather than a `last_venue` attribute: attributes are shared mutable
+        state and two concurrent streams would overwrite each other's answer. A closure
+        belongs to exactly one request.
+        """
         errors: list[str] = []
         for leg in self._legs:
             if not leg.breaker.allows_request():
                 errors.append(f"{leg.name}: circuit open")
                 continue
             started = False
+
+            def _usage(u: Usage, _leg: VenueLeg = leg) -> None:
+                # Attributed to the leg that STREAMED it, which is the whole point of the
+                # venue label: local tokens are free, hosted tokens are an invoice.
+                _record_tokens(_leg.name, u)
+
+            stream_kwargs: dict[str, object] = {}
+            if "on_usage" in inspect.signature(leg.model.stream).parameters:
+                stream_kwargs["on_usage"] = _usage
             try:
                 async for chunk in leg.model.stream(
-                    messages=messages, max_tokens=max_tokens, temperature=temperature
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    **stream_kwargs,  # type: ignore[arg-type]
                 ):
                     if not started:
                         started = True
                         leg.breaker.record_success()
                         _publish_states(self._legs)
+                        if on_venue is not None:
+                            # First token = this leg committed to the answer. The
+                            # STREAMING RULE below makes it final: we can no longer fail
+                            # over, so this is the venue for the whole response.
+                            on_venue(leg.name, leg.model.model_id)
                     yield chunk
                 return
             except ProviderError as e:

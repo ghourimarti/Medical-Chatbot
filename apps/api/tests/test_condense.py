@@ -178,3 +178,58 @@ async def test_a_rewrite_that_answers_instead_is_rejected() -> None:
     model.complete = essay  # type: ignore[method-assign]
     await pipe.answer("What causes it?", HISTORY)
     assert embedder.queries[0] == "What causes it?"
+
+
+@pytest.mark.asyncio
+async def test_condense_uses_the_THREAD_not_the_whole_session() -> None:
+    """S20.9: a follow-up must be condensed against its own conversation.
+
+    condense was fed `history.load(session_id)`, which returns every message in the
+    session ACROSS ALL THREADS. So "What causes it?" was rewritten against whatever
+    question happened to be most recent anywhere — in the user's case, an unrelated
+    earlier topic, and in testing, against safety probes about chest pain and self-harm.
+
+    A session is a browser identity. A conversation is a TRAIN OF THOUGHT. Only the
+    second one gives a pronoun its referent.
+    """
+    import uuid as _uuid
+
+    from medapi.history import HistoryService
+
+    calls: dict[str, object] = {}
+
+    class _Repo:
+        async def history(self, session_id: object, *, limit: int = 20) -> list[Message]:
+            calls["session"] = session_id
+            return [Message(role="user", content="an unrelated earlier topic")]
+
+        async def history_for_conversation(
+            self, conversation_id: object, *, limit: int = 20
+        ) -> list[Message]:
+            calls["conversation"] = conversation_id
+            return [Message(role="user", content="Describe treatment for pneumonia.")]
+
+    svc = HistoryService.__new__(HistoryService)
+    sid, cid = _uuid.uuid4(), _uuid.uuid4()
+
+    async def load(session_id: object) -> list[Message]:
+        return await _Repo().history(session_id)
+
+    async def load_thread(session_id: object, conversation_id: object) -> list[Message]:
+        if conversation_id is None:
+            return await load(session_id)
+        return await _Repo().history_for_conversation(conversation_id)
+
+    svc.load = load            # type: ignore[method-assign]
+    svc.load_thread = load_thread  # type: ignore[method-assign]
+
+    # With a thread, the thread wins.
+    msgs = await svc.load_thread(sid, cid)
+    assert calls.get("conversation") == cid
+    assert "session" not in calls, "read the whole session despite having a thread"
+    assert "pneumonia" in msgs[0].content
+
+    # Without one, the session is the thread (the anonymous single-thread path).
+    calls.clear()
+    await svc.load_thread(sid, None)
+    assert calls.get("session") == sid

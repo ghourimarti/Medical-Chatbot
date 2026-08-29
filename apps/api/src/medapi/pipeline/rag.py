@@ -12,6 +12,7 @@ Reranking/hybrid (S6), streaming (S4), and caching (S8) slot in as added stages 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 import time
@@ -217,14 +218,27 @@ class RagPipeline:
         ]
 
         parts: list[str] = []
+        # Which leg actually produced the tokens. Defaults to the configured first leg so
+        # a non-failover model (tests, a single venue) behaves exactly as before.
+        served: dict[str, str] = {"model_id": self._model.model_id}
+
+        def _record_venue(_venue: str, model_id: str) -> None:
+            served["model_id"] = model_id
+
         ttft_ms: float | None = None
         # Hold the provider stream so we can close it DETERMINISTICALLY. Relying on GC
         # to finalize it leaves the provider connection open after a client disconnects,
         # which means we keep paying for tokens nobody will read (D20).
+        # on_venue exists only on FailoverModel; a plain ModelPort (tests, a single
+        # configured venue) must keep working untouched, so it is passed conditionally.
+        stream_kwargs: dict[str, Any] = {}
+        if "on_venue" in inspect.signature(self._model.stream).parameters:
+            stream_kwargs["on_venue"] = _record_venue
         provider_stream = self._model.stream(
             messages=messages,
             max_tokens=self._s.llm_max_output_tokens,
             temperature=0.2,
+            **stream_kwargs,
         )
         # S10.2b DEFECT FIX: the output dosage net (D18/S12.3) ran ONLY in _generate,
         # which serves answer(). stream_answer() had no such check — and the browser uses
@@ -262,7 +276,7 @@ class RagPipeline:
                 text=_MESSAGES[RefusalCategory.DOSAGE],
                 citations=[],
                 refusal_category=RefusalCategory.DOSAGE.value,
-                model_id=self._model.model_id,
+                model_id=served["model_id"],
                 timings=timings_now,
             )
             return
@@ -277,7 +291,7 @@ class RagPipeline:
                 kind=AnswerKind.NO_ANSWER,
                 text=NO_ANSWER_TEXT,
                 citations=[],
-                model_id=self._model.model_id,
+                model_id=served["model_id"],
                 timings=timings,
             )
             return
@@ -285,7 +299,7 @@ class RagPipeline:
             kind=AnswerKind.GROUNDED,
             text=text,
             citations=state.citations,
-            model_id=self._model.model_id,
+            model_id=served["model_id"],
             timings=timings,
         )
 
@@ -416,9 +430,32 @@ class RagPipeline:
         # Hybrid (D3): BM25 sparse alongside dense, fused server-side by RRF. Optional so
         # the pipeline still works dense-only (tests, or before a hybrid re-index).
         if self._sparse is not None:
-            kwargs["sparse_vector"] = await asyncio.to_thread(
-                self._sparse.encode_query, state.search_question or state.question
-            )
+            # DEGRADE to dense-only rather than failing the request.
+            #
+            # S20.10: `Bm25Encoder._model` is a cached_property that constructs
+            # SparseTextEmbedding on FIRST USE, and fastembed downloads the model from
+            # HuggingFace at that moment. Nothing warms it, so the first real query paid
+            # the download - and when the network blipped, the raw httpx ConnectError
+            # propagated out of _retrieve untyped, past every degradation ladder, into the
+            # generic `except Exception` in the stream route. 17 requests were counted as
+            # medbot_errors_total{error_type="unhandled",status="500"}.
+            #
+            # Dense retrieval alone still answers; losing the sparse half costs RECALL on
+            # keyword-ish queries, which is a quality regression, not an outage. So it is
+            # metered like the reranker fallback instead of being invisible.
+            try:
+                kwargs["sparse_vector"] = await asyncio.to_thread(
+                    self._sparse.encode_query, state.search_question or state.question
+                )
+            except Exception:  # noqa: BLE001 - any transport/model failure degrades
+                degradations_total.labels(
+                    component="sparse", reason="unavailable"
+                ).inc()
+                logger.warning(
+                    "sparse encoder unavailable; serving DENSE-ONLY retrieval "
+                    "(recall degraded)",
+                    exc_info=True,
+                )
         chunks = await self._store.search(**kwargs)  # type: ignore[arg-type]
         return replace(
             state,

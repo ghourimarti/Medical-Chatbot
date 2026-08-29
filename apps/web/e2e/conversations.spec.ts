@@ -12,28 +12,51 @@ function sidebar(page: Page) {
   return page.getByRole("navigation", { name: "Saved conversations" });
 }
 
+/**
+ * Reveal the sidebar, whichever viewport this project runs at (F1).
+ *
+ * On desktop it is a permanent rail. On a phone it is a drawer behind "Open navigation" —
+ * the shape every product in this category uses, because a 17rem rail on a 412px screen
+ * leaves no room for the answer. So the sidebar is not "missing" on mobile; it is one tap
+ * away, and this helper asserts that tap actually works rather than skipping the viewport.
+ */
+async function openSidebar(page: Page) {
+  const opener = page.getByRole("button", { name: "Open navigation" });
+  if (await opener.isVisible()) await opener.click();
+  await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+}
+
+// "New chat", not "New conversation": the control was renamed with the app shell (F1)
+// to match what the rest of the category calls it. The accessible name follows the VISIBLE
+// label deliberately — giving it an aria-label of "New conversation" while it reads "New
+// chat" on screen would break WCAG 2.5.3 (Label in Name) to keep a selector stable.
 async function newConversation(page: Page) {
   const created = page.waitForResponse(
     (r) => r.url().includes("/api/v1/conversations") && r.request().method() === "POST",
   );
-  await sidebar(page).getByRole("button", { name: "New conversation" }).click();
+  await sidebar(page).getByRole("button", { name: "New chat" }).click();
   await created;
+  // NOTE: on a phone this CLOSES the drawer — you asked for a new thread, so the composer
+  // is what you want to see, not the list you just left. Deliberately not reopened here:
+  // a test that goes on to type a question needs the composer reachable, and only the
+  // tests that assert on the LIST reopen it (they call openSidebar themselves).
 }
 
 test.describe("conversation sidebar @live", () => {
   test("is available without signing in", async ({ page }) => {
     await page.goto("/");
-    await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+    await openSidebar(page);
     // No signup wall: the feature is usable before an account exists.
-    await expect(sidebar(page).getByRole("button", { name: "New conversation" })).toBeVisible();
+    await expect(sidebar(page).getByRole("button", { name: "New chat" })).toBeVisible();
   });
 
   test("creating a conversation adds it to the list", async ({ page }) => {
     await page.goto("/");
-    await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+    await openSidebar(page);
     await expect(sidebar(page).getByText("No saved conversations yet")).toBeVisible();
 
     await newConversation(page);
+    await openSidebar(page);
     await expect(
       sidebar(page).getByRole("button", { name: "Untitled conversation", exact: true }),
     ).toBeVisible();
@@ -41,8 +64,9 @@ test.describe("conversation sidebar @live", () => {
 
   test("a conversation can be renamed", async ({ page }) => {
     await page.goto("/");
-    await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+    await openSidebar(page);
     await newConversation(page);
+    await openSidebar(page);
 
     await sidebar(page).getByRole("button", { name: /^Rename/ }).first().click();
     const field = sidebar(page).getByLabel("Conversation title");
@@ -59,8 +83,9 @@ test.describe("conversation sidebar @live", () => {
 
   test("deleting asks for confirmation first", async ({ page }) => {
     await page.goto("/");
-    await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+    await openSidebar(page);
     await newConversation(page);
+    await openSidebar(page);
 
     await sidebar(page).getByRole("button", { name: /^Delete/ }).first().click();
     // Destroying stored health questions must never be one click.
@@ -76,7 +101,7 @@ test.describe("conversation sidebar @live", () => {
 
   test("an answer lands in the selected conversation", async ({ page }) => {
     await page.goto("/");
-    await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+    await openSidebar(page);
     await newConversation(page);
 
     // The selected thread id rides along with the ask. It is caller-supplied and therefore
@@ -96,8 +121,9 @@ test.describe("conversation sidebar @live", () => {
 
   test("anonymous threads say what signing in would do", async ({ page }) => {
     await page.goto("/");
-    await expect(sidebar(page)).toBeVisible({ timeout: 30_000 });
+    await openSidebar(page);
     await newConversation(page);
+    await openSidebar(page);
     // Not a generic "Sign up!" prompt: it states the consequence for work already done.
     await expect(sidebar(page).getByText(/saved to this browser/)).toBeVisible();
   });

@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # INDEPENDENTLY. local-vllm -> local-sglang covers an ENGINE fault (a crash, an OOM
     # regression, a bad build) but not a dead GPU or a dead box — both legs share those.
     # Independence starts at the hosted legs, so keep at least one of them last.
-    serving_chain: str = "groq"
+    serving_chain: str = "groq,openai"
     # Default engine for a chain entry that does not name one.
     serving_engine: Literal["vllm", "sglang"] = "sglang"
     circuit_failure_threshold: int = Field(default=3, ge=1)

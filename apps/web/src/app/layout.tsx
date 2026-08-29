@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Disclaimer } from "@/components/disclaimer";
 import { SiteFooter } from "@/components/site-footer";
-import { DensityToggle, PreferencesScript, ThemeToggle } from "@/components/preferences";
+import { PreferencesScript } from "@/components/preferences";
+import { AppShell } from "@/components/shell/app-shell";
+import { ConversationsProvider } from "@/lib/conversations-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -32,19 +34,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
         <Disclaimer />
 
-        <header className="border-b border-line">
-          <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-2">
-            <span className="text-sm font-medium">Medical Reference Assistant</span>
-            <div className="flex items-center gap-1">
-              <DensityToggle />
-              <ThemeToggle />
-            </div>
-          </div>
-        </header>
-
-        <main id="main" className="mx-auto max-w-5xl px-4 py-8">
-          {children}
-        </main>
+        {/* The shell now OWNS the header and <main> (F1). It used to be a centred
+            `max-w-5xl` column with the conversation list nested inside one route's page,
+            which is why the app read as a web page with a chat on it rather than as a
+            product: navigation disappeared on /privacy and was bounded by a column sized
+            for prose. The reading measure did not go away — it moved to the CONTENT,
+            where `.answer-prose` still caps long-form answers at 68ch. */}
+        <ConversationsProvider>
+          <AppShell>{children}</AppShell>
+        </ConversationsProvider>
 
         <SiteFooter />
       </body>

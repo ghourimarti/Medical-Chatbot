@@ -60,6 +60,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     warmup = getattr(services.embedder, "warmup", None)
     if warmup is not None:
         await asyncio.to_thread(warmup)
+    # The BM25 encoder too. Its model is a cached_property that fastembed DOWNLOADS on
+    # first use, so without this the first real user query pays the download - and if the
+    # network is briefly unavailable at that instant, that user's request is the one that
+    # fails (S20.10). Warming here moves the cost to startup, where a failure is loud and
+    # nobody is waiting on an answer.
+    sparse = getattr(services, "sparse", None)
+    sparse_warmup = getattr(sparse, "warmup", None)
+    if sparse_warmup is not None:
+        try:
+            await asyncio.to_thread(sparse_warmup)
+            logger.info("sparse (BM25) encoder warm")
+        except Exception:
+            # Retrieval degrades to dense-only rather than refusing to boot: a missing
+            # sparse half costs recall, not availability (D21).
+            logger.exception("sparse warmup failed; retrieval will be DENSE-ONLY")
     # Schema + partitions. A partitioned table with no matching partition REJECTS inserts,
     # so tomorrow's partitions are created at every boot as well as by the scheduled job
     # (S9). Cheap insurance against a 00:00:00 write outage.

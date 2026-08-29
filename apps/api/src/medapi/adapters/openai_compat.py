@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 
 import httpx
 
@@ -108,9 +108,29 @@ class OpenAICompatModel:
         )
 
     async def stream(
-        self, *, messages: Sequence[Message], max_tokens: int, temperature: float
+        self,
+        *,
+        messages: Sequence[Message],
+        max_tokens: int,
+        temperature: float,
+        on_usage: Callable[[Usage], None] | None = None,
     ) -> AsyncIterator[str]:
+        """Yield content deltas; report token usage through `on_usage` when the server
+        sends it.
+
+        S20.13: an OpenAI-compatible server reports usage on a stream ONLY if asked, via
+        stream_options.include_usage. Nobody asked, so medbot_tokens_total and
+        medbot_request_cost_usd recorded NOTHING for streamed requests - and the browser
+        streams. Measured: a streamed query moved the counter by 0, the same question
+        non-streamed moved it by 1,188. Every "answered" log line read tokens=0, and the
+        Grafana cost panels described curl traffic only.
+
+        Guarded with a try/except because not every OpenAI-compatible server implements
+        stream_options; a server that ignores it simply never calls on_usage, which
+        degrades to the old behaviour rather than failing the stream.
+        """
         payload = self._payload(messages, max_tokens, temperature, stream=True)
+        payload["stream_options"] = {"include_usage": True}
         try:
             async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
                 resp.raise_for_status()
@@ -121,8 +141,22 @@ class OpenAICompatModel:
                     if body == "[DONE]":
                         return
                     try:
-                        delta = json.loads(body)["choices"][0]["delta"].get("content")
-                    except (json.JSONDecodeError, KeyError, IndexError):
+                        chunk = json.loads(body)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # The usage block arrives in a FINAL chunk that carries no choices.
+                    usage = chunk.get("usage")
+                    if usage and on_usage is not None:
+                        on_usage(
+                            Usage(
+                                prompt_tokens=int(usage.get("prompt_tokens") or 0),
+                                completion_tokens=int(usage.get("completion_tokens") or 0),
+                            )
+                        )
+                    try:
+                        delta = chunk["choices"][0]["delta"].get("content")
+                    except (KeyError, IndexError):
                         continue
                     if delta:
                         yield delta

@@ -1555,3 +1555,412 @@ Everything below came out of running the app rather than reading it.
           weak (1/4 chunks on topic); gpt-oss-20b synthesises correctly. A model capability
           gap, not a bug - visible only in Langfuse, since Prometheus records a healthy
           `grounded` either way.
+
+---
+
+## S20.8 — I DESTROYED 42 MAKEFILE TARGETS AND DID NOT NOTICE  🔴 → ✅
+
+The user asked why `make down` left the kind cluster running. The answer was far worse
+than the question.
+
+     🔴 S20.8.1 THE DAMAGE, measured not guessed:
+              97035a5 (HEAD at session start)   496 lines   81 targets
+              9164b22 (the user's commit of my work)  342 lines   40 targets
+          My line-swallowing patch scripts - the same ones that took out kill-on/kill-off
+          and turned cache-ls into a DELETE - removed 41 more targets: every web-*, every
+          vllm-*/sglang-* lifecycle target, webui, clean-images, clean-models, images,
+          api, reindex, smoke, chaos, backup-drill, chart-lint, all three tf-*, load-*,
+          gpu, gpu-down, engine-guide. Plus the ENGINE_HINT variable.
+
+     🔴 S20.8.2 WHY IT WAS INVISIBLE, and this is the part worth keeping:
+          Every destroyed name REMAINED IN .PHONY. Make resolves a .PHONY name with no
+          rule, finds nothing to run, prints "Nothing to be done for 'X'" and EXITS 0.
+          So `make vllm-up`, `make webui`, `make clean-images` were all silent no-ops that
+          reported success. A target that no longer exists fails loudly; one that exists
+          with no recipe does not.
+          FOURTH instance of one pattern this session: declared, referenced, doing nothing
+          - trace_answer with no caller (I4.3), four metrics never written (I5.4),
+          condense_ms summed by a stage that did not exist (S20.1), and now this.
+
+     🔴 S20.8.3 I ALSO MIS-VERIFIED IT. My first probe was
+              make -n langfuse && echo OK
+          which printed OK - because a hollow target EXITS 0. I was using the bug to test
+          for the bug. Had to probe the output text ("Nothing to be done") instead.
+          Two contributing corruptions, both from patches writing an ESCAPE SEQUENCE where
+          a line continuation belonged: a literal backslash-n swallowed half of .PHONY,
+          and another injected a bogus entry into DATA_VOLS (mine, from the Langfuse
+          volumes work).
+
+     ✅ S20.8.4 RECOVERED. All 42 blocks restored verbatim from 97035a5, preserving this
+          session's deliberate additions (ENGINE selection, cache/kill/audit targets, the
+          kind lifecycle). .PHONY rebuilt from the real target list.
+          Makefile: 664 lines, 94 targets. Verified: 0 hollow, 0 orphaned .PHONY names,
+          0 literal backslash-n outside the legitimate awk printf.
+
+     ✅ S20.8.5 THE KIND LIFECYCLE, which started all this. All nine kind targets had lost
+          their recipes. Restored, and `kind-start` now ALWAYS re-runs `kind export
+          kubeconfig`, because a restarted control-plane gets a new API-server port and the
+          stale config fails with "current-context is not set" - which reads like a broken
+          cluster rather than a stale pointer at a healthy one.
+          PROVEN LIVE: make kind-stop removed all three node containers; make kind-start
+          brought them back Ready.
+              make up    -> kind-start (creates if absent)
+              make down  -> kind-stop  (nodes stopped, cluster PRESERVED)
+              make downv -> kind-down  (cluster deleted)
+              KIND=0     -> expands to `if [ "0" = "1" ]`, skipped
+
+     ✅ S20.8.6 GUARDED. scripts/audit.py now fails on:
+              - a .PHONY target with no recipe        (HIGH)
+              - a .PHONY name with no rule at all     (MEDIUM)
+              - a literal backslash-n in the Makefile (MEDIUM)
+          The lesson generalised: a name that resolves is not a thing that works.
+
+     ✅ S20.8.7 Confirmed from the user's rebuild: medbot_refusals_total and
+          medbot_no_answers_total are now PRESENT, rerank timeout (4.0s) exceeds its own
+          measured p95 (2.393s), and multi-turn works - "What causes it?" resolved from
+          history and returned a grounded answer.
+
+     Gate: 449 passed - ruff clean - .env.example in sync - Makefile 664 lines / 94 targets
+
+---
+
+## S20.9 / S20.10 — two REAL defects found by the user's own session
+
+### S20.9 — condense read the SESSION, not the THREAD  🔴 → ✅
+     User report: Q10 "What causes it?" answered from a DIFFERENT earlier question.
+     Cause: I wired condense to `history.load(session_id)`, which returns every message in
+     the session ACROSS ALL THREADS. `history_for_conversation(conversation_id)` already
+     existed and I used the wrong one. So a follow-up was rewritten against whatever
+     question was most recent ANYWHERE in that session - in the user's case an unrelated
+     topic, and in testing against safety probes about chest pain and self-harm.
+     A session is a BROWSER IDENTITY. A conversation is a TRAIN OF THOUGHT. Only the
+     second gives a pronoun its referent.
+     Fixed: HistoryService.load_thread(session_id, conversation_id) - thread-scoped when a
+     conversation exists, falling back to the session for the anonymous single-thread path
+     where the session IS the thread. Both routes updated. Test pins the scoping.
+
+### S20.10 — 17 unhandled 500s from the BM25 encoder  🔴 → ✅
+     `medbot_errors_total{error_type="unhandled",status="500"} 17`. Traceback frames
+     pinned it exactly: sparse.py:33 _model -> sparse.py:51 encode_query -> rag.py
+     _retrieve -> escaped untyped into the stream route's generic `except Exception`.
+     Two defects in one:
+       (a) `Bm25Encoder._model` is a cached_property that constructs SparseTextEmbedding
+           on FIRST USE, and fastembed DOWNLOADS the model from HuggingFace at that
+           moment. Nothing warmed it, so the first real user query paid the download - and
+           when the network blipped, that user's request was the one that died.
+       (b) The failure was not wrapped in a typed domain error, so it bypassed every
+           degradation ladder in the pipeline and was counted as unhandled rather than as
+           a degradable retrieval fault.
+     Fixed: retrieval now DEGRADES to dense-only and meters
+     medbot_degradations_total{component="sparse"} - losing the sparse half costs RECALL,
+     not availability. And the encoder is warmed in lifespan, moving the download to
+     startup where a failure is loud and nobody is waiting on an answer.
+     Required adding Services.sparse: it was passed to the pipeline and held nowhere the
+     lifespan could reach, so `getattr(services, "sparse", None)` would have silently
+     returned None and warmed nothing - the same declared-but-dead shape yet again.
+
+### S20.11 — "Answers are limited right now" after stopping SGLang: CORRECT
+     Not a bug. Both legs were down simultaneously: sglang because the user stopped it,
+     and groq because of a transient ConnectTimeout during the same Docker/WSL2 network
+     blip that killed the whole stack earlier. With every venue unreachable the system
+     returns DEGRADED, which is the designed behaviour.
+     VERIFIED afterwards: groq is reachable (httpx HTTP 200 in 0.7s from inside the API
+     container) and failover works - a fresh query with sglang still down was served by
+     openai/gpt-oss-20b, and the groq breaker returned to 0 (closed).
+     A first diagnosis of mine was WRONG and corrected: urllib got HTTP 403 from Groq and
+     I nearly reported a dead API key. That was Cloudflare rejecting urllib's default
+     User-Agent; the app uses httpx and gets 200. The key is fine.
+
+     Gate: 450 passed - ruff clean - mypy clean
+
+---
+
+## S20.12 / S20.13 — the streaming path was lying about who served, and counting nothing
+
+User report: "docker stop sglang — the response still shows Qwen in Langfuse. This was
+correct before." REPRODUCED exactly: with sglang stopped, a streamed query returned
+`"model_id":"Qwen/Qwen2.5-7B-Instruct-AWQ"` while Groq was doing the work.
+
+### S20.12 — streaming reported the FIRST CONFIGURED leg, not the serving one  🔴 → ✅
+          non-streaming  model_id = completion.model_id   (who actually answered)  CORRECT
+          streaming      model_id = self._model.model_id  -> FailoverModel.model_id
+                                  -> self._legs[0].model.model_id                  WRONG
+     So the reported model was whatever sat FIRST in SERVING_CHAIN, regardless of who
+     served. Timeline proof: sglang FinishedAt 08:01:28, answers at 08:04:13 and 08:41:45
+     both recorded Qwen.
+     Why this is worse than a mislabel: the entire failover design is verified by asking
+     "which model_id came back?" - it is the check in every doc I wrote - and the BROWSER
+     USES THE STREAMING PATH. The one path real users take was the one that could not
+     answer the question the design exists to answer, and cost attribution credited hosted
+     answers to the free local engine.
+     Fixed: FailoverModel.stream(on_venue=...) fires once at the first token, when the
+     STREAMING RULE has already made the leg final. A CALLBACK, not a `last_venue`
+     attribute: an attribute is shared mutable state and two concurrent streams would
+     overwrite each other's answer; a closure belongs to one request.
+
+### S20.13 — streamed requests recorded NO TOKENS AT ALL  🔴 → ✅
+     Measured, not inferred:
+          streamed query    medbot_tokens_total 2784 -> 2784   delta 0
+          non-stream query  medbot_tokens_total 2784 -> 3972   delta 1188
+     An OpenAI-compatible server reports usage on a stream ONLY if asked, via
+     stream_options.include_usage. Nobody asked. So medbot_tokens_total and
+     medbot_request_cost_usd were blind to the only path real users take, every "answered"
+     log line read tokens=0, and the Grafana cost panels described curl traffic alone.
+     Fixed: request include_usage, surface it through on_usage, and meter it against the
+     leg that STREAMED it. Guarded by signature inspection so a server that ignores
+     stream_options degrades to the old behaviour instead of failing the stream.
+
+### S20.14 — how far a serving failure actually radiates  (the user's question)
+     Tested live with sglang down:
+       Prometheus  medbot_venue_circuit_state    RADIATES - local-sglang=2 (OPEN)  ✅
+       Prometheus  medbot_tokens_total by venue  BLIND on the streaming path       ❌ fixed
+       Grafana     breakers panel                RADIATES                          ✅
+       Grafana     tokens/cost panels            blind to streaming                ❌ fixed
+       Langfuse    trace model_id                WRONG venue                       ❌ fixed
+       Jaeger      spans marked ERROR            ZERO - failover is invisible      🔵 open
+     Only ONE of four tools told the truth about a streamed failover. Jaeger remains open:
+     a leg failing and another taking over produces no error span, because from the
+     pipeline's view `generate` simply succeeded. Worth an event or span attribute later.
+
+     Also fixed: test_openai_leg_is_skipped_without_a_key inherited OPENAI_API_KEY from
+     the developer's .env (load_dotenv pollution again - `_env_file=None` does not isolate
+     os.environ). Pinned explicitly, the same fix as test_all_known_venues_are_configurable.
+
+     Gate: 456 passed - ruff clean - mypy clean (67 files)
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+  FRONTEND REBUILD — "a chat page" → an enterprise-grade product
+  Session scope: FRONTEND ONLY. No backend file written.
+═══════════════════════════════════════════════════════════════════════════════════════
+
+  Legend   ✅ done   🔵 partial (seam left)   ⏳ not started   ❌ found & fixed   ⚠️ handed over
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F0 · CONVERSATION THREADING — verify before building                        ✅ 2 / 2
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ✅ F0.1  conversation_id wiring — NO BUG. I claimed one and was WRONG.
+           │  Grepped call sites, saw `ask(q)`, reported the thread id was never sent.
+           │  `ask` is a WRAPPER (page.tsx:41-44) injecting `convos.activeId`, with a
+           │  comment saying exactly that.
+           └─ Reverted my redundant layer. page.tsx byte-identical to HEAD.
+              LESSON: a grep over call sites proves nothing until you check what the
+              callee is BOUND to.
+
+  ✅ F0.2  Two-thread proof, run live as specified.
+           ├─ Thread A ← pneumonia · Thread B ← "What causes it?"
+           ├─ B did NOT resolve to pneumonia → stated criterion PASSES
+           └─ …but for the wrong reason: A did not resolve either. Root causes are
+              BACKEND, handed over as text, NOT applied:
+                ⚠️  cache keyed on RAW question, no conversation in key
+                    (proven: cache_hit: true, wrong thread's answer served)
+                ⚠️  condense's own LLM call dies on the dead sglang leg → groq
+                    gpt-oss-20b (a REASONING model) burns all 64 tokens of
+                    condense_max_tokens on reasoning → returns "" →
+                    `''.splitlines()[0]` raises IndexError → swallowed.
+                    Measured: 64 → ""   ·   256 → "What causes pneumonia?"
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F2 · DESIGN TOKENS — the review gate, additive only                         ✅ 5 / 5
+───────────────────────────────────────────────────────────────────────────────────────
+
+  Colour + type were already strong (three-state theming, 1.200 scale, red reserved
+  for emergencies). What was missing was everything a SHELL needs. Nothing existing
+  was changed, so the contrast checker stayed green throughout.
+
+  ✅ F2.1  space 1–8 (4px base) · radius sm→full
+  ✅ F2.2  elevation shadow-sm/md/lg + scrim — defined PER THEME
+           └─ a black shadow is invisible on #12140f; dark separates surfaces by
+              light and border, not by cast shadow
+  ✅ F2.3  motion: duration-fast/base/slow + ease-out / ease-in-out
+  ✅ F2.4  geometry: sidebar-w · sidebar-collapsed-w · header-h · measure · content-max
+  ✅ F2.5  ONE z-index scale — a drawer can never cover the emergency disclaimer
+           └─ verified: `node scripts/check-contrast.mjs` → WCAG AA, both themes
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F1 · APP SHELL — the actual answer to "it doesn't feel like a product"      ✅ 9 / 9
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ✅ F1.1  ConversationsProvider hoists `useConversations` to the layout
+           ├─ hook UNCHANGED, simply lifted — two calls would mean two copies of the
+           │  list, so renaming in the sidebar would not update the transcript
+           └─ memoised on real values; `useMemo(() => value, [value])` would be a
+              no-op because the hook returns a fresh literal each render
+  ✅ F1.2  AppShell: desktop rail + mobile drawer + sticky header
+  ✅ F1.3  useSidebar keeps TWO states on purpose
+           ├─ `collapsed`   persisted desktop preference
+           └─ `drawerOpen`  never persisted — landing with a drawer already covering
+              the content would be hostile
+  ❌ F1.4  Drawer focus management — and a REGRESSION I introduced, then fixed
+           ├─ focus moves in on open, RETURNS to the opener on close, Esc bound only
+           │  while open, body scroll locked
+           └─ BUG: the effect keyed on `drawerOpen` also runs on MOUNT, so the
+              else-branch stole focus to the opener on every page load. First Tab
+              then landed on the header link instead of "Skip to content" — the skip
+              link silently broken on every page. Desktop hid it (`md:hidden` makes
+              .focus() a no-op). Fixed with a `wasOpen` ref.
+  ✅ F1.5  Sidebar: new chat · filter · recency groups · pin · rename · delete ·
+           account · settings
+           └─ row actions use `focus-within:` as well as `group-hover:` — the
+              hover-only idiom hides every action from keyboard users
+  ✅ F1.6  layout.tsx renders the shell; page.tsx consumes the context
+           └─ activeId effect carries a stale-guard, so a fast A→B switch cannot
+              leave B's title above A's messages
+  ✅ F1.7  Centred content column (`--content-max`)
+           └─ dropping the old max-w-5xl freed the sidebar; dropping the measure
+              entirely was the opposite failure — the card stretched past 970px
+  ✅ F1.8  Deleted `DrawerClose` — exported, never called
+  ❌ F1.9  ONE nav landmark for the whole sidebar, not just the list
+           └─ "New chat", the filter and the account controls sat OUTSIDE the region
+              a screen-reader user lands in when they jump to navigation — the only
+              way to CREATE a thread was outside the region for MANAGING threads.
+              Caught by the e2e suite scoping to the landmark.
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F4 · CONVERSATION VIEW CRAFT                                               ✅ 6 / 6
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ✅ F4.1  Chronological order — transcript first, live turn beneath it
+           └─ it rendered the live answer ABOVE the transcript, which reads as a form
+              that keeps a log rather than as a conversation. Content unchanged:
+              HistoryPanel still refuses to borrow answer-kind treatments, because the
+              API drops `kind` on read and a past emergency refusal shown as an
+              ordinary answer is the exact misrepresentation this UI exists to prevent.
+  ✅ F4.2  Streaming — already correct, left alone
+           └─ evidence paints before tokens (the D8 contract made visible), a caret
+              rather than a spinner, one polite live region instead of a per-token
+              barrage. Nothing here needed "improving".
+  ✅ F4.3  Stick-to-bottom that YIELDS to the reader
+           └─ scrolling up releases it; returning re-engages. The naive
+              scroll-on-every-token fights a reader who scrolled back to re-read a
+              citation — and medical answers are exactly the ones people scroll back
+              through. `behavior:"auto"` while streaming: a smooth scroll never
+              finishes before the next token starts.
+  ✅ F4.4  Jump-to-latest — only while streaming AND only once actually scrolled away
+  ✅ F4.5  Copy answer WITH its sources
+           └─ prose alone would strip what makes the product different: a medical
+              paragraph with "[1]" markers and no key is less trustworthy than the
+              original. Clipboard failure is REPORTED, not swallowed.
+  ❌ F4.6  Transcript race — a real user-visible bug, found by the suite
+           ├─ `done` reaches the client from inside the stream; `record_turn` runs
+           │  afterwards in postflight (D21: persistence is a side effect, never a
+           │  precondition). So the client asked for the transcript microseconds
+           │  before the turn was committed, got the previous state, and never looked
+           │  again — the answer on screen was MISSING from "Earlier in this session".
+           ├─ PROVEN, not assumed: history returned `messages: []` for session
+           │  379012f0 while Postgres held two rows for that exact session.
+           └─ Fixed with a bounded, self-terminating retry (0 / 250 / 750 ms). Never
+              a spinner — blocking the UI on a record that is explicitly optional
+              would be the wrong trade.
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  VERIFICATION                                                                ✅ green
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ❌ V.1  My FIRST verification run was invalid and proved nothing.
+          └─ `make web-ci` passed 37/37 against localhost:5008 — the DOCKER container,
+             running an OLD build. Rebuilt from source, served on :5108 with
+             NODE_ENV=production (the container's own mode), re-ran there.
+
+  ❌ V.2  The gates only ever run a11y under `--project=chromium`.
+          └─ Running BOTH projects surfaced 4 mobile failures: 2 mine (F1.4), and 2
+             PRE-EXISTING — `/design`'s `overflow-x-auto` table had no keyboard access
+             (axe: scrollable-region-focusable). Never caught because desktop is wide
+             enough that nothing scrolls. Fixed both.
+
+  ✅ V.3  Suites, all against the :5108 production build
+          ├─ a11y            36 passed  (chromium + mobile)
+          ├─ conversations    8 passed
+          ├─ answer-kinds    ok, incl. the transcript test 3× consecutively
+          ├─ bundle          10/10 within budget · / 129 → 127 kB
+          └─ backend         456 passed · ruff clean · env in sync  (untouched)
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F3 · SIDEBAR FEATURES                                                      ✅ 3 / 3
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ✅ F3.1  Pin — per-browser (localStorage), behind a one-hook seam
+           └─ the honest version is a `pinned` column + PATCH field, which is backend.
+              Cost stated rather than hidden: a pin does not follow you to another
+              device. Acceptable ONLY because a pin merely reorders a list — the same
+              trade would not be acceptable for, say, a refusal category.
+  ✅ F3.2  Filter — labelled "Filter by title", NOT "Search"
+           └─ titles are user-set and deliberately never auto-generated from the
+              question (auto-titling a thread "Chest pain at night" puts a health
+              disclosure in a readable list). So most threads are "Untitled" and a box
+              labelled Search would lie. The empty state says so out loud.
+  ✅ F3.3  Print / Save as PDF — a print stylesheet, NOT a PDF library
+           ├─ jsPDF is ~100kB against ~23kB of headroom, but bundle size is the WEAKER
+           │  argument: a library REDRAWS the answer and loses the real typography, the
+           │  citation markers and the searchable text layer.
+           ├─ dark themes forced back to high-contrast light — browsers drop backgrounds
+           │  when printing, so a dark surface prints as unreadable pale-on-white
+           ├─ evidence forced OPEN: a collapsed <details> prints collapsed, silently
+           │  dropping the sources from a medical document
+           └─ labelled "Print / Save as PDF" because it opens the print dialog. Calling
+              it "Download" would be a small lie, and a product whose claim is "we show
+              you where the answer came from" cannot afford small lies in its own UI.
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F5 · COMMAND PALETTE                                                       ✅ 3 / 3
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ✅ F5.1  ⌘K / Ctrl-K — hand-rolled, not a dependency
+           └─ the whole surface is a filtered list plus a keydown handler
+  ✅ F5.2  Arrow keys, Enter, Escape; focus RETURNS to wherever it was opened from
+  ❌ F5.3  SSR hazard caught before it shipped
+           └─ `document.documentElement.dataset.theme` was read inside a useMemo. This
+              is a client component, but Next still SERVER-renders it, where `document`
+              does not exist — it would have thrown during SSR to choose an icon.
+              Moved into state set by an effect.
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  F6 · VERIFICATION                                                          ✅ green
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ❌ V.1  My FIRST verification run was invalid and proved nothing.
+          └─ `make web-ci` passed 37/37 against localhost:5008 — the DOCKER container
+             on an OLD build. Rebuilt from source, served on :5108 with
+             NODE_ENV=production (the container's own mode), and re-ran there.
+
+  ❌ V.2  The gates only ever run a11y under `--project=chromium`.
+          └─ Running BOTH projects surfaced 4 mobile failures: 2 mine (F1.4 focus-on-
+             mount), 2 PRE-EXISTING (`/design`'s overflow-x-auto table had no keyboard
+             access — axe: scrollable-region-focusable). Fixed both.
+
+  ❌ V.3  6 mobile conversations failures — the drawer, working as designed.
+          └─ On a phone the sidebar is behind "Open navigation"; the spec reached for
+             it directly. Encoded properly with `openSidebar()`, called where the LIST
+             is asserted and NOT after "New chat" — a real user taps it, the drawer
+             closes, and they type.
+
+  ✅ V.4  FINAL — everything green
+          ├─ playwright     146 passed / 0 failed   (chromium + mobile, all 8 specs)
+          ├─ new coverage   e2e/shell.spec.ts — palette, focus return, filter, pin
+          ├─ bundle         10/10 within budget · / 129 → 127 kB (SMALLER than before)
+          ├─ contrast       WCAG AA, both themes
+          ├─ screenshots    regenerated, light + dark
+          └─ backend        456 passed · ruff clean · env in sync  (never touched)
+
+
+───────────────────────────────────────────────────────────────────────────────────────
+  HANDED OVER — BACKEND, NOT APPLIED (out of session scope)
+───────────────────────────────────────────────────────────────────────────────────────
+
+  ⚠️  1  rag.py:385   `''.splitlines()[0]` raises IndexError on an empty completion
+  ⚠️  2  config.py    condense_max_tokens=64 starves a reasoning model (256 works)
+  ⚠️  3  .env         SERVING_CHAIN still lists the dead local-sglang leg
+  ⚠️  4  cache.py     response cache keyed on the RAW question, no conversation in the
+                      key — proven serving one thread's answer into another
+  ⚠️  5  llm_trace    `create_event` → `create_generation`, so Langfuse's cost/token
+                      dashboards stop reading zeros
+  ⚠️  6  serving.py   add ("condense", t.condense_ms) to the postflight stage loop

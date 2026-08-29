@@ -148,7 +148,19 @@ export default function DesignPage() {
 
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Treatment map</h2>
-        <div className="overflow-x-auto">
+        {/* tabIndex + role + label, not just `overflow-x-auto` (axe: scrollable-region-
+            focusable). The table is min-w-[36rem], so on a phone it scrolls sideways
+            INSIDE this box — and a container that only responds to a swipe or a trackpad
+            is unreachable for anyone driving the page from the keyboard, who has no way
+            to bring the right-hand columns into view at all.
+            Pre-existing and invisible to CI because the a11y suite is only ever run under
+            `--project=chromium`, where the viewport is wide enough that nothing scrolls. */}
+        <div
+          className="overflow-x-auto"
+          tabIndex={0}
+          role="region"
+          aria-label="Treatment map (scrolls horizontally)"
+        >
           <table className="w-full min-w-[36rem] border-collapse text-sm">
             <thead>
               <tr className="border-b border-line text-left text-ink-muted">

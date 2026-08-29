@@ -91,6 +91,14 @@ class _History:
     async def record_turn(self, session_id: UUID, **kw: Any) -> None:
         self.turns.append({"session_id": session_id, **kw})
 
+    async def load_thread(
+        self, session_id: UUID, conversation_id: UUID | None
+    ) -> list[Message]:
+        """Condense reads the THREAD, not the whole session: a session is a browser
+        identity, a conversation is a train of thought, and only the second gives a
+        pronoun its referent (S20.9)."""
+        return await self.load(session_id)
+
     async def load(self, session_id: UUID) -> list[Message]:
         """Both query routes read history now, to condense follow-ups before retrieval.
         The double returns nothing: these tests assert stream/non-stream PARITY, and a
