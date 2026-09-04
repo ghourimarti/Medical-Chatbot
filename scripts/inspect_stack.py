@@ -3,10 +3,10 @@
 Run AFTER exercising the app (docs/INSPECTION.md holds the query battery). It never asks
 "is the container up" - that question has lied at least four times in this project:
 
-  * six NetworkPolicies existed and kind enforced none of them            (P6.4.7)
-  * /readyz reported Ready over an EMPTY index, every query failing       (P6.3.5)
-  * Langfuse was healthy, keys authenticated 200, ZERO traces recorded    (I4.2)
-  * trace_answer() was configured, enabled, reachable, and had no caller  (I4.3)
+  * six NetworkPolicies existed and kind enforced none of them
+  * /readyz reported Ready over an empty index while every query failed
+  * Langfuse was healthy, keys authenticated 200, and zero traces were recorded
+  * trace_answer() was configured, enabled, reachable, and had no caller
 
 So every check reads a value that only exists if the component actually DID its job: rows
 written, points indexed, traces counted, spans nested, counters incremented.
@@ -389,7 +389,7 @@ def inspect_data() -> Section:
     s.add(
         "superseded collections", "<= 1 kept for rollback",
         f"{len(stale)} stale", len(stale) <= 1,
-        "I3.7 OPEN: ingest does not prune, ~29MB each",
+        "open: ingest does not prune, ~29MB each",
     )
 
     ping = redis("ping")
@@ -737,7 +737,7 @@ def inspect_obs() -> Section:
     n = (tr.get("meta") or {}).get("totalItems", 0)
     s.add(
         "Langfuse TRACES", "> 0 after asking", str(n), n > 0,
-        "THE check: healthy + authenticating + zero traces is the I4.2/I4.3 failure",
+        "the check: healthy + authenticating + zero traces is the silent-tracer failure",
     )
 
     jg = p("JAEGER_UI_PORT", "5023")
@@ -753,7 +753,7 @@ def inspect_obs() -> Section:
         s.add(
             "span tree COMPLETE", ">= 3 spans per request", f"largest={big} spans",
             big >= 3,
-            "all-1-span traces mean instrument_app never attached (I3.4c)",
+            "all-1-span traces mean instrument_app never attached",
         )
         ops = {sp.get("operationName") for t in traces for sp in (t.get("spans") or [])}
         parent = any(o and ("/api/" in o or o.startswith(("GET", "POST"))) for o in ops)

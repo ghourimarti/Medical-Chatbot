@@ -12,7 +12,7 @@ def test_system_prompt_loads_and_has_stable_sha() -> None:
 
 
 def test_system_prompt_encodes_safety_and_citation_rules() -> None:
-    """The safety layer the baseline lacked lives here as reviewable text (D18).
+    """The safety layer the baseline lacked lives here as reviewable text.
     Assert on tokens, not exact phrasing, so markdown emphasis doesn't make it brittle."""
     text = load_prompt("system", "v1").text.lower()
     assert "diagnose" in text  # refusal policy: no personal diagnosis

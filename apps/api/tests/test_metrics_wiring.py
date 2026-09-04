@@ -1,6 +1,6 @@
 """Metrics must be OBSERVED, not merely defined.
 
-INFRA-5: four metrics were declared in metrics.py, re-exported from observability/__init__,
+four metrics were declared in metrics.py, re-exported from observability/__init__,
 referenced in the Grafana dashboard — and never written:
 
     medbot_tokens_total          no caller anywhere
@@ -10,7 +10,7 @@ referenced in the Grafana dashboard — and never written:
 
 Every one of them scraped cleanly as 0 or absent, so Prometheus was healthy, Grafana was
 healthy, and the headline latency NFR was simply not being measured. Same shape as the
-Langfuse defect (I4.3): complete machinery, no call site.
+Langfuse defect: complete machinery, no call site.
 
 These tests assert the CALL, because that is the part that was missing.
 """
@@ -175,7 +175,7 @@ async def test_cache_hit_records_its_own_latency_not_the_one_it_avoided() -> Non
 
     before = value("medbot_request_duration_seconds_sum", outcome="grounded") or 0.0
     # A STANDALONE question, not the old "q" placeholder. One-word text is now classified
-    # as context-dependent and bypasses the cache entirely (INFRA-5), so "q" would return
+    # as context-dependent and bypasses the cache entirely, so "q" would return
     # before the lookup and this test would assert nothing about cache latency at all.
     result = await short_circuit("What is cirrhosis?", svc, pre)  # type: ignore[arg-type]
     after = value("medbot_request_duration_seconds_sum", outcome="grounded") or 0.0
@@ -190,7 +190,7 @@ async def test_cache_hit_records_its_own_latency_not_the_one_it_avoided() -> Non
 def test_refusals_are_metered_by_category() -> None:
     """`answers_total{kind="refused"}` cannot tell an emergency from a dosage question.
 
-    That blindness is how the self-harm rule shipped broken (I7.1): every gerund phrasing
+    That blindness is how the self-harm rule shipped broken: every gerund phrasing
     fell through the guardrail into retrieval and came back as a no_answer, and no counter
     anywhere moved to say a safety rule had stopped matching.
     """

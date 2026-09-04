@@ -15,7 +15,7 @@ their metric names.
 > ```bash
 > docker build -f apps/api/Dockerfile -t medbot-api:0.1.0 .
 > docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml \
->   up -d --force-recreate --no-deps api
+> up -d --force-recreate --no-deps api
 > ```
 >
 > Check with `curl -s localhost:5007/metrics | grep medbot_refusals_total`.
@@ -180,7 +180,7 @@ causes it?"* into *"What causes pneumonia?"* using the conversation so far, so r
 something searchable. It is gated on cheap signals (a pronoun, or ≤3 words) precisely so
 first questions never pay for a model round-trip they cannot use. Seeing it on a first
 question means the gate is too loose; never seeing it on a follow-up means history is not
-reaching the pipeline — which was a real bug (S20.1).
+reaching the pipeline — which was a real bug.
 
 **`embed`** — the question becomes a 1024-dim vector via bge-large in ml-service. ~200-400ms
 warm. **If this dominates the trace**, ml-service is CPU-starved or the model is cold.
@@ -230,7 +230,7 @@ Click a span, open **Tags**:
 | `n_citations` | build_context | how many made it into the answer |
 | `short_circuited` | any stage | `true` means this stage produced a terminal answer and the rest was skipped |
 | `answer_kind` | the stage that decided | grounded / no_answer / refused / degraded |
-| `question_fp` | every stage | a **fingerprint**, never the question. Jaeger deliberately carries no PII (D18) — that is Langfuse's job |
+| `question_fp` | every stage | a **fingerprint**, never the question. Jaeger deliberately carries no PII — that is Langfuse's job |
 
 ## 1.7 Why a fast request may be missing
 
@@ -350,10 +350,10 @@ This is the workflow the tool exists for, and it is the one thing Prometheus can
 2. Read `input.n_contexts`. Zero on a grounded answer means the guardrail or citation
    invariant failed.
 3. Read the retrieved passages. **Are they about the right thing?**
-   - Passages are wrong or irrelevant -> **retrieval** is at fault. Fix embedding, chunking,
-     or the reranker. The model did the best it could with what it was handed.
-   - Passages are correct but the answer is not -> **the model** is at fault. Fix the prompt,
-     or the model choice.
+  - Passages are wrong or irrelevant -> **retrieval** is at fault. Fix embedding, chunking,
+   or the reranker. The model did the best it could with what it was handed.
+  - Passages are correct but the answer is not -> **the model** is at fault. Fix the prompt,
+   or the model choice.
 4. Only after that step do you know which half of a RAG system to change. Guessing without
    it is how teams spend a week tuning a prompt when retrieval was returning the wrong
    article all along.
@@ -367,7 +367,7 @@ curl -s -u "$PK:$SK" "http://localhost:5015/api/public/observations?limit=5&type
 ```
 
 Counting traces is **not** a health check. Langfuse can be up, authenticating, and recording
-nothing — that exact failure (I4.2/I4.3) is why `inspect_stack.py` asserts a non-zero trace
+nothing — that exact failure is why `inspect_stack.py` asserts a non-zero trace
 count rather than an HTTP 200.
 
 # Part 2 — The metric catalogue
@@ -881,7 +881,7 @@ medbot_refusals_total{category=~"injection|dosage"}   # one of them +1
 
 ### Langfuse
 The **full attack text is recorded**. This is the only place you can audit attempts, because
-it is the one store that keeps raw input by design (D18).
+it is the one store that keeps raw input by design.
 
 ---
 

@@ -1,9 +1,8 @@
-# Deployment phases 6–9 — from laptop to real Kubernetes
+# Deployment: from laptop to real Kubernetes
 
-> Extension to [TRANSFORMATION_PLAN.md](TRANSFORMATION_PLAN.md), agreed 2026-08.
-> Supersedes the original single "PHASE 6 — Deployment" (P6.1–P6.6), which conflated a
-> **$0 validation environment** with a **metered production one**. They answer different
-> questions and therefore deserve separate phases with separate gates.
+> Split into separate stages with separate gates, because a **$0 validation environment**
+> and a **metered production one** answer different questions and shouldn't share a
+> checklist.
 
 ## The governing principle: vendor-portable core, thin vendor adapter
 
@@ -24,8 +23,7 @@ infrastructure: **isolate what varies, keep the rest identical everywhere.**
 
 **Every managed Kubernetes below is CNCF-conformant**, which is precisely what makes this
 work: `kubectl`, Helm, and the manifests behave identically. Switching vendors should be a
-new `values-*.yaml` plus a new Terraform module — never an application change. **Phase 8
-(AWS EKS) exists partly to prove that claim** by deploying the identical charts elsewhere.
+new `values-*.yaml` plus a new Terraform module — never an application change. **The EKS stage exists partly to prove that claim** by deploying the identical charts elsewhere.
 
 ## Vendor options — all production-grade
 
@@ -46,7 +44,7 @@ most startups and many scaleups run.
 
 | Vendor | Control plane | Notes |
 |---|---|---|
-| **AWS EKS** | ~$73/mo | Largest market share; **Phase 8 target** |
+| **AWS EKS** | ~$73/mo | Largest market share; **the portability target** |
 | **Google GKE** | ~$73/mo (Autopilot bills per-pod) | Best-regarded k8s UX; Google originated k8s |
 | **Azure AKS** | FREE (standard tier) | Strong in Microsoft-shop enterprises |
 
@@ -81,25 +79,25 @@ architecture demonstration than putting everything in one cloud.
 ## Scale guidance — what infrastructure is actually correct
 
 Derived from our own NFR arithmetic (10M MAU → 1.5M DAU → 4.5M queries/day → 52 RPS avg /
-350 RPS peak) and cross-referenced with our **measured** P5.2 load test: the full pipeline
+350 RPS peak) and cross-referenced with our **measured** load test: the full pipeline
 sustains **~2 RPS per instance**, with reranking consuming 54% of request time.
 
 | Users (MAU) | Peak RPS | Instances @2 RPS | Correct infrastructure | ~Cost/mo |
 |---|---:|---:|---|---:|
-| 10k | ~0.35 | 1 | **No Kubernetes.** One VM + compose, or Cloud Run / App Runner / App Platform | $30–150 |
-| 100k | ~3.5 | 2–3 | Managed containers, or a 3-node managed k8s for the primitives | $150–500 |
+| 0k | ~0.35 | 1 | **No Kubernetes.** One VM + compose, or Cloud Run / App Runner / App Platform | $30–150 |
+| 0k | ~3.5 | 2–3 | Managed containers, or a 3-node managed k8s for the primitives | $150–500 |
 | 1M | ~35 | ~18 ⚠️ | **Managed Kubernetes justified** — HPA, node pools, multi-service | $1–3k |
 | 10M+ | ~350 | ~175 🚨 | Managed k8s multi-AZ, CPU + GPU node pools, autoscaler, KEDA | $10–25k |
 
 **The instance column is the finding.** 175 pods is economically absurd — which is exactly
-why the S5.9 measurement matters: swapping to a 33M-param reranker was measured **8× faster**,
+why the backend measurement matters: swapping to a 33M-param reranker was measured **8× faster**,
 moving the pipeline toward ~10–15 RPS/instance and cutting the fleet by an order of magnitude.
 **Fixing the bottleneck is worth more than scaling the fleet**, and we have the numbers to
 prove it.
 
 ---
 
-## PHASE 6 — Local & kind validation *(cost: $0)*
+## Stage 1 — Local and kind validation *(cost: $0)*
 
 **Question answered: "are my manifests correct?"** kind runs the genuine Kubernetes control
 plane in Docker — ~95% API fidelity, 0% capacity fidelity. It catches probe paths, image
@@ -107,86 +105,86 @@ refs, missing ConfigMap keys, RBAC denials, PVC binding, crash loops, and Helm t
 errors — for free, before any metered cluster exists.
 
 It will **not** catch: `type: LoadBalancer`, real StorageClasses, cloud IAM, ingress + TLS +
-DNS, private registry pulls, node failure, or anything about capacity. Those are Phase 7.
+DNS, private registry pulls, node failure, or anything about capacity. Those come with a real managed cluster.
 
 | Step | Deliverable |
 |---|---|
-| P6.1 | Docker images for api / ml-service / worker — multi-stage, non-root, Trivy-clean |
-| P6.1a | **Strip CUDA from CPU-only images — MEASURED, see below** |
-| P6.2 | `docker compose` full-stack end-to-end smoke |
-| P6.3 | kind cluster created; Helm chart installs green |
-| P6.4 | Probes, HPA, ConfigMap/Secret wiring verified in-cluster |
-| P6.5 | In-cluster failure drills: pod kill, rollout restart, node drain |
-| P6.6 | `terraform plan` reviewed (no apply) |
+| 1 | Docker images for api / ml-service / worker — multi-stage, non-root, Trivy-clean |
+| 1a | **Strip CUDA from CPU-only images — MEASURED, see below** |
+| 2 | `docker compose` full-stack end-to-end smoke |
+| 3 | kind cluster created; Helm chart installs green |
+| 4 | Probes, HPA, ConfigMap/Secret wiring verified in-cluster |
+| 5 | In-cluster failure drills: pod kill, rollout restart, node drain |
+| 6 | `terraform plan` reviewed (no apply) |
 
-**Gate to Phase 7:** full query path works in kind; `helm upgrade` is idempotent; no manifest
+**Gate to the managed cluster:** full query path works in kind; `helm upgrade` is idempotent; no manifest
 depends on anything kind cannot provide.
 
-## PHASE 7 — Real managed Kubernetes *(metered; DOKS first)*
+## Stage 2 — Real managed Kubernetes *(metered; DOKS first)*
 
 **Question answered: "does it actually run on real infrastructure, and what does it cost?"**
 
 | Step | Deliverable |
 |---|---|
-| P7.1 | Vendor selection + cost model committed to the repo |
-| P7.2 | Cluster provisioned **via Terraform** (never click-ops) |
-| P7.3 | Container registry + image push pipeline |
-| P7.4 | Data tier: managed Postgres + Redis (or in-cluster for portability) |
-| P7.5 | Ingress-nginx + cert-manager + TLS + DNS |
-| P7.6 | Secrets management (External Secrets or vendor secret store) |
-| P7.7 | App tier deployed; GPU venue connected per D4b |
-| P7.8 | Observability live: Prometheus, Grafana, alerts firing |
-| P7.9 | **Load test against the real cluster** — HPA actually scaling |
-| P7.10 | **Chaos drills against the real cluster** — node/pod failure |
-| P7.11 | **Real cost measurement: $ per 1k queries** |
-| P7.12 | Teardown runbook + `terraform destroy` verified |
+| 1 | Vendor selection + cost model committed to the repo |
+| 2 | Cluster provisioned **via Terraform** (never click-ops) |
+| 3 | Container registry + image push pipeline |
+| 4 | Data tier: managed Postgres + Redis (or in-cluster for portability) |
+| 5 | Ingress-nginx + cert-manager + TLS + DNS |
+| 6 | Secrets management (External Secrets or vendor secret store) |
+| 7 | App tier deployed; GPU venue connected per D4b |
+| 8 | Observability live: Prometheus, Grafana, alerts firing |
+| 9 | **Load test against the real cluster** — HPA actually scaling |
+| 10 | **Chaos drills against the real cluster** — node/pod failure |
+| 11 | **Real cost measurement: $ per 1k queries** |
+| 12 | Teardown runbook + `terraform destroy` verified |
 
-**Gate to Phase 8:** real traffic served over TLS on a public domain, with measured cost and
+**Gate to the EKS proof:** real traffic served over TLS on a public domain, with measured cost and
 a proven teardown.
 
-## PHASE 8 — AWS EKS *(portability proof + AWS-depth gap)*
+## Stage 3 — AWS EKS *(the portability proof)*
 
 **Question answered: "is the architecture genuinely vendor-independent, and can I operate the
 platform enterprises actually use?"**
 
-The test of Phase 8 is blunt: **the Helm charts must deploy unchanged.** Only
-`values-aws.yaml` and `infra/terraform/aws/` differ. If anything else needs editing, Phase 7
+The test here is blunt: **the Helm charts must deploy unchanged.** Only
+`values-aws.yaml` and `infra/terraform/aws/` differ. If anything else needs editing, that stage
 leaked vendor specifics and that is a finding worth writing up.
 
 | Step | Deliverable |
 |---|---|
-| P8.1 | G-instance/EKS quota approved (Track D) |
-| P8.2 | Terraform: VPC + EKS + managed node groups |
-| P8.3 | IRSA (IAM Roles for Service Accounts) — least privilege |
-| P8.4 | RDS with **PITR** (a P5.4 requirement) + ElastiCache + SQS |
-| P8.5 | Same charts deployed via `values-aws.yaml` — **diff must be config-only** |
-| P8.6 | GPU node group for the self-hosted vLLM venue |
-| P8.7 | Cost comparison: DOKS vs EKS, measured |
-| P8.8 | Portability findings written up |
+| 1 | G-instance/EKS quota approved (Track D) |
+| 2 | Terraform: VPC + EKS + managed node groups |
+| 3 | IRSA (IAM Roles for Service Accounts) — least privilege |
+| 4 | RDS with **PITR** (a restore-drill requirement) + ElastiCache + SQS |
+| 5 | Same charts deployed via `values-aws.yaml` — **diff must be config-only** |
+| 6 | GPU node group for the self-hosted vLLM venue |
+| 7 | Cost comparison: DOKS vs EKS, measured |
+| 8 | Portability findings written up |
 
-## PHASE 9 — Portfolio
+## Stage 4 — Portfolio
 
 | Step | Deliverable |
 |---|---|
-| P9.1 | Architecture diagram |
-| P9.2 | README rewrite |
-| P9.3 | Before/after metrics story (the money chart) |
-| P9.4 | Findings writeup (every measurement that refuted an assumption) |
-| P9.5 | Demo video / screenshots |
-| P9.6 | Interview talking points + consolidated senior-vs-junior table |
+| 1 | Architecture diagram |
+| 2 | README rewrite |
+| 3 | Before/after metrics story |
+| 4 | Findings writeup (every measurement that refuted an assumption) |
+| 5 | Demo video / screenshots |
+| 6 | Interview talking points |
 
 
 ---
 
-## Finding (S15.5): CPU-only images ship 3.4 GB of unusable CUDA runtime
+## Finding: CPU-only images ship 3.4 GB of unusable CUDA runtime
 
-> **Superseded by the P6.1a fix — and the estimate below was LOW.** Auditing package sizes
+> **Superseded by the CUDA-strip fix — and the estimate below was low.** Auditing package sizes
 > inside the image caught 3.4 GB; actually removing the CUDA stack recovered **6.5 GB per
 > image**, 19.59 GB across all three (26.18 GB → 6.59 GB, −75%). The gap is transitive
 > weight the per-package tally missed. Full measurement and the fix: `docs/IMAGES.md`.
 >
 > Kept here rather than rewritten, because "my estimate was half the real number" is the
-> useful part. The section below is the original S15.5 audit.
+> useful part. The section below is the original audit.
 
 Measured inside `medbot-ml:0.1.0` (total image **8.5 GB**):
 
@@ -207,13 +205,13 @@ apps/ml-service/src/medml/backends.py:51      SentenceTransformer(..., device="c
 apps/ml-service/src/medml/backends.py:93      CrossEncoder(..., device="cpu")
 ```
 
-GPU inference lives in the **separate vLLM venue** (D4b), never in these containers.
+GPU inference lives in the **separate vLLM venue**, never in these containers.
 
 **Why it matters beyond disk.** Image size is paid on every pull:
 * `kind load` of three images took long enough to background — the immediate symptom;
 * registry storage and egress on DOKS/EKS;
 * **pod cold-start on every HPA scale-up** — which directly undermines the autoscaling
-  behaviour Phase 7 exists to demonstrate. An 8.8 GB image makes "scale up fast" a fiction.
+  behaviour that stage exists to demonstrate. An 8.8 GB image makes "scale up fast" a fiction.
 
 **Fix** (repo root `pyproject.toml`), expected to cut each image roughly in half:
 
@@ -227,6 +225,6 @@ explicit = true
 torch = { index = "pytorch-cpu" }
 ```
 
-Deferred to **P6.1a** rather than applied mid-deployment: it changes `uv.lock` and requires
+Deferred rather than applied mid-deployment: it changes `uv.lock` and requires
 a full rebuild + re-load of all three images. Sequencing an optimization ahead of the
 correctness proof it would invalidate is how you end up debugging two things at once.

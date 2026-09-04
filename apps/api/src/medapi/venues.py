@@ -1,12 +1,12 @@
-"""Serving-venue registry (D4b).
+"""Serving-venue registry.
 
 Turns `SERVING_CHAIN=local,runpod,aws,groq` into an ordered list of failover legs.
 
-Two rules that keep this honest:
+Two rules keep it honest:
 
-  1. A venue with no URL is SKIPPED, not an error. The chain can name venues whose
-     accounts do not exist yet (RunPod, AWS), so configuration and provisioning proceed
-     independently — nobody has to edit code when a GPU finally appears.
+  1. A venue with no URL is skipped, not an error. The chain can name venues whose accounts
+     don't exist yet, so configuration and provisioning proceed independently and nobody
+     edits code when a GPU finally appears.
 
   2. An empty resulting chain is a STARTUP failure, not a runtime surprise. A service that
      boots with no way to answer would pass its liveness probe and fail every request
@@ -46,13 +46,12 @@ class ChainLeg(NamedTuple):
 def _venue_config(settings: Settings, leg: ChainLeg) -> tuple[str, str, str | None]:
     """(base_url, model_id, api_key) for a venue. Empty base_url => not configured.
 
-    S13.7: GPU venues now honour `serving_engine`. Before this, the setting was declared in
-    Settings and read NOWHERE — `vllm_local_url` was hardcoded, so `SERVING_ENGINE=sglang`
-    silently kept serving vLLM. A config knob that promises a capability nothing implements
-    is worse than no knob, because it is believed. (Same defect S19.4 found behind
-    `semantic_cache_enabled`.)
+    GPU venues honour `serving_engine`. It used to be declared in Settings and read
+    nowhere: `vllm_local_url` was hardcoded, so `SERVING_ENGINE=sglang` kept serving vLLM.
+    A knob that promises a capability nothing implements is worse than no knob, because
+    people believe it.
 
-    SGLang is an ENGINE within a venue, never a venue of its own — see the note in
+    SGLang is an engine within a venue, never a venue of its own; see the note in
     Settings: two engines on one GPU do not cross a failure domain.
     """
     venue = leg.venue

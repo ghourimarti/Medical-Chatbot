@@ -1,6 +1,6 @@
-r"""Follow-up questions must be condensed into standalone ones BEFORE retrieval.
+r"""Follow-up questions must be condensed into standalone ones before retrieval.
 
-S20, found in production data. This exchange:
+Found in production data. This exchange:
 
     "Describe the treatment options for pneumonia."   -> grounded, correct
     "What causes it?"                                 -> no_answer
@@ -10,8 +10,8 @@ medical encyclopedia. History was stored in Postgres and rendered in the sidebar
 never reached retrieval: a chat UI over a stateless engine.
 
 `StageTimings.condense_ms` had existed since the schema was written and was summed into
-total_ms by a stage that did not exist - the same declared-but-dead shape as trace_answer
-(I4.3) and the four unwritten Prometheus metrics (I5.4).
+total_ms by a stage that did not exist: the same declared-but-dead shape as trace_answer
+and the four unwritten Prometheus metrics.
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ async def test_condense_timing_is_recorded() -> None:
 
 @pytest.mark.asyncio
 async def test_condense_failure_degrades_to_the_literal_question() -> None:
-    """A broken rewrite must cost CONTEXT, never the answer (D21)."""
+    """A broken rewrite must cost CONTEXT, never the answer."""
     pipe, embedder, model = _pipeline()
 
     async def boom(*, messages: Any, **kw: Any) -> Completion:
@@ -182,7 +182,7 @@ async def test_a_rewrite_that_answers_instead_is_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_condense_uses_the_THREAD_not_the_whole_session() -> None:
-    """S20.9: a follow-up must be condensed against its own conversation.
+    """a follow-up must be condensed against its own conversation.
 
     condense was fed `history.load(session_id)`, which returns every message in the
     session ACROSS ALL THREADS. So "What causes it?" was rewritten against whatever

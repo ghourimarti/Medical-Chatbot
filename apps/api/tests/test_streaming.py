@@ -1,4 +1,4 @@
-"""S4: SSE streaming, cancellation, and RFC 7807 error envelopes."""
+"""SSE streaming, cancellation, and RFC 7807 error envelopes."""
 
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ async def test_model_abstention_streams_as_no_answer() -> None:
 
 @pytest.mark.asyncio
 async def test_early_consumer_exit_cancels_provider_stream() -> None:
-    """D20: a client that disconnects mid-answer must abort the provider call, or we
+    """a client that disconnects mid-answer must abort the provider call, or we
     pay for tokens nobody reads."""
     model = StreamingStubModel(["a", "b", "c"], hang=True)
     pipe = _pipeline(model)
@@ -167,7 +167,7 @@ async def test_early_consumer_exit_cancels_provider_stream() -> None:
 
 
 def test_problem_detail_hides_internals_and_maps_status() -> None:
-    """RFC 7807: safe detail out, internal message stays in logs (D18)."""
+    """RFC 7807: safe detail out, internal message stays in logs."""
     secret = "psycopg2: password=hunter2 host=10.0.0.5"
     problem = RetrievalError(secret).to_problem(instance="/api/v1/query/stream")
     assert secret not in problem.detail
@@ -176,17 +176,15 @@ def test_problem_detail_hides_internals_and_maps_status() -> None:
     assert ProviderError().to_problem().status == 502
 
 
-# ---------------------------------------------------------------------------
-# S10.2 — refusal categories reach the client, and the OUTPUT guardrail covers
+# — refusal categories reach the client, and the OUTPUT guardrail covers
 # the streaming path. These are the tests whose absence hid a real safety hole:
 # every previous safety assertion ran against answer(), the path a browser never
 # takes, so stream_answer() shipped with no output-side dosage net at all.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_streaming_output_guardrail_blocks_a_dosage_instruction() -> None:
-    """THE REGRESSION TEST for the S10.2b defect.
+    """THE REGRESSION TEST for the defect.
 
     A model that starts emitting a dose must be cut off mid-stream: the dose must never
     reach the client, generation must stop (we do not pay for the rest), and the terminal

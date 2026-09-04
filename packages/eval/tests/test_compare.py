@@ -1,4 +1,4 @@
-"""Delta comparison + gate logic (D19). These are the rules the CI gate (S17) enforces."""
+"""Delta comparison + gate logic. These are the rules the CI gate enforces."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def test_every_gated_metric_has_a_sane_threshold(metric: str) -> None:
         assert threshold > 0.0, "a higher-is-better gate at 0.0 gates nothing"
 
 
-# --- S6.12: incomparability must announce itself -------------------------------------
+# incomparability must announce itself
 
 
 def _rep(run_id: str, judge: str, aggregates: dict, coverage: dict | None = None, n_qa: int = 10):
@@ -139,7 +139,7 @@ def test_same_judge_produces_no_mismatch_warning() -> None:
 
 
 def test_thin_coverage_is_flagged() -> None:
-    """The S6.12 defect: 1 of 60 cases scored, printed as a run-level result."""
+    """The defect: 1 of 60 cases scored, printed as a run-level result."""
     j = "judge_v2(gpt-oss-120b, temp=0)"
     after = _rep("after", j, {"answer_relevancy": 0.9537}, coverage={"answer_relevancy": 1})
     before = _rep("before", j, {"answer_relevancy": 0.88}, coverage={"answer_relevancy": 10})
@@ -158,7 +158,7 @@ def test_full_coverage_is_not_flagged() -> None:
     assert "THIN COVERAGE" not in out
 
 
-# --- S17.3: the gate must not compare against a run that never produced a result ------
+# the gate must not compare against a run that never produced a result
 
 
 def _write_report(tmp: Path, run_id: str, aggregates: dict) -> Path:
@@ -185,7 +185,7 @@ def test_all_errored_run_is_not_a_usable_baseline(tmp_path: Path) -> None:
 
 
 def test_latest_report_skips_the_broken_newer_run(tmp_path: Path) -> None:
-    """The exact S17.3 trap: the BROKEN report is newest, so a naive `latest` picks it and
+    """The exact trap: the BROKEN report is newest, so a naive `latest` picks it and
     the delta reports `error_rate 1 -> 0` as a PASS."""
     from medeval.compare import latest_report
 
@@ -246,7 +246,7 @@ def test_partially_written_checkpoint_is_also_rejected(tmp_path: Path) -> None:
     assert is_usable_baseline(p) is False
 
 
-# --- S17.3: the gate's CONTRACT is its exit code ------------------------------------
+# the gate's CONTRACT is its exit code
 
 
 def test_cli_gate_exits_nonzero_on_regression(tmp_path: Path, capsys) -> None:

@@ -1,4 +1,4 @@
-"""S6: reranking, score normalization, hybrid wiring, and graceful degradation."""
+"""reranking, score normalization, hybrid wiring, and graceful degradation."""
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ def _chunks(n: int) -> list[RetrievedChunk]:
     ]
 
 
-# --- score normalization -----------------------------------------------------------
+# score normalization
 
 
 def test_sigmoid_maps_logits_into_zero_one() -> None:
@@ -115,7 +115,7 @@ def test_sigmoid_is_monotonic() -> None:
     assert vals == sorted(vals)
 
 
-# --- pipeline behaviour ------------------------------------------------------------
+# pipeline behaviour
 
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_rerank_stage_reorders_candidates() -> None:
 
 @pytest.mark.asyncio
 async def test_reranker_failure_degrades_instead_of_erroring() -> None:
-    """D21: a reranker outage costs quality, never availability."""
+    """a reranker outage costs quality, never availability."""
     store = RecordingStore(_chunks(5))
     pipe = RagPipeline(
         settings=_settings(), embedder=StubEmbedder(), store=store,

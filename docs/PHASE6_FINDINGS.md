@@ -11,9 +11,9 @@ than listing three separate fixes.
 
 | Where | What readiness/health actually proved | What it should have proved |
 |---|---|---|
-| P6.3.5 | the collection name resolves | the index has content to search |
-| P6.4.1 | the Qdrant binary can execute | the Qdrant HTTP API answers |
-| P6.5.4 | the vector store is reachable | every dependency a query needs is reachable |
+| collection check | the collection name resolves | the index has content to search |
+| container check | the Qdrant binary can execute | the Qdrant HTTP API answers |
+| dependency check | the vector store is reachable | every dependency a query needs is reachable |
 
 In all three the pod advertised itself as able to serve while every query failed. A probe
 that cannot fail for the reason you actually care about is close to no probe at all.
@@ -25,7 +25,7 @@ failing readiness on a partial loss would withdraw the whole deployment to no on
 
 ## The most severe: the API was permanently breaking its own alias swap
 
-`QDRANT_COLLECTION` names an **alias** (D11): ingestion builds `gale_live_v1` and repoints
+`QDRANT_COLLECTION` names an **alias**: ingestion builds `gale_live_v1` and repoints
 `gale_live` atomically, so readers never see a half-built corpus.
 
 The API called `ensure_collection()` at startup, which *creates* the collection when absent.
@@ -47,7 +47,7 @@ the environment it was written in.
 Two things worked correctly throughout and are worth crediting: verify-then-swap meant the
 150-chunk collection built fully before the swap was attempted, so nothing half-ingested ever
 served; and the query path refused to report an empty index as "no information", returning a
-fault instead (P5.3.6).
+fault instead.
 
 **Fix:** `verify_collection()` for the read path (checks, never creates, fails loudly) split
 from `ensure_collection()` for ingestion, which legitimately creates because it knows what to

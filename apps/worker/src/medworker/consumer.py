@@ -1,13 +1,15 @@
-"""SQS consumer (D11).
+"""SQS consumer.
 
-Three production properties `scripts/reindex.py` lacked:
+Three properties the old reindex script lacked:
 
-  DURABILITY   — a message survives a worker crash and is redelivered after the visibility
-                 timeout. Nothing is lost because a pod was rescheduled.
-  BACKPRESSURE — long polling plus a visibility timeout longer than the job means a slow
-                 ingest does not cause duplicate concurrent runs of the same job.
-  POISON-PILL  — after `max_receives` failed attempts SQS routes the message to a DLQ
-                 CONTAINMENT   instead of retrying forever. A message that always fails must stop
+  Durability: a message survives a worker crash and is redelivered after the visibility
+  timeout, so nothing is lost because a pod was rescheduled.
+
+  Backpressure: long polling plus a visibility timeout longer than the job means a slow
+  ingest doesn't cause duplicate concurrent runs of the same job.
+
+  Poison-pill containment: after `max_receives` failed attempts SQS routes the message to a
+  DLQ instead of retrying forever. A message that always fails must stop
                  consuming the worker, or one bad input starves every good one.
 
 Deletion happens only AFTER successful processing: at-least-once delivery is a feature
@@ -51,7 +53,7 @@ def build_sqs_client(settings: Any) -> Any:
 
 async def handle_message(settings: Any, body: dict[str, Any]) -> dict[str, Any]:
     """Dispatch one job. Unknown types raise so the message reaches the DLQ rather than
-    being silently acknowledged — a silently-dropped job is worse than a visible failure."""
+    being quietly acknowledged; a dropped job is worse than a visible failure."""
     job = body.get("job")
     if job == "ingest":
         pdf = Path(body.get("pdf_path") or "")
@@ -94,7 +96,7 @@ async def consume_forever(settings: Any) -> None:
                 body = json.loads(message["Body"])
                 logger.info("processing job (attempt %s): %s", receives, body.get("job"))
                 result = await handle_message(settings, body)
-                # Delete ONLY after success — that is what makes redelivery-on-crash work.
+                # Delete only after success, which is what makes redelivery-on-crash work.
                 await asyncio.to_thread(
                     sqs.delete_message, QueueUrl=queue_url, ReceiptHandle=receipt
                 )

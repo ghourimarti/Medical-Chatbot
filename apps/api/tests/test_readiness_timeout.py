@@ -1,6 +1,6 @@
 """Readiness under a SLOW dependency, which is a different failure from a DOWN one.
 
-INFRA-3: right after a 7,080-chunk ingest, Qdrant was optimising and `get_collection`
+right after a 7,080-chunk ingest, Qdrant was optimising and `get_collection`
 blocked past 20 seconds - while the API served a grounded answer with citations the whole
 time. An unbounded probe turns that into an outage, and hits every replica at once right
 after a re-index. These tests pin the distinction the fix depends on.

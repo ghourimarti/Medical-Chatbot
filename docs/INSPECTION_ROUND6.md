@@ -42,7 +42,7 @@ Measured: each question asked twice, cache cleared first.
 | `no_answer` (*What is zzqx syndrome?*) | `cache_hit=False` | **`cache_hit=False`** | **no** |
 | `grounded` (*What is chickenpox?*) | `cache_hit=False` | **`cache_hit=True`** | **yes** |
 
-**Only GROUNDED answers are cached.** This is deliberate (D10) and worth understanding:
+**Only GROUNDED answers are cached.** This is deliberate and worth understanding:
 
 - Caching a **refusal** would freeze a safety decision. If a guardrail is later fixed, cached
   refusals would keep serving the old verdict.
@@ -69,8 +69,8 @@ Baseline cached: **"What is chickenpox?"**. Then, measured:
 | variant | cache | what it tells you |
 |---|---|---|
 | `WHAT IS CHICKENPOX?` | **hit** | case is normalised |
-| `What  is   chickenpox?` | **hit** | internal whitespace is collapsed |
-| `  what is CHICKENPOX?  ` | **hit** | leading/trailing space trimmed too |
+| `What is chickenpox?` | **hit** | internal whitespace is collapsed |
+| ` what is CHICKENPOX? ` | **hit** | leading/trailing space trimmed too |
 | `What is chickenpox` *(no `?`)* | **MISS** | **punctuation is significant** |
 | `Chickenpox, what is it?` | miss | word order matters — expected |
 | `What is chicken pox?` | miss | tokenisation matters — expected |
@@ -117,7 +117,7 @@ A hundredfold difference. But look at what the **response body** says on the cac
 Those are the **stored answer's** numbers, replayed as content. They are deliberately *not*
 re-observed into the metrics — Prometheus records 21 ms and zero tokens for this request.
 
-> **This was a real bug once (I8.2).** Replaying the original duration into the histogram made
+> **This was a real bug once.** Replaying the original duration into the histogram made
 > the cache look like a *regression*: p95 got worse the more traffic it served. If you ever
 > see `Request p95` climb while `Cache hit rate` climbs, this is the first thing to check.
 

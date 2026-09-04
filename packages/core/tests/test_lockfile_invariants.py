@@ -1,4 +1,4 @@
-"""Workspace-level supply-chain invariants, enforced against uv.lock (P6.1a.6).
+"""Workspace-level supply-chain invariants, enforced against uv.lock.
 
 These are not unit tests of any module — they are guards on what the build is allowed to
 pull in. A dependency change that violates one of them is a deployment problem that would
@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 LOCKFILE = REPO_ROOT / "uv.lock"
 
 # Names that only exist to run CUDA kernels. Every service in this workspace is CPU-only
-# (D5: bge-large + cross-encoder on CPU pods); the GPU venues are separate vLLM/SGLang
+# (bge-large + cross-encoder on CPU pods); the GPU venues are separate vLLM/SGLang
 # containers with their own images and are not resolved from this lock.
 CUDA_PACKAGE_RE = re.compile(r'^name = "(nvidia-[\w-]+|triton|cuda-[\w-]+)"', re.MULTILINE)
 
@@ -56,7 +56,7 @@ def test_torch_resolves_from_the_cpu_index(lock_text: str) -> None:
     )
 
 
-# --- .env parsing traps -------------------------------------------------------------
+# .env parsing traps
 
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 
@@ -87,7 +87,7 @@ def test_no_env_value_is_actually_a_comment() -> None:
 
 
 def test_env_example_documents_only_names_something_reads() -> None:
-    """A name nothing reads is silent (P6.4.3): Settings uses extra='ignore', so a typo or
+    """A name nothing reads is silent: Settings uses extra='ignore', so a typo or
     a renamed variable does nothing at all and the symptom appears far from the cause.
     Every documented name must be a real Settings field, an infra name used by
     compose/Makefile/Helm, or explicitly tagged [inert]."""
@@ -107,7 +107,7 @@ def test_env_example_documents_only_names_something_reads() -> None:
     infra = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
     infra |= set(re.findall(r"\$\$?\{?([A-Z][A-Z0-9_]{3,})", (REPO_ROOT / "Makefile").read_text(
         encoding="utf-8")))
-    # The WEB TIER reads .env too (S10.14). It is a real consumer, not infrastructure, so
+    # The WEB TIER reads .env too. It is a real consumer, not infrastructure, so
     # its `process.env.NAME` accesses count as "something reads this" exactly as a Settings
     # field does. Added because this guard fired on UPSTREAM_TIMEOUT_MS — correctly, since
     # it only knew about Python readers, while the variable is read by src/lib/env.ts. A
@@ -133,14 +133,14 @@ def test_env_example_documents_only_names_something_reads() -> None:
     tagged = set(re.findall(r"^([A-Z][A-Z0-9_]*)=.*?\[(?:inert|infra)\]", text, re.M))
     tagged |= set(re.findall(r"^# ([A-Z][A-Z0-9_]*) — .*", text, re.M))
 
-    # Layout change #2 (S21): documentation no longer sits directly above its variable.
+    # Layout change #2: documentation no longer sits directly above its variable.
     # Each section now reads TITLE -> DOCUMENTATION -> VALUES, with the prose stated once
     # up front and indexed by variable name:
     #
-    #     #  AWS_ACCESS_KEY_ID
-    #     #      [infra] boto3 reads this straight from the environment...
-    #     # ------------------------------------------------------------
-    #     AWS_ACCESS_KEY_ID=test
+    # # AWS_ACCESS_KEY_ID
+    # # [infra] boto3 reads this straight from the environment...
+    # # ------------------------------------------------------------
+    # AWS_ACCESS_KEY_ID=test
     #
     # So the tag is found by reading the doc ENTRY for a name, not by walking back from
     # the assignment. This guard has now been taught the layout twice; that is the cost

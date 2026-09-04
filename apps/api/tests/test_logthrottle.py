@@ -1,4 +1,4 @@
-"""Throttled logging (P5.2 finding).
+"""Throttled logging.
 
 Measured: at 1500 RPS the Redis fallback path wrote 2.3 MB of identical tracebacks in
 seconds. Log formatting is synchronous and CPU-bound, so the error handler competed with

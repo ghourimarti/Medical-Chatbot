@@ -1,8 +1,8 @@
-"""FastAPI application factory + lifespan (D7).
+"""FastAPI application factory and lifespan.
 
-Lifespan builds the service singletons once, warms the embedder, and ensures the Qdrant
-collection exists at the configured dimension — so a misconfiguration fails startup (and
-the readiness probe), not the first user request.
+Lifespan builds the service singletons once, warms the embedder, and checks the Qdrant
+collection exists at the configured dimension, so a misconfiguration fails startup and the
+readiness probe rather than the first user request.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ logger = logging.getLogger("medapi")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    # JSON to stdout with PII redaction (D13/D18). Console renderer locally for
+    # JSON to stdout with PII redaction. Console renderer locally for
     # readability; structured everywhere a log aggregator will consume it.
     configure_logging(settings.log_level, json_output=settings.environment != "local")
     # Tracing is already configured in create_app() — it has to be, because ASGI
@@ -52,18 +52,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         environment=settings.environment,
     )
     services = build_services(settings)
-    # Verify, never create (P6.3.5). Creating the collection here would take the name
-    # reserved for the D11 alias and turn a missing corpus into an empty one.
+    # Verify, never create. Creating the collection here would take the name reserved for
+    # the alias and turn a missing corpus into an empty one.
     await services.store.verify_collection()
     # Warm the in-process embedder so the first request isn't slow. When ml-service is
     # configured the model lives there and warms in ITS lifespan — nothing to do here.
     warmup = getattr(services.embedder, "warmup", None)
     if warmup is not None:
         await asyncio.to_thread(warmup)
-    # The BM25 encoder too. Its model is a cached_property that fastembed DOWNLOADS on
+    # The BM25 encoder too. Its model is a cached_property that fastembed downloads on
     # first use, so without this the first real user query pays the download - and if the
     # network is briefly unavailable at that instant, that user's request is the one that
-    # fails (S20.10). Warming here moves the cost to startup, where a failure is loud and
+    # fails. Warming here moves the cost to startup, where a failure is loud and
     # nobody is waiting on an answer.
     sparse = getattr(services, "sparse", None)
     sparse_warmup = getattr(sparse, "warmup", None)
@@ -73,9 +73,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info("sparse (BM25) encoder warm")
         except Exception:
             # Retrieval degrades to dense-only rather than refusing to boot: a missing
-            # sparse half costs recall, not availability (D21).
+            # sparse half costs recall, not availability.
             logger.exception("sparse warmup failed; retrieval will be DENSE-ONLY")
-    # Schema + partitions. A partitioned table with no matching partition REJECTS inserts,
+    # Schema and partitions. A partitioned table with no matching partition rejects inserts,
     # so tomorrow's partitions are created at every boot as well as by the scheduled job
     # (S9). Cheap insurance against a 00:00:00 write outage.
     if services.engine is not None:
@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await ensure_future_partitions(conn, days_ahead=7)
             logger.info("database ready: schema + 8 days of partitions")
         except Exception:
-            # D21: history is optional, answering is not. Log loudly, serve anyway.
+            # History is optional, answering is not. Log loudly, serve anyway.
             logger.exception("database init failed; continuing WITHOUT history")
 
     app.state.services = services
@@ -95,8 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        # Drain buffered spans/events so the last requests before a rollout are
-        # not lost — the ones most likely to explain why you are rolling back.
+        # Drain buffered spans and events so the last requests before a rollout survive.
+        # Those are the ones most likely to explain why you're rolling back.
         flush_llm_traces()
         await services.store.close()
         if services.engine is not None:
@@ -105,22 +105,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def _settings_for_tracing() -> Any:
     """Settings at import time. get_settings() is lru_cached, so this is the same object
-    lifespan will use — no second read, no chance of the two disagreeing."""
+    lifespan uses: no second read, no chance of the two disagreeing."""
     return get_settings()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="P5 Medical RAG API", version="0.1.0", lifespan=lifespan)
-    # Tracing is wired HERE, not in lifespan, and the difference is not cosmetic.
+    # Tracing is wired here rather than in lifespan, and that matters.
     #
     # FastAPIInstrumentor adds ASGI middleware, and Starlette freezes its middleware stack
-    # when the application starts. `lifespan` runs AFTER that point, so instrumenting from
-    # inside it silently does nothing: no HTTP request span is ever created.
+    # when the application starts. `lifespan` runs after that point, so instrumenting from
+    # inside it does nothing at all: no HTTP request span is ever created.
     #
-    # The failure was invisible because the EXPLICIT stage spans still worked. Jaeger
-    # showed traces containing a lone `embed` or a lone `rerank` — orphans with no parent
-    # request — which reads like a sampling artefact rather than missing instrumentation.
-    # A partial trace is worse than no trace: it looks like data.
+    # It was invisible because the explicit stage spans still worked. Jaeger showed traces
+    # containing a lone `embed` or `rerank` with no parent request, which reads like a
+    # sampling artefact rather than missing instrumentation.
     configure_tracing(
         enabled=_settings_for_tracing().otel_enabled,
         endpoint=_settings_for_tracing().otel_endpoint,

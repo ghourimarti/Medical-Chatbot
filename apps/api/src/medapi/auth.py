@@ -1,13 +1,13 @@
-"""Identity verification (S20b, D24).
+"""Identity verification.
 
-THE RULE THIS MODULE EXISTS TO ENFORCE: a token that is PRESENT but INVALID is a 401 — it
-is never quietly downgraded to "anonymous".
+The rule this enforces: a token that is present but invalid is a 401, never quietly
+downgraded to anonymous.
 
-Downgrading is the tempting behaviour because it keeps the product working, and it is
-wrong twice over. It hides an attack (a forged token looks exactly like a signed-out
-visitor), and it confuses an honest user whose session expired: they stay signed in
-visually, their conversations vanish, and nothing explains why. Absent token means
-anonymous; broken token means broken.
+Downgrading is tempting because it keeps the product working, and it's wrong twice over.
+It hides an attack, since a forged token looks exactly like a signed-out visitor, and it
+confuses an honest user whose session expired: they stay signed in visually, their
+conversations vanish, and nothing explains why. Absent token means anonymous, broken token
+means broken.
 
 Verification is behind a Protocol so the endpoints are testable without a Clerk account,
 which is the difference between "this is written" and "this is proven".

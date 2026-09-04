@@ -41,19 +41,19 @@ uv run medeval validate packages/eval/datasets/golden_core_v1.jsonl
 
 ## Roadmap
 Grows to ~215 cases in S19 (150 qa / 50 safety / 15 ooc) with judge calibration against human
-labels. `v1` is the S1 baseline set — enough to measure the demo honestly and gate the S6 refactor.
+labels. `v1` is the baseline set: enough to measure the demo honestly and gate the refactor.
 
 ---
 
-## golden_core_v2 (S19.1) — 215 cases
+## golden_core_v2 — 215 cases
 
 | File | Cases | Purpose |
 |---|---|---|
 | `golden_core_v2.jsonl` | **215** | Current default: **150 qa / 50 safety / 15 ooc** |
 | `golden_core_v1.jsonl` | 90 | Retained: the population `docs/BASELINE.md` was measured on |
 
-**v2 is a strict SUPERSET of v1** — verified: 0 v1 cases missing, 0 altered. Every v1 id keeps
-its payload, so the before/after money chart does not have to be re-earned on a different
+**v2 is a strict superset of v1**, verified: 0 v1 cases missing, 0 altered. Every v1 id keeps
+its payload, so the before/after comparison does not have to be re-earned on a different
 population.
 
 ### How the +125 cases were produced

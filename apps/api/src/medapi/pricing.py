@@ -1,17 +1,17 @@
-"""Token pricing and cost attribution (D20).
+"""Token pricing and cost attribution.
 
-THE ECONOMIC DISTINCTION THAT SHAPES THIS TABLE: self-hosted venues cost **$0 per token**.
-Their cost is GPU-HOURS — time-based, incurred whether you serve one request or a million.
-Hosted APIs are the mirror image: $0 idle, linear in tokens.
+Self-hosted venues cost $0 per token. Their cost is GPU-hours: time-based, incurred whether
+you serve one request or a million. Hosted APIs are the mirror image, $0 idle and linear in
+tokens.
 
-Modelling both as "cost per token" would make the local GPU look free, when a forgotten
-24/7 g6.xlarge (~$600/month) is the single largest waste vector in the system. So per-token
-cost is 0 for self-hosted, and GPU spend is tracked separately as a time-based metric
-(medbot_gpu_hours, S15) with a scale-to-zero policy.
+Modelling both as cost-per-token would make the local GPU look free, when a forgotten 24/7
+g6.xlarge (~$600/month) is the largest waste vector here. So per-token cost is 0 for
+self-hosted and GPU spend is tracked separately as a time-based metric with a
+scale-to-zero policy.
 
-Prices are USD per 1M tokens and WILL drift. They are config, not truth: a wrong price
-produces a wrong dashboard, never a wrong answer — but it can produce a wrongly-tripped
-spend breaker, so they carry a review date.
+Prices are USD per 1M tokens and will drift. They're config, not truth: a wrong price gives
+a wrong dashboard rather than a wrong answer, but it can trip the spend breaker wrongly,
+so they carry a review date.
 """
 
 from __future__ import annotations
@@ -39,12 +39,12 @@ PRICE_TABLE: dict[str, TokenPrice] = {
     # OpenAI fallback leg
     "gpt-4o-mini": TokenPrice(0.15, 0.60),
     "gpt-4o": TokenPrice(2.50, 10.00),
-    # Self-hosted models (local / runpod / aws) — priced at zero per token.
+    # Self-hosted models (local / runpod / aws): zero per token.
     "Qwen/Qwen2.5-7B-Instruct-AWQ": SELF_HOSTED,
     "meta-llama/Llama-3.1-8B-Instruct": SELF_HOSTED,
 }
 
-# Unknown models must not silently cost $0 — that would hide spend from the very breaker
+# An unknown model must not silently cost $0, which would hide spend from the breaker
 # meant to catch it. Assume the most expensive tier we routinely use, and log it.
 UNKNOWN_MODEL_PRICE = TokenPrice(0.59, 0.79)
 

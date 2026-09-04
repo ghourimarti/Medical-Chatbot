@@ -1,24 +1,22 @@
-"""Circuit breaker around Redis (P5.3 finding).
+"""Circuit breaker around Redis.
 
-The drill that produced this: stop Redis, and the API kept answering correctly — fail-open
-worked exactly as D10 specified — but **latency went from 2.0s to 20.4s**. Functionally up,
-operationally dead: the SLO is 3s at p95.
+Found in a drill: stop Redis and the API keeps answering correctly, fail-open working as
+designed, but latency goes from 2.0s to 20.4s. Functionally up, operationally dead against
+a 3s p95.
 
-The arithmetic explains it. Fail-open is implemented per CALL, and one request makes about
-ten Redis calls: response-cache get, embedding-cache get, four quota buckets, spend read,
-kill-switch read, then cache and embedding writes. With a 2s socket timeout each, a
-dependency that is DOWN costs 10 x 2s before every one of those calls gives up and degrades.
+The arithmetic explains it. Fail-open is per call, and one request makes about ten Redis
+calls: response-cache get, embedding-cache get, four quota buckets, spend read, kill-switch
+read, then the cache and embedding writes. At a 2s socket timeout each, a dependency that
+is down costs 10 x 2s before those calls give up and degrade. Per-call fail-open is right;
+per-call timeout is the problem.
 
-  Per-call fail-open is correct. Per-call TIMEOUT is the bug.
+So the breaker remembers. After a few consecutive failures it opens and subsequent calls
+raise instantly from local state, letting the existing fail-open handlers run at ~0ms
+instead of 2s, with one probe every N seconds to spot recovery.
 
-The fix is to remember. After a few consecutive failures the breaker opens and subsequent
-calls raise instantly from local state, so the existing fail-open handlers run at ~0ms
-instead of 2s. Every N seconds one probe is allowed through to discover recovery.
-
-This is the same pattern as the venue breaker in `adapters/failover.py`, applied to the
-other remote dependency in the request path — and the reason it was missing there is
-instructive: the venue is *expected* to fail (that is why it has a chain), while Redis was
-treated as infrastructure that is simply present.
+Same pattern as the venue breaker in `adapters/failover.py`. It was missing here because a
+venue is expected to fail, which is why it has a chain, while Redis got treated as
+infrastructure that is simply present.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""S13: multi-venue failover, circuit breakers, and the streaming rule (D4, D4b, D21)."""
+"""multi-venue failover, circuit breakers, and the streaming rule."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def _chain(*venues: FakeVenue, threshold: int = 3, cooldown: float = 30.0) -> Fa
     )
 
 
-# --- chain ordering -----------------------------------------------------------------
+# chain ordering
 
 
 @pytest.mark.asyncio
@@ -95,7 +95,7 @@ async def test_failover_to_next_venue() -> None:
 
 @pytest.mark.asyncio
 async def test_all_venues_down_raises_degradable_error() -> None:
-    """D21: with every leg dead the caller gets a typed, DEGRADABLE error so the ladder
+    """with every leg dead the caller gets a typed, DEGRADABLE error so the ladder
     can fall through to cache-only mode rather than emitting a raw 500."""
     chain = _chain(FakeVenue("local", fail=True), FakeVenue("groq", fail=True))
     with pytest.raises(AllProvidersDownError) as exc:
@@ -106,7 +106,7 @@ async def test_all_venues_down_raises_degradable_error() -> None:
     assert "local" in str(exc.value) and "groq" in str(exc.value)
 
 
-# --- circuit breaker ----------------------------------------------------------------
+# circuit breaker
 
 
 def test_breaker_opens_after_threshold() -> None:
@@ -150,7 +150,7 @@ async def test_open_breaker_is_skipped_without_calling_the_venue() -> None:
     assert dead.calls == calls_after_open, "an open circuit must not call the venue at all"
 
 
-# --- THE STREAMING RULE -------------------------------------------------------------
+# THE STREAMING RULE
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_streaming_fails_over_before_the_first_token() -> None:
 async def test_streaming_does_NOT_fail_over_after_the_first_token() -> None:
     """The subtle rule. Once tokens are rendered on the client, switching venues would
     produce a DIFFERENT continuation — the answer would visibly change mid-sentence. So a
-    mid-stream failure is terminal and surfaces as an in-band error event (S4)."""
+    mid-stream failure is terminal and surfaces as an in-band error event."""
     dying, backup = FakeVenue("local", fail_after_chunks=2), FakeVenue("groq")
     chain = _chain(dying, backup)
     received: list[str] = []
@@ -182,7 +182,7 @@ async def test_streaming_does_NOT_fail_over_after_the_first_token() -> None:
     assert backup.calls == 0, "must NOT silently switch venues mid-stream"
 
 
-# --- registry -----------------------------------------------------------------------
+# registry
 
 
 def test_parse_chain_preserves_order_and_dedupes() -> None:
@@ -233,7 +233,7 @@ def test_openai_leg_is_skipped_without_a_key() -> None:
     # something in the import graph calls load_dotenv(), which puts .env into os.environ,
     # and pydantic-settings reads that regardless. So this test passed or failed depending
     # on whether the developer happened to have an OPENAI_API_KEY - the same ambient-state
-    # fragility that broke test_all_known_venues_are_configurable (S20).
+    # fragility that broke test_all_known_venues_are_configurable.
     model = build_failover_model(
         _settings(serving_chain="openai,groq", openai_api_key="")
     )
@@ -249,7 +249,7 @@ def test_openai_leg_is_used_when_a_key_is_present() -> None:
 
 def test_empty_chain_fails_at_startup() -> None:
     """A service that boots with no way to answer would pass liveness and fail every
-    request. Fail at startup instead (D17)."""
+    request. Fail at startup instead."""
     with pytest.raises(ValueError, match="no usable legs"):
         build_failover_model(
             _settings(serving_chain="runpod,aws", vllm_runpod_url="", vllm_aws_url="")

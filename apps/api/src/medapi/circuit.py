@@ -1,14 +1,13 @@
 """Shared circuit breaker.
 
-Third use in this codebase, which is what justifies extracting it: the venue chain
-(`adapters/failover.py`), Redis (`redis_guard.py`), and Postgres history (`history.py`).
+Third use in this codebase, which is what justified extracting it: the venue chain
+(`adapters/failover.py`), Redis (`redis_guard.py`) and Postgres history (`history.py`).
 
-The property all three share is the one the P5.3 drills measured: **a remote dependency
-that is DOWN costs a full timeout on every call, and fail-open is implemented per call.**
-Degrading correctly ten times in a row still costs ten timeouts. Redis measured 2.0s ->
-20.4s that way; Postgres measured 5.0s -> 8.5s.
+All three share the same problem. A dependency that is down costs a full timeout on every
+call, and fail-open is per call, so degrading correctly ten times still costs ten timeouts.
+Measured that way, Redis went 2.0s -> 20.4s and Postgres 5.0s -> 8.5s.
 
-Fail-open handles the failure. The breaker is what stops you paying for it repeatedly.
+Fail-open handles the failure; the breaker stops you paying for it repeatedly.
 """
 
 from __future__ import annotations
@@ -31,14 +30,11 @@ class Breaker:
         self._name = name
         self._failures = 0
         self._opened_at: float | None = None
-        # Publish CLOSED at construction, before anything has failed.
-        #
-        # A labelled Gauge does not exist in Prometheus until `.labels()` is first called,
-        # so publishing only on a state CHANGE meant a dependency that had never broken had
-        # no series at all - and "no series" renders identically to "this was never
-        # instrumented". The Grafana panel read `No data` whether Redis was perfectly
-        # healthy or the metric had been deleted, which makes it useless as a health signal
-        # in exactly the situation you would reach for it.
+        # Publish closed at construction, before anything has failed. A labelled Gauge
+        # doesn't exist in Prometheus until `.labels()` is called, so publishing only on a
+        # state change left a dependency that had never broken with no series at all, and
+        # "no series" looks identical to "never instrumented". The panel read `No data`
+        # whether Redis was healthy or the metric had been deleted.
         #
         # The venue breakers never had this problem because FailoverModel republishes every
         # leg on every request. This is the same guarantee, paid once at startup.
@@ -59,10 +55,10 @@ class Breaker:
         if self._opened_at is None:
             return False
         if time.monotonic() - self._opened_at >= self._cooldown:
-            # Half-open: admit exactly one probe. Seeding failures at threshold-1 means a
-            # failed probe re-opens immediately instead of needing a fresh streak — without
-            # that, a permanently dead dependency would let one slow call through every
-            # cooldown *and* reset progress toward re-opening.
+            # Half-open should admit a single probe, not the full traffic. Seeding
+            # failures at threshold-1 means a failed probe re-opens immediately rather
+            # than needing a fresh streak; otherwise a dead dependency lets one slow call
+            # through every cooldown and resets progress toward re-opening.
             self._opened_at = None
             self._failures = self._threshold - 1
             self._publish(is_open=False)

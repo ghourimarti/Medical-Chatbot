@@ -1,15 +1,13 @@
-"""Throttled error logging (P5.2 finding).
+"""Throttled error logging.
 
 When a dependency fails under load, every in-flight request logs the same failure. At
 1500 RPS a `logger.warning(..., exc_info=True)` in the Redis fallback path produced 2.3 MB
-of identical tracebacks in seconds. Formatting and writing that volume is itself expensive
-and synchronous, so the logging consumed the CPU and I/O the process needed to recover:
-the error handler amplified the outage instead of reporting it.
+of identical tracebacks in seconds, and formatting and writing that is expensive and
+synchronous, so the logging ate the CPU and I/O the process needed to recover.
 
-The rule this encodes: **an error path that runs once per request must not log once per
-request.** Log the first occurrence with full detail, then collapse the rest into a
-periodic summary carrying the suppressed count — which is the number you actually want
-during an incident anyway ("12,043 in 10s" says far more than 12,043 stack traces).
+So: an error path that runs once per request shouldn't log once per request. Log the first
+occurrence in full, then collapse the rest into a periodic summary with the suppressed
+count, which is the more useful number anyway ("12,043 in 10s" beats 12,043 tracebacks).
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""S6.12a: an aggregate without its n is an anecdote, not a measurement."""
+"""an aggregate without its n is an anecdote, not a measurement."""
 
 from medeval.aggregate import aggregate_scores, applicable_counts, coverage_line
 from medeval.schema import CaseResult
@@ -12,7 +12,7 @@ def _case(cid: str, category: str, **scores: float | None) -> CaseResult:
 
 
 def test_coverage_exposes_a_thin_metric() -> None:
-    """The exact defect found in S6.12: 1 of 60 qa cases scored, published as a headline.
+    """The exact defect found in 1 of 60 qa cases scored, published as a headline.
     The mean is arithmetically fine; without n it is uninterpretable."""
     results = [
         _case(f"qa-{i:03d}", "qa", faithfulness=0.95 if i == 1 else None)

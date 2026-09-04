@@ -1,31 +1,26 @@
-"""OpenTelemetry tracing — per-request causal chains (D13).
+"""OpenTelemetry tracing: per-request causal chains.
 
-WHY THIS EXISTS ALONGSIDE PROMETHEUS. They answer different questions and neither
-substitutes for the other:
+This sits alongside Prometheus because they answer different questions:
 
-  * Prometheus (S11) aggregates: "is the system healthy? what is p95 rerank latency?"
-  * OTel traces: "why was THIS request slow? which stage, in what order, on which pod?"
-  * Langfuse (llm_trace.py): "why was THIS answer bad? what prompt, what context, what cost?"
+  * Prometheus aggregates: is the system healthy, what is p95 rerank latency?
+  * OTel traces: why was this request slow, which stage, in what order, on which pod?
+  * Langfuse: why was this answer bad, what prompt, what context, what cost?
 
-A histogram cannot tell you that one slow request spent 800ms in rerank because the
-reranker pod was cold. A trace can.
+A histogram can't tell you one slow request spent 800ms in rerank because the reranker pod
+was cold. A trace can.
 
-PII POLICY — the two sinks are deliberately different, and this asymmetry is the point:
-
-  * OTel spans carry **NO raw query text, ever**. Only a fingerprint (stable hash),
-    durations, counts, scores, and enum-ish outcomes. OTel data flows to collectors,
-    vendors, and dashboards with broad read access; health questions are sensitive
-    (D18), so they must not be there.
-  * Langfuse MAY carry prompt/completion content, because D18 designates it the ONE
-    sanctioned store for that data — access-controlled, 30-day retention.
+The PII split between the two sinks is the important part. OTel spans carry no raw query
+text at all: only a fingerprint, durations, counts, scores and enum-ish outcomes. OTel data
+flows to collectors, vendors and dashboards with broad read access. Langfuse may carry
+prompt and completion content, because it's the one sanctioned store for that, access
+controlled with 30-day retention.
 
 Putting query text in a span attribute "just for debugging" is how a medical assistant
-leaks patient questions into a third-party observability vendor.
+leaks patient questions to a third-party observability vendor.
 
-SAMPLING. The SDK can only HEAD-sample (decide at span creation). "Keep 100% of errors
-and slow requests" is a TAIL decision and is impossible here — it lives in the Collector's
-tail_sampling processor (see infra/observability/otel-collector.yaml). Claiming the SDK
-does tail sampling would be wrong; this module does the head half only.
+On sampling: the SDK can only head-sample, deciding at span creation. Keeping 100% of
+errors and slow requests is a tail decision and lives in the Collector's tail_sampling
+processor (infra/observability/otel-collector.yaml). This module does the head half only.
 """
 
 from __future__ import annotations
@@ -70,8 +65,8 @@ def configure_tracing(
         # reassembled into the causal chain the trace exists to show.
         sampler=ParentBased(root=TraceIdRatioBased(sample_ratio)),
     )
-    # Batch, never simple: a per-span network write would put collector latency directly
-    # on the request path — instrumentation must not become a dependency of serving.
+    # Batch, never simple: a per-span network write puts collector latency directly on the
+    # request path, and instrumentation shouldn't become a dependency of serving.
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")))
     trace.set_tracer_provider(provider)
     _TRACER = trace.get_tracer("medbot.pipeline")
@@ -114,9 +109,9 @@ def set_attrs(span: Any, **attributes: Any) -> None:
 
 
 def question_fingerprint(question: str) -> str:
-    """The ONLY representation of a user question allowed in a span.
+    """The only representation of a user question allowed in a span.
 
-    Enough to answer "is this same query looping / hitting cache?" across a trace,
-    while being irreversible — you cannot recover the health question from the hash.
+    Enough to answer "is this query looping or hitting cache?" across a trace, and
+    irreversible: you can't recover the health question from the hash.
     """
     return fingerprint(question)

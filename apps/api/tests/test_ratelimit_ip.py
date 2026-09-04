@@ -1,4 +1,4 @@
-"""Per-IP rate limiting (P5.2 finding).
+"""Per-IP rate limiting.
 
 The defect these tests lock down: the limiter was keyed ONLY on the session id, and the
 session id is minted fresh whenever no cookie arrives. A client that never sends the cookie
@@ -47,7 +47,7 @@ def test_client_hash_differs_across_ips() -> None:
 
 
 def test_raw_ip_is_never_the_key() -> None:
-    """An IP is personal data under GDPR (D18); only the salted hash may be stored."""
+    """An IP is personal data under GDPR; only the salted hash may be stored."""
     mgr = SessionManager(_SECRET, secure_cookies=False)
     key = mgr.client_hash(_request(ip="203.0.113.7"))
     assert key is not None

@@ -1,13 +1,13 @@
-"""Chat history persistence with graceful degradation (D1, D9, D21).
+"""Chat history persistence with graceful degradation.
 
-Every method here is FAIL-SOFT by design. D21 specifies "Postgres down => chat continues
-stateless": losing history is a degraded experience, losing the ability to answer is an
-outage. Persistence is a side effect of answering, never a precondition for it.
+Every method here is fail-soft. Postgres down means chat continues stateless: losing
+history is a degraded experience, losing the ability to answer is an outage. Persistence is
+a side effect of answering, never a precondition for it.
 
-Centralising that policy here — rather than scattering try/except through the routes —
-means there is exactly one place where the degradation rule can be read, tested, or
-changed. `disabled` (no DATABASE_URL) and `failing` (Postgres down) take the same path,
-so local dev without a database exercises the same code that production falls back to.
+Centralising that here, rather than scattering try/except through the routes, leaves one
+place where the degradation rule can be read, tested or changed. `disabled` (no
+DATABASE_URL) and `failing` (Postgres down) take the same path, so local dev without a
+database exercises the code production falls back to.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class HistoryService:
     ) -> None:
         self._factory = factory
         self._max_turns = max_turns
-        # Same breaker as Redis and the venue chain (P5.4). Measured with Postgres stopped:
+        # Same breaker as Redis and the venue chain. Measured with Postgres stopped:
         # request latency went 5.0s -> 8.5s, because history is read once and written once
         # per request and each call paid a full connection timeout before degrading
         # correctly. Degrading twice per request is still two timeouts.
@@ -82,13 +82,13 @@ class HistoryService:
     async def load_thread(
         self, session_id: uuid.UUID, conversation_id: uuid.UUID | None
     ) -> list[Message]:
-        """Prior turns for CONDENSING a follow-up — scoped to the thread when there is one.
+        """Prior turns for condensing a follow-up, scoped to the thread when there is one.
 
-        S20.9: condense was fed `load(session_id)`, which returns everything in the session
-        ACROSS ALL THREADS. So "What causes it?" was rewritten against whatever question
-        happened to be most recent anywhere in that session — a different topic entirely,
-        and in testing, against safety probes about chest pain and self-harm. The user saw
-        a follow-up answered from an unrelated earlier question.
+        condense used to be fed `load(session_id)`, which returns everything in the session
+        across all threads. So "What causes it?" got rewritten against whatever question
+        was most recent anywhere in that session: a different topic entirely, and in testing
+        against safety probes about chest pain and self-harm. The user saw a follow-up
+        answered from an unrelated earlier question.
         A session is a browser identity; a conversation is a TRAIN OF THOUGHT. Only the
         second one gives a pronoun its referent.
 
@@ -131,8 +131,8 @@ class HistoryService:
         assistant reply would render as a conversation the system ignored.
 
         `conversation_id` must already be ownership-checked (serving.preflight does it).
-        Nothing here re-verifies it, deliberately: one authorisation site is auditable,
-        two are a matter of time before they disagree.
+        Nothing here re-verifies it: one authorisation site is auditable, two are a matter
+        of time before they disagree.
         """
         if self._factory is None or self._breaker.is_open:
             return False
@@ -174,10 +174,10 @@ class HistoryService:
         Unlike load/record, failure here is NOT swallowed: a delete that silently fails
         while reporting success is a compliance violation, not a degraded experience.
 
-        It also deliberately IGNORES the circuit breaker (P5.4). The breaker exists to stop
-        paying timeouts on best-effort work; an erasure request is not best-effort. Skipping
-        it because a breaker is open would report success without deleting anything — the
-        exact failure this method is written to prevent.
+        It also ignores the circuit breaker. The breaker exists to stop paying timeouts on
+        best-effort work, and an erasure request is not best-effort. Skipping it because a
+        breaker is open would report success without deleting anything, which is the exact
+        failure this method exists to prevent.
         """
         if self._factory is None:
             return 0

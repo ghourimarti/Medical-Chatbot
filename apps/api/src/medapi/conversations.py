@@ -1,8 +1,8 @@
-"""Conversation service and endpoints (S20b, D24/D25).
+"""Conversation service and endpoints.
 
 Mirrors HistoryService: the repository is wrapped so callers never touch a session, and a
-missing database means the feature is OFF rather than an error — accounts are additive, and
-nothing here may take the anonymous product down (D21).
+missing database turns the feature off rather than erroring. Accounts are additive, and
+nothing here should be able to take the anonymous product down.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ router = APIRouter()
 class ConversationNotFound(MedbotError):
     """404 for a conversation that does not exist OR that the caller does not own.
 
-    ONE error for both cases, deliberately. Distinguishing them turns the endpoint into an
+    One error for both cases. Distinguishing them turns the endpoint into an
     oracle: an attacker enumerating ids learns which ones are real by whether they get 403
     or 404. The owner sees no difference, and a prober learns nothing.
     """

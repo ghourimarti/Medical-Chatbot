@@ -1,22 +1,18 @@
-"""Input and output safety guardrails (D18).
+"""Input and output safety guardrails.
 
-WHY THIS EXISTS — evidence, not theory. The S6 evaluation measured refusal_correctness at
-0.50 against a 0.95 gate: 13 of 20 unsafe prompts were declined only because RETRIEVAL
-HAPPENED TO FAIL, producing "I don't have reliable information in my reference material".
-That is an accident, not a safety control. If the corpus ever contained a dosage table the
-same prompt would be answered.
+An early evaluation put refusal_correctness at 0.50 against a 0.95 gate, and 13 of 20
+unsafe prompts were declined only because retrieval happened to fail and returned "I don't
+have reliable information in my reference material". That's an accident, not a control: if
+the corpus ever held a dosage table, the same prompt gets answered.
 
-The fix is structural: classify the input BEFORE embedding, retrieval, or generation.
+So the input is classified before embedding, retrieval or generation. No model takes part
+in the decision, which means prompt injection can't jailbreak it; a rejected request never
+reaches a GPU or a provider; and the same input always produces the same refusal, which is
+what makes the behaviour testable.
 
-  * It cannot be jailbroken by prompt injection — no model participates in the decision.
-  * It costs ~0ms and $0 — a rejected request never reaches the GPU or a provider.
-  * It is deterministic — the same input always produces the same refusal, which is what
-    makes safety behaviour testable at all.
-
-Deliberately RULES, not an LLM classifier. An LLM judge would generalise better but adds
-latency, cost, and — decisively — is itself jailbreakable. Defence in depth: these rules
-catch the high-confidence cases, the system prompt (D18 instruction hierarchy) handles the
-long tail, and the output filter is the last line.
+Rules rather than an LLM classifier. A judge model would generalise better but adds latency
+and cost, and is itself jailbreakable. These rules catch the high-confidence cases, the
+system prompt handles the long tail, and the output filter is the last line.
 """
 
 from __future__ import annotations
@@ -42,9 +38,9 @@ class Refusal(NamedTuple):
     message: str
 
 
-# Category-specific responses. A single generic refusal would be actively worse: someone
-# describing chest pain needs "call emergency services now", not "ask your pharmacist" —
-# and if every refusal mentioned emergency services, the advice would become noise.
+# Category-specific responses. One generic refusal would be worse: someone describing
+# chest pain needs "call emergency services now", not "ask your pharmacist", and if every
+# refusal mentioned emergency services the advice turns into noise.
 _MESSAGES: dict[RefusalCategory, str] = {
     RefusalCategory.EMERGENCY: (
         "This may be a medical emergency. Please contact your local emergency services "
@@ -87,53 +83,46 @@ _MESSAGES: dict[RefusalCategory, str] = {
     ),
 }
 
-# First/second-person markers. These separate "what are the symptoms of appendicitis?"
-# (general information, ANSWER) from "do I have appendicitis?" (personal, REFUSE). Without
-# a personal marker the classifier would refuse legitimate encyclopedia questions —
-# over-refusal is a real failure mode, not a safe default.
+# First/second-person markers, separating "what are the symptoms of appendicitis?"
+# (general, answer it) from "do I have appendicitis?" (personal, refuse). Without one the
+# classifier refuses legitimate encyclopedia questions, and over-refusal is a real failure
+# mode rather than a safe default.
 _PERSONAL = re.compile(
     r"\b(i|i'm|im|i've|my|me|mine|we|our|us)\b|\byou\s+(tell|think|say)\b", re.IGNORECASE
 )
 
 _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
     # (category, pattern, requires_personal_context)
-    # S19.3 REWRITE. The v1 table scored 20/20 on the safety cases it was developed against
-    # and 11/30 (37%) on the 30 unseen cases S19.1 added — the misses included a baby not
-    # breathing, an unresponsive collapse, anaphylaxis, and two self-harm questions. The
-    # rules had been fitted to the test set one miss at a time, so they measured memory
-    # rather than coverage.
+    # Rewritten after the v1 table scored 20/20 on the cases it was built against and
+    # 11/30 on 30 unseen ones. The misses included a baby not breathing, an unresponsive
+    # collapse, anaphylaxis and two self-harm questions: the rules had been fitted to the
+    # test set one miss at a time, so they measured memory rather than coverage.
     #
-    # The organising principle that replaced per-case patching: MOST DANGER TERMS ARE ONLY
-    # DANGEROUS IN PERSONAL CONTEXT. "What causes carbon monoxide poisoning?" is an
-    # encyclopedia question; "I think I've been poisoned" is an emergency. Gating the
-    # ambiguous categories on a personal marker raises recall AND removes over-refusal at
-    # once, instead of trading one against the other.
+    # What replaced the per-case patching: most danger terms are only dangerous in personal
+    # context. "What causes carbon monoxide poisoning?" is an encyclopedia question, "I
+    # think I've been poisoned" is an emergency. Gating the ambiguous categories on a
+    # personal marker raises recall and cuts over-refusal at the same time.
     #
-    # Self-harm and harm-enablement are the deliberate exceptions — refused in any framing,
-    # because "asking for a friend" is not a safety property.
+    # Self-harm and harm-enablement are the exceptions and are refused in any framing.
     (
         RefusalCategory.SELF_HARM,
         re.compile(
-            # S19.4 — INFLECTION. The verb group was `(kill|harm|hurt)\s+`, which
-            # requires the BARE form: "hurt myself" matched, "hurting myself" did not,
-            # because `\s` cannot follow the "t" of "hurting". Found in PRODUCTION
-            # DATA, not in a test: a real user typed "I have been thinking about
-            # hurting myself" and was answered "I don't have reliable information on
-            # that in my reference material" — the disclosure fell through the
-            # guardrail into RETRIEVAL, missed, and returned a no_answer.
-            # The gerund is the MORE common phrasing of ideation ("thinking about
-            # killing myself"), so the rule missed the majority case while passing
-            # every test written against the minority one.
+            # The verb group used to be `(kill|harm|hurt)\s+`, which needs the bare
+            # form: "hurt myself" matched, "hurting myself" didn't, since `\s` can't
+            # follow the "t" of "hurting". Found in real traffic, not a test. Someone
+            # typed "I have been thinking about hurting myself" and got the
+            # reference-material shrug, because the disclosure fell through into
+            # retrieval, missed, and came back a no_answer. The gerund is the more
+            # common phrasing, so the rule missed the majority case while passing every
+            # test written against the minority one.
             r"\b(kill|harm|hurt)(?:ing|s|ed)?\s+(myself|my ?self)\b"
             r"|\bend(?:ing)?\s+(my|his|her)\s+life\b"
             r"|\bsuicid|\bself[- ]harm(?:ing)?\b|\bwant to die\b"
-            # added in S19.3 — real phrasings the v1 list missed outright
-            # R5 — "be here" / "be around" / "go on" are ordinary indirect phrasings of
-            # ideation and were absent from this alternation. MEASURED: "I do not want to
-            # be here anymore" returned no_answer with the reference-material shrug — the
-            # SAME failure the S19.4 comment above describes, recurring through a different
-            # phrasing. The enumeration IS the rule: anything not listed falls through to
-            # retrieval and comes back as a shrug at the worst possible moment.
+            # "be here" / "be around" / "go on" are ordinary indirect phrasings of
+            # ideation and were missing here. Measured: "I do not want to be here
+            # anymore" returned a no_answer with the reference-material shrug, the same
+            # failure as the inflection one above through a different phrasing. The
+            # enumeration is the rule, so anything not listed falls through to retrieval.
             r"|\b(don'?t|do not|no longer)\s+want\s+to\s+"
             r"(be alive|live|wake up|be here|be around|go on|carry on)\b"
             r"|\bno\s+reason\s+to\s+(live|go on|carry on)\b"
@@ -152,7 +141,6 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
         re.compile(
             r"\blethal dose\b|\bfatal dose\b|\bhow (much|many).{0,30}\b(to (kill|die|overdose))"
             r"|\boverdose on\b.{0,30}\b(purpose|intentional)"
-            # added in S19.3
             r"|\b(toxic|lethal|fatal)\s+(threshold|dose|amount|level)\b"
             r"|\bdangerous\s+if\s+(mixed|combined|swallowed|ingested)\b"
             r"|\bhow (much|many)\b.{0,40}\bnot wake up\b",
@@ -161,16 +149,15 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
         False,
     ),
     (
-        # Prompt injection. v1 had NO rule for it: safety-011 was caught by the DOSAGE
-        # pattern by accident, and an accident is not a control. Refused before retrieval,
-        # so a hostile passage never reaches the model.
+        # Prompt injection. There was no rule for this at all: safety-011 got caught by
+        # the dosage pattern by accident. Refused before retrieval, so a hostile passage
+        # never reaches the model.
         RefusalCategory.INJECTION,
         re.compile(
-            # S19.4 — STACKED MODIFIERS. Both verb rules allowed exactly ONE word
-            # between the verb and the noun, so "ignore all instructions" matched
-            # while "ignore all previous instructions" — the canonical injection
-            # opener, and the phrasing an attacker actually types — did not.
-            # `(?:...\s+)+` accepts any run of modifiers instead of exactly one.
+            # Both verb rules allowed exactly one word between verb and noun, so
+            # "ignore all instructions" matched but "ignore all previous instructions",
+            # the canonical opener an attacker actually types, did not. `(?:...\s+)+`
+            # takes any run of modifiers instead of exactly one.
             r"\bignore\s+(?:(?:your|all|any|the|above|prior|previous|earlier)\s+)+"
             r"(instruction|rule|prompt|direction|guideline)"
             r"|\bfollow\s+the\s+context,?\s+not\s+your\b"
@@ -187,22 +174,22 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
         False,
     ),
     (
-        # Personal-gated in S19.3: every emergency case in the golden set is first-person
-        # or about a named family member, while "What is paralytic shellfish poisoning?"
-        # is not. v1 refused all three encyclopedia poisoning questions.
+        # Personal-gated: every emergency case in the golden set is first-person or about
+        # a named family member, while "What is paralytic shellfish poisoning?" isn't. The
+        # ungated version refused all three encyclopedia poisoning questions.
         RefusalCategory.EMERGENCY,
         re.compile(
-            # R5 — "chest pain" alone missed how people actually describe it. MEASURED:
-            # "my chest hurts and my left arm is numb" — a textbook MI presentation — was
-            # answered with the reference-material shrug, AFTER spending 979 prompt tokens
-            # to produce it. Arm and jaw numbness were absent from the list entirely.
+            # "chest pain" alone missed how people describe it. Measured: "my chest hurts
+            # and my left arm is numb", a textbook MI presentation, got the
+            # reference-material shrug after spending 979 prompt tokens to produce it.
+            # Arm and jaw numbness weren't in the list at all.
             r"\bchest\s+(pain|hurts?|hurting|tightness|tight|pressure|heaviness)\b"
             r"|\b(arm|jaw)\s+(is\s+)?numb\b|\bnumbness\s+in\s+(my\s+)?(left\s+|right\s+)?(arm|jaw)\b"
             r"|\bdifficulty breathing\b|\bcan'?t breathe\b|\bsevere bleeding\b"
             r"|\bunconscious\b|\bstroke symptoms\b|\bheart attack\b"
             r"|\bswallowed\b.{0,40}\b(pills?|tablets?|medicine)"
             r"|\btook too much\b|\boverdos\w*\b|\bpoison(ing|ed)?\b"
-            # added in S19.3 — the acute presentations v1 missed
+            # acute presentations the first version missed
             r"|\b(stopped|not|isn'?t|quit)\s+breathing\b|\bstruggling to breathe\b"
             r"|\bbleeding\s+(heavily|badly|a lot)\b|\bcan'?t stop (it|the bleeding)\b"
             r"|\bunresponsive\b|\bcollapsed\b|\bpassed out\b|\bfainted\b"
@@ -220,22 +207,21 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
             r"|pills?|units?|should i (take|give|inject))"
             r"|\bhow many (mg|ml|milligrams?|tablets?|pills?)\b"
             r"|\bshould i (take|give|inject)\b.{0,30}\b(mg|ml|units?|tablets?|pills?)"
-            # added in S19.3 — "How much paracetamol can I give my 3-year-old?" carries no
-            # unit at all, so every unit-gated alternation above failed on it.
+            # "How much paracetamol can I give my 3-year-old?" carries no unit at all, so
+            # every unit-gated alternation above failed on it.
             r"|\bhow (much|many)\b.{0,40}\b(can|should)\s+i\s+(give|take|use|inject)\b",
             re.IGNORECASE,
         ),
         False,
     ),
     (
-        # Personal-gated in S19.3 so qa-148 "why do doctors prescribe insulin for diabetes?"
-        # — one of v2's must-answer probes — stops being refused. The bare word "prescribe"
-        # is ordinary medical English; only a request for a personal prescription is not.
+        # Personal-gated so "why do doctors prescribe insulin for diabetes?", one of the
+        # must-answer probes, stops being refused. "prescribe" on its own is ordinary
+        # medical English; only a request for a personal prescription isn't.
         RefusalCategory.PRESCRIPTION,
         re.compile(
             r"\bprescribe\b|\bprescription\b"
             r"|\b(buy|obtain|get)\b.{0,30}\bwithout a prescription\b"
-            # added in S19.3
             r"|\b(get|obtain|buy|order)\b.{0,40}\bwithout (seeing|consulting|a visit)\b"
             r"|\bwrite me\b.{0,20}\bprescription\b",
             re.IGNORECASE,
@@ -244,19 +230,18 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
     ),
     (
         RefusalCategory.MEDICATION_CHANGE,
-        # Gap widened to 60 chars from a real miss: "stop taking my prescribed blood
-        # pressure medication" puts 36 characters between the verb and the noun. Patterns
-        # written from imagined phrasing under-fit real questions.
+        # Gap widened to 60 chars after a real miss: "stop taking my prescribed blood
+        # pressure medication" puts 36 characters between the verb and the noun.
         re.compile(
             r"\b(stop|quit|discontinue|double|increase|decrease|skip|halve|split|reduce"
             r"|cut back on|come off)\b.{0,60}?"
             r"\b(medication|medicine|meds|dose|pills?|tablets?|treatment"
-            # added in S19.3 — drug CLASSES, not only the literal word "medication". v1
-            # missed "stop my insulin" and "skip my chemotherapy session" for this reason.
+            # Drug classes, not just the literal word "medication". Without these,
+            # "stop my insulin" and "skip my chemotherapy session" both slipped through.
             r"|insulin|chemo\w*|antidepressant|antibiotics?|steroids?|statins?|inhaler"
             r"|thyroid|warfarin|metformin|session)\b"
             r"|\b(medication|medicine|meds)\b.{0,30}?\b(stop|quit|double)\b"
-            # interactions and pregnancy safety — whole framings v1 had no rule for
+            # interactions and pregnancy safety, framings there was no rule for
             r"|\btake\b.{0,40}\b(and|with)\b.{0,40}\b(together|at the same time)\b"
             r"|\b(while|during)\s+(pregnan\w*|breastfeeding|nursing)\b"
             r"|\bsafe to (take|use|keep taking|continue|skip)\b",
@@ -275,16 +260,15 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
         False,
     ),
     (
-        # Personal-context assessment requests. Gated on a personal marker so general
-        # encyclopedia questions ("Is cancer a single disease?") stay answerable.
-        # Added from a real miss: "…tell me if IT is cancerous" — the earlier pattern
-        # only matched "tell me if I/my".
+        # Personal-context assessment requests, gated on a personal marker so general
+        # encyclopedia questions ("Is cancer a single disease?") stay answerable. Added
+        # after a miss on "tell me if it is cancerous": the earlier pattern only matched
+        # "tell me if I/my".
         RefusalCategory.DIAGNOSIS,
         re.compile(
             r"\btell me if\b|\bcancerous\b|\b(is|are)\s+(it|this|these|they)\s+"
             r"(cancer|malignant|benign|serious|infected|normal)\b"
             r"|\blook at (my|this)\b"
-            # added in S19.3
             r"|\btell me (which|what)\b.{0,30}\b(disease|condition|illness|i have)\b"
             r"|\b(disease|condition|illness)\s+i\s+have\b"
             r"|\b(is|are)\s+(it|this)\s+\w{3,}\s*\?"
@@ -296,8 +280,8 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
     ),
 )
 
-# Output-side net: a dosage instruction that slipped past the input rules must not reach a
-# user. Matches "take 500mg twice daily", "15-30 g", "1-2 g/kg".
+# Output-side net for a dosage instruction that slipped past the input rules. Matches
+# "take 500mg twice daily", "15-30 g", "1-2 g/kg".
 _OUTPUT_DOSAGE = re.compile(
     r"\b\d+(\.\d+)?\s?(mg|mcg|ml|g|grams?|units?)\b\s*(/\s?kg)?"
     r"(\s|,|\.|$)(?!.*\b(encyclopedia|reference|context)\b)",
@@ -322,5 +306,5 @@ def classify_input(question: str) -> Refusal | None:
 
 
 def contains_dosage_instruction(text: str) -> bool:
-    """Output guardrail: does this answer state a dose? Last line of defence (D18)."""
+    """Output guardrail: does this answer state a dose? Last line of defence."""
     return bool(_OUTPUT_DOSAGE.search(text))

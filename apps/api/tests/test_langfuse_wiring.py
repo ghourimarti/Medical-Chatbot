@@ -1,6 +1,6 @@
 """Langfuse must actually be CALLED, not merely importable.
 
-INFRA-4: llm_trace.py was complete, configured, enabled and verified reachable - and had
+llm_trace.py was complete, configured, enabled and verified reachable - and had
 no caller anywhere in the codebase. Every container was healthy, the bootstrapped keys
 authenticated with HTTP 200, and the trace list stayed empty. A unit test of trace_answer
 in isolation would have passed throughout.

@@ -1,4 +1,4 @@
-# Container images — size, provenance, and the CUDA finding (P6.1 / P6.1a)
+# Container images — size, provenance, and the CUDA finding
 
 ## Measured sizes
 
@@ -35,7 +35,7 @@ Three details made it survive this long:
 
 ### Why it mattered beyond tidiness
 Three images at ~8.8 GB is ~26 GB, which does not fit the ~14 GB of disk on a standard CI
-runner — this was the recorded blocker on S17.1 (build + push images). At 6.6 GB total it
+runner — this was the recorded blocker on building and pushing images. At 6.6 GB total it
 fits with room to spare.
 
 ### Verified after the change
@@ -65,14 +65,14 @@ start at all. `reranker.py` already imports it lazily inside the function — th
 are inconsistent. Making the import lazy and the dependency an optional extra would remove
 ~1.15 GB and make the architecture's claim true.
 
-## Image discipline (P6.1)
+## Image discipline
 - Multi-stage: builder holds uv + compilers, runtime layer holds neither.
 - Non-root: `appuser` uid 10001 in every image.
 - `HEALTHCHECK` in every image; ml-service uses a longer `start_period` for model warmup.
 - `.dockerignore` excludes `.env`, `.git`, `demo/vectorstore`, `demo/data`, `eval-reports`,
   `docs` — fixing demo's `COPY . .` which shipped 27 MB of artifacts into the image.
 
-## Vulnerability scan (P6.1.5) — Trivy, HIGH + CRITICAL
+## Vulnerability scan — Trivy, HIGH + CRITICAL
 
 Command (Git Bash):
 ```bash
@@ -114,7 +114,7 @@ grep across `apps/` and `packages/`.
 The fix requires `langchain-core >= 1.2.22`, i.e. LangChain 1.x — which **breaks ragas 0.4.3**,
 our eval judge stack. That is measured, not assumed: LangChain 1.x removes
 `langchain_community.chat_models.vertexai`, which `ragas.llms.base` imports at module scope, so
-the whole eval harness fails to import. ragas 0.4.3 is already the latest release (P5.1.5), so
+the whole eval harness fails to import. ragas 0.4.3 is already the latest release, so
 the pin is forced from both ends. Revisit when ragas supports LangChain 1.x.
 
 **The pip findings — fixed by removing the tool, not by upgrading it.**
@@ -131,7 +131,7 @@ is a smaller target than one that merely *should not*. Apply with a rebuild.
 The 4 CRITICAL OS findings are inherited from `python:3.13-slim`, and the one sampled
 (`perl-base` CVE-2026-13221) is marked `affected` — Debian has no fixed version published, so
 there is nothing to upgrade to. Options are (a) wait for Debian, (b) move to a
-distroless/Chainguard base, which would also remove `apt-get` (noted in P6.1.2) and most of the
+distroless/Chainguard base, which would also remove `apt-get` and most of the
 OS surface. That is the D15-listed alternative and is deferred, not dismissed: it is a base-image
 migration with its own verification cost, and it belongs with the Phase 7/8 hardening work
 rather than inside a local-validation phase.

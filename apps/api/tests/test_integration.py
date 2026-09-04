@@ -71,7 +71,7 @@ async def test_end_to_end_retrieval_at_1024_dim() -> None:
     # any teardown that is merely the last statement, and the collection then survives in
     # Qdrant forever. That is not hypothetical - a `test_3cb6c7fd` collection outlived a
     # failed run and sat there until someone noticed, which is the same unbounded-growth
-    # problem the ingest worker has with superseded `gale_live_v*` collections (I3.7).
+    # problem the ingest worker has with superseded `gale_live_v*` collections.
     # A test that leaks state on failure makes the NEXT failure harder to read.
     try:
         docs = [

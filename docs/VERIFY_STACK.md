@@ -8,10 +8,10 @@ Two habits this project keeps re-learning, both baked into the checks below:
 
 - **A liveness check is not a capacity check.** A model that answers "OK" in one token
   proves it is reachable, not that it has quota left. That mistake cost a 50-minute
-  evaluation run (S6.12e).
+  evaluation run.
 - **"Declared" is not "working".** Six NetworkPolicies existed, `helm lint` passed,
   `kubectl get networkpolicy` listed them all — and kind's CNI enforced none of them
-  (P6.4.7). Every check below makes the component *do* something.
+. Every check below makes the component *do* something.
 
 ```bash
 make up            # data, app, GPU engines (if present), observability, kind nodes
@@ -31,7 +31,7 @@ curl -s localhost:5007/readyz
 
 `/readyz` is the most informative single endpoint: it returns 200 **only** when the vector
 index is non-empty *and* the embedder is reachable. Both checks exist because each one was,
-at some point, reporting Ready while every query failed (P6.3.5, P6.5.4).
+at some point, reporting Ready while every query failed.
 
 ---
 
@@ -49,7 +49,7 @@ databases — point pgAdmin at it once and you get both.
 SELECT relname, relkind FROM pg_class WHERE relname LIKE 'messages%' LIMIT 5;
 -- relkind 'p' = partitioned parent, 'r' = a day partition
 ```
-**Why it matters:** GDPR deletion is `DROP PARTITION` (D1). No partitions means retention
+**Why it matters:** GDPR deletion is `DROP PARTITION`. No partitions means retention
 silently does nothing.
 
 ### Qdrant
@@ -63,7 +63,7 @@ collection — *not* under collections.
 
 **Why it matters:** if `gale_live` is a COLLECTION, the zero-downtime alias swap is broken
 and the next ingest fails with `409 Conflict`. That is a real bug this project shipped and
-fixed (P6.3.5). And `points_count: 0` is a *fault*, not an empty result — the API returns
+fixed. And `points_count: 0` is a *fault*, not an empty result — the API returns
 503 rather than calling it "no information".
 
 Dashboard: <http://localhost:5002/dashboard>
@@ -109,7 +109,7 @@ curl -s localhost:5009/v1/chat/completions \
 
 ### In a browser
 <http://localhost:5024> — Open WebUI, no login. The model picker switches vLLM ↔ SGLang on
-the same prompt, which is the fastest way to feel the difference the S14 benchmark measured.
+the same prompt, which is the fastest way to feel the difference the engine benchmark measured.
 
 This is the **raw engine**: no retrieval, no citations, no medical guardrails. The guarded
 product UI is <http://localhost:5008>. Judge *engine* quality here and *product* quality
@@ -284,21 +284,21 @@ An empty result means the API is not being scraped. The metric only exists after
 panel is driven by a real metric name from `metrics.py`. Check specifically:
 
 - TTFT p50/p95 against the NFRs (0.8s / 2.0s)
-- *Stage latency p95* — rerank normally dominates, consistent with S5.9
+- *Stage latency p95* — rerank normally dominates, consistent with the backend measurements
 - *Serving venue circuit breakers* — which leg is live
 - *Cost/request* against the ≤ $0.001 line
 
 A panel showing "No data" while Prometheus has the metric means the datasource UID drifted.
 It is pinned to `medbot-prometheus` precisely so committed dashboards stay portable.
 
-### Langfuse — `make langfuse`  (<http://localhost:5015>)
+### Langfuse — `make langfuse` (<http://localhost:5015>)
 One sign-in, and only one: Langfuse has no anonymous mode the way Grafana does. `make
 langfuse` prints the bootstrapped credentials and opens the tab. You never create a project
 and never copy an API key — the org, project and both keys come from `.env` on first boot,
 and the API already sends with that same pair.
 
 **Working looks like:** a trace per question with the prompt, completion, token counts and
-cost. Langfuse is the **one sanctioned store for prompt/completion text** (D18) — everything
+cost. Langfuse is the **one sanctioned store for prompt/completion text** — everything
 else carries fingerprints only, which is what makes this the single place to control for PII.
 
 **Verify by COUNTING, never by health check** — this is the important part:
@@ -307,7 +307,7 @@ curl -s -u "$(grep ^LANGFUSE_PUBLIC_KEY= .env | cut -d= -f2)":"$(grep ^LANGFUSE_
 ```
 `totalItems: 0` after asking a question is a FAULT, however healthy everything looks.
 
-**Two ways this has silently reported zero** (INFRA-4), both worth knowing because neither
+**Two ways this has silently reported zero**, both worth knowing because neither
 produced a single error anywhere:
 
 1. **Version skew.** `langfuse/langfuse:2` with SDK `4.14.4`. The v3+ SDK ships over OTLP
@@ -362,7 +362,7 @@ kubectl run probe --rm -i --restart=Never --image=curlimages/curl:8.11.1 --comma
   curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 http://medbot-qdrant:6333/readyz
 ```
 That unlabelled pod returns **200** despite an all-pods default-deny. The policies are
-correct and would work on Calico/Cilium; kind simply cannot prove it (P6.4.7).
+correct and would work on Calico/Cilium; kind simply cannot prove it.
 
 ---
 

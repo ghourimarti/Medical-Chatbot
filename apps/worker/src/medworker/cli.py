@@ -1,8 +1,8 @@
 """Operator CLI: enqueue jobs, or run one directly.
 
-`--direct` bypasses the queue for local development and for the initial bootstrap, when
-no queue exists yet. It is deliberately NOT the production path: without SQS there is no
-retry, no DLQ, and no protection against two operators ingesting simultaneously.
+`--direct` bypasses the queue for local development and the initial bootstrap, before a
+queue exists. It is not the production path: without SQS there is no retry, no DLQ, and no
+protection against two operators ingesting at once.
 """
 
 from __future__ import annotations

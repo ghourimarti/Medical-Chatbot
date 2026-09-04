@@ -62,7 +62,7 @@ It is stored prompt injection wearing the costume of a feature.
 Authorisation therefore runs in `serving.preflight`, which is:
 
 - **before any expensive work** — no embedding or generation is paid for on a request
-  that is about to be rejected (D20); and
+  that is about to be rejected; and
 - **before the `StreamingResponse` is constructed** — so an unauthorised thread is a real
   HTTP `404`. Once bytes are on the wire the status line is already `200`, and the only
   way left to report a refusal is in-band, which every client then has to special-case.
@@ -98,7 +98,7 @@ the question is still answered.
 
 ## D32 — Claiming an anonymous conversation requires `user_id IS NULL`
 
-Sign-in transfers this session's anonymous conversations to the account (D25), because
+Sign-in transfers this session's anonymous conversations to the account, because
 the conversation someone just had is usually *the reason they signed up*, and losing it
 at the moment of sign-in is the worst possible time to lose it.
 
@@ -117,7 +117,7 @@ session they do not hold.
 
 A JWKS outage stops *new sign-ins from being verified*. It does not stop the pod
 answering questions. Failing readiness on it would pull every pod out of the load
-balancer over a dependency the anonymous product never uses (D21, D24), and the
+balancer over a dependency the anonymous product never uses, and the
 autoscaler would then cycle healthy pods for the duration of someone else's incident.
 
 Three booleans rather than one, because they fail independently: an operator seeing a
@@ -140,7 +140,7 @@ one is a deliberate decision with a failing build behind it, rather than a conve
 afternoon.
 
 Messages carry **no** foreign key to conversations — a cascade across partitions would
-defeat `DROP PARTITION` (D9). So account deletion removes messages **explicitly and
+defeat `DROP PARTITION`. So account deletion removes messages **explicitly and
 first**: once the cascade takes the conversations, their messages are unreachable orphans
 that only the 30-day partition drop would clear, which is not a deletion anyone would
 accept from a GDPR request.

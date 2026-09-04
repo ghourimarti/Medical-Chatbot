@@ -1,10 +1,9 @@
-"""RFC 7807 exception handlers (D18, D21).
+"""RFC 7807 exception handlers.
 
-Two rules enforced here:
-  1. Users never see internal exception text. demo/ renders `f"Error : {str(e)}"`
-     straight into the page; this replaces that with a safe, typed envelope.
-  2. The catch-all matters most. Handling only known exceptions leaves the one
-     unhandled path — the one that leaks a stack trace to a browser — wide open.
+Two rules:
+  1. Users never see internal exception text. It goes into a safe, typed envelope.
+  2. The catch-all matters most. Handling only the known exceptions leaves the unhandled
+     path, the one that leaks a stack trace to a browser, wide open.
 """
 
 from __future__ import annotations
@@ -40,9 +39,9 @@ async def medbot_error_handler(request: Request, exc: Exception) -> JSONResponse
         exc.retryable,
         exc.degradable,
     )
-    # P5.5: this counter was DECLARED and exported but never incremented anywhere, so the
-    # availability SLO's error-budget burn alert — which sums
-    # medbot_errors_total{degradable="false"} — could never fire from that term. An alert
+    # This counter was declared and exported but never incremented anywhere, so the
+    # availability SLO's error-budget burn alert, which sums
+    # medbot_errors_total{degradable="false"}, could never fire from that term. An alert
     # wired to a metric nobody emits is worse than no alert: it occupies the slot where a
     # working one would go, and it reports healthy forever.
     #

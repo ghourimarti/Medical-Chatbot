@@ -85,7 +85,7 @@ async def test_grounded_answer_when_retrieval_is_confident() -> None:
 
 @pytest.mark.asyncio
 async def test_no_answer_when_below_threshold() -> None:
-    """D3: below the confidence floor, abstain — never generate ungrounded (the demo's
+    """below the confidence floor, abstain — never generate ungrounded (the demo's
     ooc-010 West Nile confabulation is exactly what this prevents)."""
     pipe = RagPipeline(
         settings=_settings(), embedder=StubEmbedder(),
@@ -100,7 +100,7 @@ async def test_no_answer_when_below_threshold() -> None:
 async def test_model_abstention_is_relabeled_not_grounded() -> None:
     """Retrieval cleared the coarse threshold but the model said it doesn't know: the answer
     must be NO_ANSWER without citations, never a 'grounded' answer whose text is a don't-know.
-    This is the CRISPR case the S3 live test surfaced."""
+    This is the CRISPR case the live test surfaced."""
     abstain = "I don't have reliable information on that in my reference material."
     pipe = RagPipeline(
         settings=_settings(), embedder=StubEmbedder(),
@@ -113,7 +113,7 @@ async def test_model_abstention_is_relabeled_not_grounded() -> None:
 
 @pytest.mark.asyncio
 async def test_empty_store_is_a_FAULT_not_an_abstention() -> None:
-    """P5.3. This previously returned NO_ANSWER, and that was the most dangerous bug here.
+    """This previously returned NO_ANSWER, and it was the most dangerous bug here.
 
     A vector search over a populated collection always returns its nearest neighbours,
     however irrelevant — so zero candidates cannot mean "the corpus has no match". It means

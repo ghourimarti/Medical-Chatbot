@@ -1,4 +1,4 @@
-"""S7: schema, partition lifecycle, and provable deletion (D1, D9, D18).
+"""schema, partition lifecycle, and provable deletion.
 
 Runs against a real Postgres (docker compose up -d postgres); skips if unreachable so
 `make check` stays green without it. Partition behaviour cannot be tested against SQLite —
@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 pytestmark = pytest.mark.integration
 
-# A DEDICATED database, never the one the application uses (P5.4).
+# A DEDICATED database, never the one the application uses.
 #
 # This file previously pointed at `medbot` — the real local development database — and its
 # fixture runs DROP_ALL. Integration tests are not deselected by default, so `make test`
@@ -176,7 +176,7 @@ async def test_history_roundtrip_and_ordering(engine: AsyncEngine) -> None:
 
 @pytest.mark.asyncio
 async def test_deletion_actually_deletes(engine: AsyncEngine) -> None:
-    """GDPR right-to-erasure (D18). Asserts against the DATABASE, not an API response —
+    """GDPR right-to-erasure. Asserts against the DATABASE, not an API response —
     a delete endpoint that reports success without removing rows passes review and fails
     an audit."""
     factory = build_session_factory(engine)

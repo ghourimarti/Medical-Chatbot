@@ -51,7 +51,7 @@ curl -s localhost:5007/readyz
 
 `/readyz` must be **200**. It returns 200 only when the index is non-empty *and* the
 embedder is reachable, because each of those independently reported Ready while every
-query failed (P6.3.5, P6.5.4).
+query failed.
 
 Then note your starting counters so you can see them move:
 
@@ -77,8 +77,8 @@ than not answering.
 |---|---|---|
 | **Prometheus** | `medbot_answers_total{kind="grounded"}` +1 | the only proof the classifier called it grounded |
 | **Grafana** | *Answer kinds* stacked area gains a grounded slice | the four-kind mix is the product's shape at a glance |
-| **Langfuse** | one `rag_answer` trace: input question, the retrieved contexts, output text, prompt/completion tokens, cost, `prompt_version=v1` + sha | the ONLY place prompt/completion text is stored (D18) — everything else keeps fingerprints, which is what makes this the single PII control point |
-| **Jaeger** | one trace, `POST /api/v1/query` **parent** with nested `embed → retrieve → rerank → generate` | if you see a lone `embed` with no parent, ASGI instrumentation detached (I3.4c) |
+| **Langfuse** | one `rag_answer` trace: input question, the retrieved contexts, output text, prompt/completion tokens, cost, `prompt_version=v1` + sha | the ONLY place prompt/completion text is stored — everything else keeps fingerprints, which is what makes this the single PII control point |
+| **Jaeger** | one trace, `POST /api/v1/query` **parent** with nested `embed → retrieve → rerank → generate` | if you see a lone `embed` with no parent, ASGI instrumentation detached |
 | **Qdrant** | nothing changes — read path only | ingestion is the only writer |
 
 **Bad readings:**
@@ -109,7 +109,7 @@ hit is the system deliberately not calling the model. If you saw a trace here, c
 attribution would double-count.
 
 **Bad reading:** no hit on the second ask → check the prompt version participates in the
-cache key. A prompt edit *must* invalidate the cache (D10), so a key that ignores it would
+cache key. A prompt edit *must* invalidate the cache, so a key that ignores it would
 serve answers from the old prompt forever.
 
 ---
@@ -237,7 +237,7 @@ This is not a retrieval question and must never be treated as one.
 
 Watch the UI closely as it renders.
 
-**The contract (D8):** the `sources` event arrives **before** any `token` event — citations
+**The contract:** the `sources` event arrives **before** any `token` event — citations
 render *before* the prose. Verify from the wire:
 
 ```bash
@@ -283,11 +283,11 @@ The second answer must resolve "it" to asthma.
 | Where | What you should see | Why |
 |---|---|---|
 | **Postgres** | `select count(*) from messages;` grows by 2 per turn | |
-| **Postgres** | `messages` is **partitioned** (`relkind='p'` parent + `'r'` day partitions) | GDPR erasure is `DROP PARTITION` (D1) — no partitions means the retention policy silently does nothing |
+| **Postgres** | `messages` is **partitioned** (`relkind='p'` parent + `'r'` day partitions) | GDPR erasure is `DROP PARTITION` — no partitions means the retention policy silently does nothing |
 | **UI** | the thread appears in the sidebar | |
 
 **Bad reading:** answers work but `messages` stays 0 → Postgres is degraded, not down.
-History is a *side effect* of answering, never a precondition (D21): a database outage must
+History is a *side effect* of answering, never a precondition: a database outage must
 cost you history, not availability. That is correct behaviour and worth confirming
 deliberately rather than discovering later.
 
@@ -457,7 +457,7 @@ python scripts/inspect_stack.py
 ```
 
 Exit code is the number of failures. Known-open items it will flag honestly rather than
-hide: superseded Qdrant collections accumulate without pruning (**I3.7**), and any engine
+hide: superseded Qdrant collections accumulate without pruning, and any engine
 listed in `SERVING_CHAIN` but not actually running will show as unreachable — which is
 itself worth knowing, because an in-chain-but-dead leg costs every failover a connect
 timeout before it moves on.

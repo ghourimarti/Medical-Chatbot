@@ -117,7 +117,7 @@ The two urgent voices are separate on purpose: urgency is right for both, but
 "go to the nearest emergency department" is the wrong thing to say to someone disclosing
 self-harm.
 
-**Densities (D27b):** Clinical Calm by default, Editorial Evidence as an opt-in toggle. One
+**Densities:** Clinical Calm by default, Editorial Evidence as an opt-in toggle. One
 renderer, two layouts — not two component trees.
 
 ---
@@ -150,7 +150,7 @@ A guard never seen failing is not a guard.
 
 ---
 
-## What S10 found
+## What the frontend work found
 
 Building the frontend surfaced defects in the backend it was built against. In order of
 severity:
@@ -189,7 +189,7 @@ builds non-reproducible.
 
 - **No accounts.** Sessions are anonymous; history is a single thread keyed by cookie.
   Multiple named conversations need backend work (users + conversations schema) that does
-  not exist. Auth is planned as Clerk (D24) in S20/S21.
+  not exist. Auth is planned as Clerk in S20/S21.
 - **History is a plain transcript.** `GET /session/history` returns only role and content.
   The database stores `kind`, but the repository drops it on read, so reusing the treatment
   components would mean guessing — and a past emergency refusal rendered as an ordinary

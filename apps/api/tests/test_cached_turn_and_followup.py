@@ -1,4 +1,4 @@
-"""Two defects that were invisible from outside the system (INFRA-5).
+"""Two defects that were invisible from outside the system.
 
 Both were reported as UI problems — "the conversation saves but will not reload", and a
 follow-up answering about the wrong condition — and both were in the request path.

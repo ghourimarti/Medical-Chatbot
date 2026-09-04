@@ -29,7 +29,7 @@ means something was not anticipated.
 
 **Alert:** `MedbotDegradedMode`, `MedbotAllVenueCircuitsOpen`
 
-**Measured (P5.3):** requests return `503 service-degraded` with RFC 7807. The venue circuit
+**Measured:** requests return `503 service-degraded` with RFC 7807. The venue circuit
 opens after 3 consecutive failures. **Recovery took 64.8 s** — dominated by the model
 reloading into GPU memory, which no application change shortens.
 
@@ -38,14 +38,14 @@ reloading into GPU memory, which no application change shortens.
 2. Check the chain in use: the startup log line `serving chain: ...`. A chain of one venue
    has nothing to fail over to — **this is the single most common cause of a full outage in
    this system**, and it is a configuration problem, not an infrastructure one.
-3. Read the venue error. Since P5.2 it names the exception type:
+3. Read the venue error. It names the exception type:
    `local: ConnectError: All connection attempts failed`
-   - `ConnectError` → the process is down or the port is wrong
-   - `ReadTimeout` → alive but overloaded; check GPU memory before restarting
-   - `status=400 body=...` → the provider is rejecting the request. SGLang reports exact
-     token counts; compare against its 8192-token context
+  - `ConnectError` → the process is down or the port is wrong
+  - `ReadTimeout` → alive but overloaded; check GPU memory before restarting
+  - `status=400 body=...` → the provider is rejecting the request. SGLang reports exact
+   token counts; compare against its 8192-token context
 4. If a second venue exists, set `SERVING_CHAIN` to put it first and roll the pods.
-5. If no venue is available, `CACHE_ONLY_MODE=true` still serves cached answers (S18.7).
+5. If no venue is available, `CACHE_ONLY_MODE=true` still serves cached answers.
 
 **Expected recovery: ~65 s** after the engine restarts. Do not escalate before then — you
 will be watching a model load.
@@ -56,13 +56,13 @@ will be watching a model load.
 
 **Alert:** `MedbotRedisCircuitOpen`
 
-**Measured (P5.3):** the service **keeps answering correctly**. Before the breaker, latency
+**Measured:** the service **keeps answering correctly**. Before the breaker, latency
 went 2.0 s → **20.4 s**, because ~10 Redis calls per request each paid a 2 s socket timeout.
 With the breaker: one slow request (~12 s), then normal latency. **Recovery: 4.1 s**, no
 restart needed.
 
 **What is actually broken:**
-- Every request is a cache miss — P5.2 measured **13 ms hit vs 1835 ms miss**, and cost
+- Every request is a cache miss — measured **13 ms hit vs 1835 ms miss**, and cost
   rises in proportion
 - Quotas fall back to **per-replica** in-process counters, so the effective limit becomes
   N × configured across N replicas
@@ -84,7 +84,7 @@ the client pool, not the server.
 
 **Alert:** `MedbotPostgresCircuitOpen`
 
-**Measured (P5.4):** answers are still served and grounded. Latency 5.0 s → **8.5 s** before
+**Measured:** answers are still served and grounded. Latency 5.0 s → **8.5 s** before
 the breaker. **Recovery: 4.6 s.**
 
 **⚠ The serious consequence is invisible to users: history writes are silently dropped.**
@@ -97,8 +97,8 @@ never written anywhere. For a medical assistant this is a compliance issue, not 
    as such, not discovered later during an audit.
 4. If the volume is lost, go to [Restore from backup](#restore-from-backup).
 
-**Do not** disable `DATABASE_URL` to "make the errors stop". Since P5.4 that is refused
-outside `local` — without it there is no audit trail and no GDPR deletion path (D1, D9).
+**Do not** disable `DATABASE_URL` to "make the errors stop". That is refused
+outside `local` — without it there is no audit trail and no GDPR deletion path.
 
 ---
 
@@ -106,7 +106,7 @@ outside `local` — without it there is no audit trail and no GDPR deletion path
 
 **Alert:** `MedbotRetrievalUnavailable`
 
-**Measured (P5.3):** requests return `503 retrieval-unavailable`. **Recovery: 5.1 s.**
+**Measured:** requests return `503 retrieval-unavailable`. **Recovery: 5.1 s.**
 
 **Check the alias before the process.** `gale_live` pointing at a dropped or empty
 collection produces this alert with Qdrant perfectly healthy — and that is the more likely
@@ -118,12 +118,12 @@ curl -s localhost:1104/collections/<target>          # points_count > 0 ?
 ```
 
 1. If the alias is wrong, repoint it — that is an atomic swap and the fastest possible fix
-   (D11).
+.
 2. If the collection is genuinely gone, restore from snapshot: **3.5 s**, versus **~22 min**
    to re-index ([BACKUP_RESTORE.md](BACKUP_RESTORE.md)). Always prefer the snapshot.
 3. If Qdrant itself is down, restart it; the volume persists.
 
-**This alert exists because of a P5.3 finding.** Zero retrieval candidates used to return
+**This alert exists because of a chaos-drill finding.** Zero retrieval candidates used to return
 `no_answer` with a 200 — a broken index answered every question with a confident *"I don't
 have reliable information"*, no alert fired, and the service looked perfectly healthy while
 being uniformly wrong. If you ever see mass abstention **without** this alert, suspect the
@@ -157,11 +157,11 @@ outlive the index that produced them.
 
 **Alert:** `MedbotAbuseSuspected`
 
-**Measured (P5.2):** guardrail refusals cost **6 ms** and zero tokens, so the system absorbs
+**Measured:** guardrail refusals cost **6 ms** and zero tokens, so the system absorbs
 abuse cheaply — 245 RPS of unsafe traffic with 0 failures.
 
 1. Identify the bucket: `medbot_rate_limited_total{scope="ip_minute"}` vs `"minute"`.
-   **`ip_*` is the meaningful one.** Session-scoped limits are self-selected — until P5.2,
+   **`ip_*` is the meaningful one.** Session-scoped limits are self-selected — before the IP bucket,
    session-only limiting was bypassable by simply not sending the cookie (measured: **0/30**
    requests limited).
 2. Per-IP limits are sized for carrier-grade NAT (300/min), so sustained rejections mean a
@@ -177,14 +177,14 @@ abuse cheaply — 245 RPS of unsafe traffic with 0 failures.
 
 **Alert:** `MedbotApproachingSaturation`
 
-**Measured (P5.2), single worker:** cache path saturates at **~310 RPS**; the full pipeline
+**Measured, single worker:** cache path saturates at **~310 RPS**; the full pipeline
 at **~2 RPS**. Past saturation **throughput plateaus and latency grows while the error rate
 stays 0%** — so latency is the leading indicator and errors are lagging.
 
 1. Check the stage split first: `medbot_stage_duration_seconds{stage="rerank"}`. Reranking
    measured **54% of pipeline cost**, on CPU.
-2. If rerank dominates, scale the **ml-service** (D22), not the API. Adding API replicas to
-   fix a CPU-reranking bottleneck buys the wrong resource — the P5.2 extrapolation showed
+2. If rerank dominates, scale the **ml-service**, not the API. Adding API replicas to
+   fix a CPU-reranking bottleneck buys the wrong resource — the extrapolation showed
    this ending in 100+ replicas running a model that belongs on one GPU.
 3. If the cache hit rate is low, that multiplies pipeline load directly: at 13 ms vs 1835 ms,
    every lost hit is ~140× more work.
@@ -193,7 +193,7 @@ stays 0%** — so latency is the leading indicator and errors are lagging.
 
 ## Restore from backup
 
-**Measured (P5.4):** Postgres RTO **0.5 s**; Qdrant RTO **3.5 s**. Both verified against
+**Measured:** Postgres RTO **0.5 s**; Qdrant RTO **3.5 s**. Both verified against
 source counts, including the six daily partitions.
 
 ```bash
@@ -220,16 +220,16 @@ Reviewed against measurement rather than left at their Phase-1 guesses:
 | `DAILY_SPEND_LIMIT_USD` | 5.0 | Sized for development. Phase-1 full load is ~$830/day — **this must be raised deliberately before production or the breaker trips on day one** |
 | Cost/query alert | $0.001 p95 | Phase-1 NFR |
 | Cache-hit floor | 10% | Below this, cost tracks the 140× miss penalty |
-| Self-hosted venues | $0/token | S18.1. Cost alerts only bind on hosted venues — a chain that has failed over to Groq is a *cost* event as well as an availability one |
+| Self-hosted venues | $0/token | Cost alerts only bind on hosted venues — a chain that has failed over to Groq is a *cost* event as well as an availability one |
 
 **The kill switch fails closed to its last known state and the env floor always applies**
-(S18). An operator who disabled generation must not have it silently re-enable on restart.
+. An operator who disabled generation must not have it silently re-enable on restart.
 
 ---
 
 ## Log retention and PII
 
-**What is redacted (S11.2):** the structlog processor strips PII before emission, and
+**What is redacted:** the structlog processor strips PII before emission, and
 questions are logged only as a fingerprint hash, never as text. **A medical question is
 itself sensitive** — "what are the symptoms of HIV" in a log line is a health disclosure
 regardless of who asked it.
@@ -237,14 +237,14 @@ regardless of who asked it.
 | Stream | Retention | Reason |
 |---|---|---|
 | Application logs (JSON, stdout) | 30 days | Debugging window; no raw questions |
-| Chat history (Postgres) | 90 days via `DROP PARTITION` (D1) | Retention is a partition drop, not a `DELETE` — it does not bloat the table or need a vacuum |
+| Chat history (Postgres) | 90 days via `DROP PARTITION` | Retention is a partition drop, not a `DELETE` — it does not bloat the table or need a vacuum |
 | Metrics (Prometheus) | 15 days raw | Sized for burn-rate windows (max 6 h) plus post-incident review |
 | Backups | See Phase 6 | Must be off-host with object-lock; currently local only |
 
 **GDPR erasure** is `DELETE /api/v1/session` and asserts against the database, not the API
-response (S7.5). It deliberately **ignores the circuit breaker** (P5.4): erasure is not
+response. It deliberately **ignores the circuit breaker**: erasure is not
 best-effort work, and skipping it because a breaker is open would report success without
 deleting anything.
 
 **Client IPs are never stored raw** — only a salted hash (`client_hash`), so per-IP abuse
-detection works without retaining personal data (D18).
+detection works without retaining personal data.

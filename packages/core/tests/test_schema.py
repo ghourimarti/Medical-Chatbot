@@ -32,7 +32,7 @@ def test_valid_grounded_answer() -> None:
 
 @pytest.mark.parametrize("kind", [AnswerKind.NO_ANSWER, AnswerKind.REFUSED, AnswerKind.DEGRADED])
 def test_only_grounded_answers_are_cacheable(kind: AnswerKind) -> None:
-    """D10: a cache must never memorize a refusal, a don't-know, or a degraded response."""
+    """a cache must never memorize a refusal, a don't-know, or a degraded response."""
     assert Answer(kind=kind, text="...").is_cacheable is False
 
 
@@ -63,7 +63,7 @@ def test_query_request_enforces_size_cap() -> None:
 
 
 def test_refusal_category_only_valid_on_a_refusal() -> None:
-    """S10.2: the category is a property OF a refusal. Allowing it on a grounded answer
+    """the category is a property OF a refusal. Allowing it on a grounded answer
     would let a client render a safety treatment over a normal cited answer."""
     with pytest.raises(ValidationError, match="only meaningful on a refused answer"):
         Answer(kind=AnswerKind.NO_ANSWER, text="I don't know.", refusal_category="dosage")

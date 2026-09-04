@@ -1,12 +1,12 @@
-"""Ingestion pipeline: build a new collection, then swap the alias (D11, D3).
+"""Ingestion pipeline: build a new collection, then swap the alias.
 
-THE INVARIANT: the alias is repointed ONLY after the new collection is fully built and
-verified. Every failure mode — crash, OOM, provider error, a killed pod — leaves the alias
-pointing at the previous, complete collection. A partially-ingested corpus can never be
-served, because it is never named.
+The invariant: the alias is repointed only after the new collection is fully built and
+verified. A crash, an OOM, a provider error or a killed pod all leave the alias pointing at
+the previous complete collection, so a partially-ingested corpus is never served because it
+is never named.
 
-That is a different guarantee from "the job retries". Retries fix availability of the
-*pipeline*; the alias fixes correctness of the *data* readers see meanwhile.
+That's a different guarantee from "the job retries". Retries fix availability of the
+pipeline; the alias fixes correctness of the data readers see in the meantime.
 """
 
 from __future__ import annotations
@@ -73,10 +73,10 @@ def load_chunks(
 
 
 def chunk_id(text: str, page: int) -> str:
-    """Content-addressed id. This is what makes the job IDEMPOTENT: SQS guarantees
-    at-least-once delivery, so a duplicate message must overwrite the same points rather
-    than duplicate them. Qdrant point ids are a deterministic uuid5 of this value (S3)."""
-    return hashlib.sha1(f"{page}:{text}".encode()).hexdigest()  # noqa: S324 — id, not a MAC
+    """Content-addressed id, which is what makes the job idempotent. SQS is at-least-once,
+    so a duplicate message has to overwrite the same points rather than add more. Qdrant
+    point ids are a deterministic uuid5 of this value."""
+    return hashlib.sha1(f"{page}:{text}".encode()).hexdigest()  # noqa: S324 (id, not a MAC)
 
 
 async def ingest_corpus(
@@ -123,8 +123,8 @@ async def ingest_corpus(
         written += await store.upsert(chunks[i : i + UPSERT_BATCH], collection=target)
         logger.info("upserted %s/%s", written, len(chunks))
 
-    # VERIFY BEFORE SWAP. Swapping to a collection with the wrong count would publish a
-    # silently-truncated corpus — exactly the failure the alias exists to prevent.
+    # Verify before the swap. Repointing at a collection with the wrong count publishes a
+    # truncated corpus, which is the failure the alias exists to prevent.
     actual = await store.count(target)
     if actual != len(chunks):
         await store.delete_collection(target)
@@ -136,14 +136,13 @@ async def ingest_corpus(
     await store.ensure_alias(alias, target)
     logger.info("alias %s -> %s (%s chunks)", alias, target, actual)
 
-    # AFTER the swap, never before: the alias must already point at the new collection,
-    # so a crash here leaves extra collections (harmless, and the next run cleans them)
+    # After the swap, never before: the alias must already point at the new collection, so
+    # a crash here leaves extra collections behind (harmless, and the next run clears them)
     # rather than deleting something still serving traffic.
     #
-    # I3.7: without this, every re-ingest left its predecessor behind forever - five
-    # stale copies of the corpus at ~29MB each. Keeping ONE previous version is what
-    # makes rollback a single alias operation, which is the entire point of the D11
-    # indirection; keeping all of them just makes `GET /collections` unreadable.
+    # Without this, every re-ingest left its predecessor around forever: five stale copies
+    # of the corpus at ~29MB each. Keeping one previous version makes rollback a single
+    # alias operation, which is the point of the indirection.
     pruned = await store.prune_superseded(alias, keep=1)
     if pruned:
         logger.info("pruned %d superseded collection(s): %s", len(pruned), ", ".join(pruned))

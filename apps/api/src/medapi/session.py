@@ -1,12 +1,12 @@
-"""Anonymous session identity (D9).
+"""Anonymous session identity.
 
-The cookie carries ONLY a signed session id; all data lives in Postgres. That split
-matters: cookies are size-limited (~4KB), client-modifiable, and sent on every request —
-chat history belongs in a database, not in a header.
+The cookie carries a signed session id and nothing else; the data lives in Postgres.
+Cookies are size-limited (~4KB), client-modifiable and sent on every request, so chat
+history belongs in a database rather than a header.
 
-Fixes a concrete demo/ bug: it used `app.secret_key = os.urandom(24)`, so every process
-restart invalidated all sessions, and any second replica invalidated them immediately. The
-signing key is now configuration, which is what makes horizontal scaling possible at all.
+The signing key is configuration, not a per-process random value. A random one invalidates
+every session on restart, and invalidates them immediately as soon as a second replica
+exists, which rules out scaling horizontally at all.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class SessionManager:
         operate. XFF appends left-to-right, so with N trusted hops the last N entries were
         written by our own infrastructure and entry `-N` is the address our outermost proxy
         observed. Anything further left is attacker-controlled and ignored. Default 0 means
-        "no proxy" — the header is not consulted at all (P5.2).
+        "no proxy", and the header is not consulted at all.
         """
         if trusted_proxy_hops > 0:
             forwarded = request.headers.get("x-forwarded-for")

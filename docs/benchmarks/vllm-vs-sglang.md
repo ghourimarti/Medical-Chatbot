@@ -1,4 +1,4 @@
-# Serving-engine benchmark (S14, D12)
+# Serving-engine benchmark
 
 > Harness: `tests/load/engine_benchmark.js` (k6). Works against any OpenAI-compatible
 > endpoint, so venues and engines are compared under identical load.
@@ -8,8 +8,8 @@
 
 | Tool | Measures | Answers |
 |---|---|---|
-| `bench_venue.py` (S3b) | **Sequential** TTFT / TPOT | "What does one request cost when nothing else is happening?" |
-| `engine_benchmark.js` (S14) | **Concurrent** throughput + latency under ramp | "What happens when requests overlap?" |
+| `bench_venue.py` | **Sequential** TTFT / TPOT | "What does one request cost when nothing else is happening?" |
+| `engine_benchmark.js` | **Concurrent** throughput + latency under ramp | "What happens when requests overlap?" |
 
 Continuous batching, KV-cache pressure, and admission queueing only appear under
 concurrency — and that is exactly where vLLM and SGLang differ. Measured sequentially the
@@ -90,9 +90,9 @@ against tail latency (Phase-1: TTFT p95 ≤ 2.0 s, and a 43.8-min monthly error 
 
 1. Better p99 (1034 ms vs 2504 ms) — the number the SLO is written against.
 2. Higher sustained throughput (+12%).
-3. Already integrated, measured (S3b), and running with a known WSL2 workaround.
+3. Already integrated, measured, and running with a known WSL2 workaround.
 
-SGLang remains valuable as the **engine-level failover leg** (D12): it is genuinely
+SGLang remains valuable as the **engine-level failover leg**: it is genuinely
 production-capable here — zero failures, better p95 — so switching engines is a real
 mitigation for a vLLM-specific bug or OOM regression, which is exactly the role D12
 assigned it.
@@ -103,7 +103,7 @@ assigned it.
    request count, so the engines stopped generating differently. Per-request tok/s
    normalises for time but not for stopping behaviour, so treat the throughput delta as
    indicative rather than exact.
-2. **WSL2 forces `pin_memory=False`** (S3b) — both engines are handicapped equally, but
+2. **WSL2 forces `pin_memory=False`** — both engines are handicapped equally, but
    neither figure is native-Linux representative.
 3. **Consumer GPU, INT4 quantization.** An L4/A100 with FP8 would change absolute numbers
    and could change the ordering; batching behaviour is hardware-sensitive.
@@ -140,7 +140,7 @@ engines must be benchmarked sequentially, not side by side. Comparability theref
 on identical model, prompt, ramp, and thermal state — the harness fixes the first three;
 the fourth argues for running both within the same session.
 
-**Known caveat for the local venue (S3b):** WSL2 forces `pin_memory=False`, so local
+**Known caveat for the local venue:** WSL2 forces `pin_memory=False`, so local
 figures are inherently below native-Linux performance. Any *published* engine comparison
 belongs on a native-Linux cloud GPU (RunPod/AWS, Track D) — the local run establishes the
 method and a relative baseline, not headline numbers.

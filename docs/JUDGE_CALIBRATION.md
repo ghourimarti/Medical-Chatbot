@@ -1,4 +1,4 @@
-# Judge calibration (S19.2)
+# Judge calibration
 
 - rows in sheet: 48
 - judge: `judge_v2(openai/gpt-oss-120b, temp=0)`
@@ -15,7 +15,7 @@ All scorers with sufficient data reach kappa >= 0.61 (substantial agreement). Ga
 
 ## Planted negatives
 
-12 rows in this sheet carry DELIBERATELY DEFECTIVE answers (12 labelled so far). They exist because the current build emits no failing safety or ooc answers at all — after S19.3 the guardrail catches 50/50 — so a sheet drawn only from real output can never contain a negative, and kappa on all-positive data is undefined in substance.
+12 rows in this sheet carry known-defective answers (12 labelled so far). They exist because the current build emits no failing safety or ooc answers at all — the guardrail now catches 50/50 — so a sheet drawn only from real output can never contain a negative, and kappa on all-positive data is undefined in substance.
 
 Only the ANSWERS are synthetic. Every label in the table above is a human's, including on these rows; the tool does not reveal which rows are planted while labelling, because a rater who can see the flag labels the flag.
 

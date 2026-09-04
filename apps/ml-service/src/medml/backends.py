@@ -41,12 +41,12 @@ class RerankBackend(Protocol):
 def _device() -> str:
     """Where the encoders run. `ML_DEVICE=cpu|cuda|auto`, default cpu.
 
-    This was hardcoded to "cpu" in both backends, which made the single largest component
+    This was hardcoded to "cpu" in both backends, which made the largest single component
     of TTFT untunable. Measured on the dev box: rerank p95 3.5s scoring 20 candidate pairs
-    on CPU, against a TTFT p50 NFR of 0.8s - so the pipeline spent multiples of its entire
+    on CPU against a 0.8s TTFT target, so the pipeline spent multiples of its entire
     latency budget before the model could emit a first token.
 
-    Default stays "cpu" deliberately. On a single-GPU host the card is already holding the
+    The default stays "cpu". On a single-GPU host the card is already holding the
     inference engine, and a cross-encoder that evicts KV cache trades one latency problem
     for another. "auto" picks cuda only when torch reports it available, so the same image
     runs on a CPU-only box unchanged.
@@ -105,8 +105,8 @@ class TorchEmbeddingBackend:
 
 
 class TorchRerankBackend:
-    """Cross-encoder reranking. Scores (query, passage) pairs jointly — far more accurate
-    than embedding cosine, and the quality lever S6 depends on."""
+    """Cross-encoder reranking. Scores (query, passage) pairs jointly, which is far more
+    accurate than embedding cosine and is the main retrieval-quality lever."""
 
     def __init__(self, model_id: str) -> None:
         self._model_id = model_id
@@ -131,12 +131,11 @@ class TorchRerankBackend:
 
 
 class OnnxEmbeddingBackend:
-    """ONNX Runtime embeddings via fastembed (S5.9).
+    """ONNX Runtime embeddings via fastembed.
 
-    Chosen over `optimum[onnxruntime]` because onnxruntime is ALREADY a dependency (it
-    arrived with fastembed for BM25 in S6) and fastembed serves the exact model we index
-    with — `BAAI/bge-large-en-v1.5`. Adding a second ONNX stack to reach the same runtime
-    would be dependency bloat.
+    Chosen over `optimum[onnxruntime]` because onnxruntime is already a dependency (it came
+    in with fastembed for BM25) and fastembed serves the exact model we index with,
+    `BAAI/bge-large-en-v1.5`. A second ONNX stack to reach the same runtime is bloat.
 
     ⚠ VECTOR COMPATIBILITY: query and document embeddings must come from the same model
     AND backend, or retrieval silently degrades. `scripts/compare_backends.py` measures the
@@ -165,8 +164,8 @@ class OnnxEmbeddingBackend:
         self.encode(["warmup"], is_query=True)
 
     def encode(self, texts: list[str], *, is_query: bool) -> list[list[float]]:
-        # fastembed applies bge's query instruction internally in query_embed(); using
-        # embed() for documents keeps the D5 query/document asymmetry intact.
+        # fastembed applies bge's query instruction internally in query_embed(), so using
+        # embed() for documents keeps the query/document asymmetry intact.
         model = self._model
         if is_query:
             vectors = [next(iter(model.query_embed(t))) for t in texts]  # type: ignore[attr-defined]
@@ -176,11 +175,11 @@ class OnnxEmbeddingBackend:
 
 
 class OnnxRerankBackend:
-    """ONNX cross-encoder reranking via fastembed (S5.9).
+    """ONNX cross-encoder reranking via fastembed.
 
-    Quantization is safer here than for embeddings: reranking only needs the ORDERING of
-    scores to be preserved, whereas embeddings must stay numerically compatible with
-    vectors already written to the index.
+    Quantization is safer here than for embeddings. Reranking only needs score ordering
+    preserved, whereas embeddings have to stay numerically compatible with vectors already
+    written to the index.
     """
 
     def __init__(self, model_id: str) -> None:

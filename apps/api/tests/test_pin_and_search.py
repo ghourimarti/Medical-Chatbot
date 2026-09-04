@@ -1,4 +1,4 @@
-"""Pin and conversation search (S22) — the backend half.
+"""Pin and conversation search — the backend half.
 
 These are the two features the sidebar was faking: a pin that lived in localStorage and a
 "search" that only matched titles. Both now have a server behind them, and both are writes

@@ -1,4 +1,4 @@
-"""Redis circuit breaker (P5.3 finding).
+"""Redis circuit breaker.
 
 Measured in the drill: with Redis stopped the API still answered correctly — fail-open
 worked — but latency went 2.0s -> 20.4s, because one request makes ~10 Redis calls and each

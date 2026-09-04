@@ -1,9 +1,9 @@
 """Superseded Qdrant collections must be pruned, and the LIVE one must never be.
 
-I3.7: a re-ingest builds `gale_live_vN`, repoints the alias, and left every predecessor
+a re-ingest builds `gale_live_vN`, repoints the alias, and left every predecessor
 behind forever - five stale copies of a 7,080-chunk corpus at ~29MB each, growing on a
 schedule nobody watches. Storage is the visible cost; the real one is that
-`GET /collections` stops answering the question the D11 alias exists to answer, which is
+`GET /collections` stops answering the question the alias exists to answer, which is
 "which collection is actually live?".
 """
 

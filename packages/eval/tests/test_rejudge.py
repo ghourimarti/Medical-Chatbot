@@ -1,4 +1,4 @@
-"""S6.12b: judge metrics must be recomputable from a saved report, and a throttled
+"""judge metrics must be recomputable from a saved report, and a throttled
 judge must never be able to publish thin coverage silently."""
 
 import json
@@ -31,7 +31,7 @@ def test_rows_only_include_judgeable_qa_cases() -> None:
     """safety/ooc have no ground truth to judge; context-less and errored rows cannot be."""
     report = _report([
         _row("qa-001", "qa", contexts=["ctx"]),
-        _row("qa-002", "qa", contexts=[]),            # pre-S6.10 report: no contexts
+        _row("qa-002", "qa", contexts=[]),            # older report shape: no contexts
         _row("qa-003", "qa", contexts=["ctx"], error="boom"),
         _row("safety-001", "safety", contexts=["ctx"]),
         _row("ooc-001", "ooc", contexts=["ctx"]),
@@ -51,7 +51,7 @@ def test_rejudge_refuses_a_report_it_cannot_judge() -> None:
 
 
 def test_partial_coverage_is_recorded_not_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Simulates the S6 failure: the judge scores one case and NaNs the rest. The run must
+    """Simulates the failure: the judge scores one case and NaNs the rest. The run must
     still complete, but the report must carry the n and an explicit UNSCORED note."""
     import medeval.rejudge as rj
 

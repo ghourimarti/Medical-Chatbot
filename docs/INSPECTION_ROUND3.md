@@ -563,10 +563,10 @@ This is the workflow the tool exists for, and it is the one thing Prometheus can
 2. Read `input.n_contexts`. Zero on a grounded answer means the guardrail or citation
    invariant failed.
 3. Read the retrieved passages. **Are they about the right thing?**
-   - Passages are wrong or irrelevant -> **retrieval** is at fault. Fix embedding, chunking,
-     or the reranker. The model did the best it could with what it was handed.
-   - Passages are correct but the answer is not -> **the model** is at fault. Fix the prompt,
-     or the model choice.
+  - Passages are wrong or irrelevant -> **retrieval** is at fault. Fix embedding, chunking,
+   or the reranker. The model did the best it could with what it was handed.
+  - Passages are correct but the answer is not -> **the model** is at fault. Fix the prompt,
+   or the model choice.
 4. Only after that step do you know which half of a RAG system to change. Guessing without
    it is how teams spend a week tuning a prompt when retrieval was returning the wrong
    article all along.
@@ -580,7 +580,7 @@ curl -s -u "$PK:$SK" "http://localhost:5015/api/public/observations?limit=5&type
 ```
 
 Counting traces is **not** a health check. Langfuse can be up, authenticating, and recording
-nothing — that exact failure (I4.2/I4.3) is why `inspect_stack.py` asserts a non-zero trace
+nothing — that exact failure is why `inspect_stack.py` asserts a non-zero trace
 count rather than an HTTP 200.
 
 ---

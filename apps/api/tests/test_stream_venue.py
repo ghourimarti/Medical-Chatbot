@@ -1,7 +1,7 @@
-"""A STREAMED answer must name the venue that actually served it.
+"""A streamed answer must name the venue that actually served it.
 
-S20.12, reported from the UI: with SGLang stopped, Groq produced the answer and Langfuse,
-the stored transcript and the response body all still said Qwen.
+Reported from the UI: with SGLang stopped, Groq produced the answer while Langfuse, the
+stored transcript and the response body all still said Qwen.
 
 Cause: the streaming path took `model_id` from `self._model.model_id`, and
 `FailoverModel.model_id` returns `self._legs[0].model.model_id` — the FIRST CONFIGURED
@@ -112,7 +112,7 @@ async def test_stream_works_without_the_callback() -> None:
 
 @pytest.mark.asyncio
 async def test_streamed_tokens_are_metered_against_the_serving_venue() -> None:
-    """S20.13, MEASURED before the fix:
+    """Measured before the fix:
 
         streamed query    medbot_tokens_total 2784 -> 2784   delta 0
         non-stream query  medbot_tokens_total 2784 -> 3972   delta 1188

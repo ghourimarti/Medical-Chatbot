@@ -26,8 +26,8 @@ know. Measured: 6 tokens at ~124 ms intervals against a 120 ms upstream cadence.
 
 ## The one contract every renderer must honour
 
-`done.text` is **authoritative**. The output guardrail can cut a stream off mid-answer
-(S10.2b), so a client MUST discard accumulated tokens whenever `done.kind !== "grounded"`
+`done.text` is **authoritative**. The output guardrail can cut a stream off mid-answer, so a
+client must discard accumulated tokens whenever `done.kind !== "grounded"`
 — otherwise a retracted dosage stays on screen. `finalText()` in `src/lib/contract.ts`
 exists so that rule lives in one place.
 
@@ -35,7 +35,7 @@ exists so that rule lives in one place.
 
 ```bash
 make db && make app          # data tier + API (:5007)
-make seed LIMIT=400          # the API refuses to start without an index (P6.3.5)
+make seed LIMIT=400          # the API refuses to start without an index
 make web                     # dev server on :5008
 ```
 
@@ -51,12 +51,12 @@ make web                     # dev server on :5008
 
 ## Status
 
-S10.3 ships the skeleton and the transport proof. The designed chat surface, the four
-answer-kind treatments, citations UI and public pages are S10.4–S10.10.
+The skeleton and the transport proof are in place. The chat surface, the four answer-kind
+treatments, citations UI and public pages came after.
 
-## Design system (S10.4)
+## Design system
 
-Tokens live in `src/app/globals.css`. Three theme states, deliberately: `:root` is light,
+Tokens live in `src/app/globals.css`. Three theme states: `:root` is light,
 `prefers-color-scheme: dark` applies only when no explicit choice is set, and
 `[data-theme]` always wins — so a manual toggle can override the OS, which matters for a
 product read at night.
@@ -98,5 +98,5 @@ from `medapi.guardrails._MESSAGES`), so a regression in one treatment is visible
 others. No lorem ipsum anywhere: a gallery of placeholder text proves the CSS works and
 nothing about whether real content fits.
 
-> Screenshots are deferred to S10.13, where Playwright lands and can capture both themes
+> Screenshots come from the Playwright run, which can capture both themes
 > and both densities reproducibly. Until then the gallery is live at `/design`.

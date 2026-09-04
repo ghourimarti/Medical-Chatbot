@@ -1,6 +1,6 @@
 """Contract tests for the HTTP clients, using httpx MockTransport — no live service needed.
 
-These prove the two things that matter operationally (D21):
+These prove the two things that matter operationally:
   * a failing ml-service becomes a TYPED domain error, not a raw exception, so the
     degradation ladder can branch on it;
   * reranker failure is survivable while embedder failure is not.
@@ -40,7 +40,7 @@ def _chunk(cid: str, text: str) -> RetrievedChunk:
 
 @pytest.mark.asyncio
 async def test_embed_query_sends_is_query_true() -> None:
-    """The query/document distinction must survive the wire — it is the D5 gate."""
+    """The query/document distinction must survive the wire — it is the gate."""
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -130,7 +130,7 @@ async def test_rerank_reorders_and_attaches_scores() -> None:
 
 @pytest.mark.asyncio
 async def test_reranker_failure_is_typed_and_survivable() -> None:
-    """D21: reranker down => skip reranking, don't fail the request."""
+    """reranker down => skip reranking, don't fail the request."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")

@@ -1,22 +1,20 @@
-"""Daily spend tracking and the kill switch (D20).
+"""Daily spend tracking and the kill switch.
 
-TWO CONTROLS, DIFFERENT PURPOSES:
+Two controls with different jobs:
 
-  SpendTracker — automatic. Accumulates real cost per UTC day and trips at a configured
-                 ceiling. Answers "stop before the bill becomes a five-figure surprise".
+  SpendTracker  automatic. Accumulates real cost per UTC day and trips at a configured
+                ceiling.
 
-  KillSwitch   — manual. An operator decision, flippable AT RUNTIME with no redeploy.
-                 A cost incident happens at 3am; if stopping it requires a CI pipeline,
-                 the bleeding continues for twenty minutes.
+  KillSwitch    manual. An operator decision, flippable at runtime with no redeploy, so
+                stopping a runaway doesn't wait on a CI pipeline.
 
-Both resolve to the same degraded behaviour: CACHE_ONLY_MODE — serve from cache, otherwise
-return an honest degraded answer (D21). Never a raw error, and never an unbounded bill.
+Both resolve to CACHE_ONLY_MODE: serve from cache, otherwise return an honest degraded
+answer. Never a raw error, never an unbounded bill.
 
-FAIL-OPEN vs FAIL-CLOSED, decided deliberately:
-  * Spend tracking fails OPEN (Redis down => keep answering). The alternative is an
-    infrastructure blip taking the product offline over a cost control.
-  * The kill switch fails CLOSED to its last known state, and the ENV floor always applies.
-    An operator who turned generation off must not have it silently turn back on.
+They fail in opposite directions, which is intentional. Spend tracking fails open, since a
+Redis blip shouldn't take the product offline over a cost control. The kill switch fails
+closed to its last known state and the env floor always applies, so generation that an
+operator turned off can't quietly turn itself back on.
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ KILL_SWITCH_KEY = "killswitch:llm_enabled"
 class SpendState(StrEnum):
     OK = "ok"
     SOFT_ALERT = "soft_alert"  # >= 50% of the daily ceiling
-    EXCEEDED = "exceeded"  # >= 100% — generation stops
+    EXCEEDED = "exceeded"  # >= 100%, generation stops
 
 
 class SpendTracker:
@@ -57,7 +55,7 @@ class SpendTracker:
         self._soft = soft_alert_ratio
 
     def _key(self) -> str:
-        # Key encodes the UTC date, so rollover needs no cron job — a new day is simply a
+        # The key encodes the UTC date, so rollover needs no cron job: a new day is a
         # new key, and the old one expires on its own.
         return f"{self._ns}:spend:{datetime.now(UTC):%Y-%m-%d}"
 
@@ -98,15 +96,15 @@ class SpendTracker:
         return SpendState.OK
 
     async def state(self) -> SpendState:
-        """FAILS OPEN: an unreadable counter must not take the product down (D21)."""
+        """Fails open: an unreadable counter shouldn't take the product down."""
         return self.state_for(await self.total_today())
 
 
 class KillSwitch:
     """Runtime on/off for generation, without a deploy.
 
-    Precedence: the ENV setting is a FLOOR. If `LLM_ENABLED=false` was shipped, no Redis
-    value can turn generation back on — an operator's static decision outranks a stale
+    Precedence: the env setting is a floor. If `LLM_ENABLED=false` shipped, no Redis value
+    turns generation back on; a static operator decision outranks a stale
     runtime flag.
     """
 
@@ -142,5 +140,5 @@ class KillSwitch:
             logger.warning("kill switch requires Redis; ignoring request")
             return self._env_enabled
         await self._client.set(self._key(), "1" if enabled else "0")
-        logger.warning("KILL SWITCH set to enabled=%s reason=%r", enabled, reason)
+        logger.warning("kill switch set to enabled=%s reason=%r", enabled, reason)
         return enabled and self._env_enabled

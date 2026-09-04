@@ -22,7 +22,7 @@ Tier 5  CROSS-CUTTING  D13 observability, D18 security, D19 eval, D20 cost, D21 
 - **Expensive-to-reverse ranking (deliberation budget):** D5 ≈ D1/D2 (re-embed + data migration) > D7 (rewrite) > D15 (infra rebuild) > D22 (structure churn) ≫ everything else (config-level, gets a flip-trigger instead of a debate).
 - **Decision order ≠ build order.** D19 (eval) is decided 19th but built ~first in Phase 4 (you need a baseline before refactoring); D22 (repo) is decided last but used first. Deciding late ≠ building late.
 - **Gate for every entry:** Reasoning must cite an NFR or an upstream decision. If it can't, it's taste, not engineering — rejected.
-- **Junior traps:** picking tools before paradigm; equal deliberation on all 22 (spend ∝ reversal cost); missing couplings (D5 dim inside D2 schema); letting the framework (D6) dictate architecture instead of the reverse.
+- **Common mistakes:** picking tools before paradigm; equal deliberation on all 22 (spend ∝ reversal cost); missing couplings (D5 dim inside D2 schema); letting the framework dictate architecture instead of the reverse.
 
 **Senior-vs-junior (Phase 2):** senior spends 80% of the argument on the five expensive-to-reverse decisions and writes one-line flip-triggers for the rest; junior debates the frontend longest because it's the most opinion-friendly.
 
@@ -92,7 +92,7 @@ Tier 5  CROSS-CUTTING  D13 observability, D18 security, D19 eval, D20 cost, D21 
 - **C — LlamaIndex:** best ingestion primitives | second framework for a team of 1 | Fits? N
 - **D — Thin custom pipeline, LangChain as component library only** (loaders, splitter, `ChatGroq`, embeddings): explicit async functions `condense → retrieve → fuse → rerank → build_context → generate`, Pydantic contracts, one OTel span per stage | Cons: we own ~300 lines a framework would hide | Fits? **Y**
 **Decision:** **D.**
-**Reasoning:** Package-1 spec itself warns off heavy frameworks on the query path; the per-stage latency budget (Phase 1) and per-stage tracing (D13) are near-free on owned control flow and painful through framework indirection.
+**Reasoning:** Package-1 spec itself warns off heavy frameworks on the query path; the per-stage latency budget (Phase 1) and per-stage tracing are near-free on owned control flow and painful through framework indirection.
 **Trade-offs accepted:** We maintain the plumbing.
 **Reversibility:** Easy.
 
@@ -163,9 +163,9 @@ Tier 5  CROSS-CUTTING  D13 observability, D18 security, D19 eval, D20 cost, D21 
 **Decision:**
 - **Traces:** OTel SDK, span per pipeline stage (condense/retrieve/rerank/generate) with attrs: TTFT, tokens, cost, cache-hit, no-answer, refusal, scores. **Langfuse** for LLM-level traces (compose-hosted dev; Langfuse Cloud free tier demo).
 - **Metrics:** Prometheus format → dev: compose Prom+Grafana; cloud: Grafana Cloud free tier + CloudWatch basics.
-- **Logs:** `structlog` JSON → **stdout** (12-factor fix of the file logger) → CloudWatch/Loki. No raw query text in logs (D18).
+- **Logs:** `structlog` JSON → **stdout** (12-factor fix of the file logger) → CloudWatch/Loki. No raw query text in logs.
 - **Alerts:** SLO burn-rate (fast+slow), TTFT p95 breach, error rate, spend thresholds, **no-answer-rate spike** (cheapest retrieval-regression proxy) → Grafana → email/Slack.
-**Reasoning:** SLO 99.5% is unenforceable without burn-rate alerts; cost NFR needs per-query cost attribution; eval-in-prod (D19) rides on these traces.
+**Reasoning:** SLO 99.5% is unenforceable without burn-rate alerts; cost NFR needs per-query cost attribution; eval-in-prod rides on these traces.
 **Trade-offs accepted:** Langfuse adds a dev-compose service.
 **Reversibility:** Easy-moderate — OTel is vendor-neutral by design; that's why it's first.
 
@@ -213,7 +213,7 @@ Tier 5  CROSS-CUTTING  D13 observability, D18 security, D19 eval, D20 cost, D21 
 | Indirect injection via corpus PDF | Retrieved text framed as data-not-instructions; operator-only corpus uploads (provenance); injection strings in golden adversarial set |
 | Jailbreak → personal medical advice | Refusal policy prompt + output pattern filter (dosage-like regexes) + refusal-correctness eval ≥95% gate |
 | PII leakage in logs | No raw queries in app logs (hash+length only); Langfuse = the one sanctioned store, access-controlled, 30-day retention |
-| Cost/DoS abuse | Per-IP+session rate limits (Redis token bucket), token budgets, global breaker (D20) |
+| Cost/DoS abuse | Per-IP+session rate limits (Redis token bucket), token budgets, global breaker |
 | Supply chain | uv lockfile, Trivy, pip-audit, gitleaks, Dependabot |
 | Container | non-root, read-only rootfs, slim base, no build tools in runtime layer |
 | Session hijack | HTTP-only SameSite=Lax signed cookies, stable SSM-held secret |
@@ -224,11 +224,11 @@ Tier 5  CROSS-CUTTING  D13 observability, D18 security, D19 eval, D20 cost, D21 
 ## Decision 19: Evaluation strategy
 **Question:** How quality is measured, gated, and monitored — the layer that separates demo from system.
 **Decision:**
-- **Build the eval harness BEFORE the refactor** and baseline the *current demo pipeline* — the before/after delta is the portfolio's money chart.
+- **Build the eval harness BEFORE the refactor** and baseline the *current demo pipeline* — the before/after delta is the portfolio's before/after comparison.
 - **Golden set (versioned in-repo):** ~60 curated Gale Q&A (stratified: definitions / symptoms / treatment-info / cross-topic), ~25 adversarial safety (diagnosis, dosage, emergency, injection), ~15 out-of-corpus (must say "I don't know").
 - **Metrics:** RAGAS faithfulness / answer-relevancy / context-precision / context-recall + custom: citation-coverage, refusal-correctness, no-answer precision. Thresholds = Phase 1 bar (faithfulness ≥0.85, relevancy ≥0.80, refusal ≥95%, don't-know precision ≥90%). *New-for-you primer:* RAGAS = pip library; feed `{question, answer, contexts, ground_truth}` rows, get metric scores; wire as pytest fixtures.
 - **Judge:** Groq 70B as LLM-judge, **calibrated once against your human labels on 20 samples (report agreement %)**; judge prompts versioned — judges drift too.
-- **CI:** 20-sample smoke on PR (cost cap); full set nightly + pre-deploy, blocking (D16).
+- **CI:** 20-sample smoke on PR (cost cap); full set nightly + pre-deploy, blocking.
 - **Online:** Langfuse 5% trace sampling + UI thumbs feedback → weekly scoring job; drift alert on no-answer-rate / feedback dip.
 - **A/B:** offline paired-comparison harness for prompt/model variants; *online* A/B infra honestly deferred — no traffic volume to power it.
 **Reversibility:** Easy; the datasets are the asset.
@@ -241,7 +241,7 @@ Tier 5  CROSS-CUTTING  D13 observability, D18 security, D19 eval, D20 cost, D21 
 ## Decision 21: Failure modes & degradation
 | Failure | Detection | Behavior | User experience |
 |---|---|---|---|
-| Groq outage/429 | health probe, error rate | fallback provider (D4) | transparent |
+| Groq outage/429 | health probe, error rate | fallback provider | transparent |
 | Both providers down | breaker | **cache-only mode** | banner: "answers may be limited" — never a raw 500 |
 | Retrieval empty / low score | score threshold | honest "I don't have reliable information" + rephrase hint | **never generate ungrounded** (medical rule) |
 | Postgres down | readiness probe | LB stops routing; sessions degrade to transient | maintenance notice |
@@ -299,7 +299,7 @@ Prompts live in `packages/core/prompts/` as versioned files (semver constants) +
 | 16 | CI/CD | GitHub Actions / Jenkins / GitLab CI | **GHA**: lint→types→tests→**blocking RAGAS gate**→**failing Trivy gate**→ECR sha-tags→envs w/ approvals | Quality bar enforced by machinery; demo's `:latest`-only made rollback impossible | ✅ | Eval-gated CD | Easy | Jenkins already evidenced in demo/ |
 | 17 | Secrets & config | SSM+OIDC / Secrets Manager / env files | **SSM SecureString + GitHub OIDC→IAM role** | $0 vs $0.40/secret/mo; zero long-lived AWS keys in CI | ✅ | OIDC federation (senior tell) | Easy | Trade-off: quarterly manual rotation, runbooked |
 | 18 | Security posture | Posture (per-threat mitigations, not either/or) | Injection hierarchy · toolless-by-design · refusal filter · PII-free logs · non-root RO container · RFC 7807 errors | Medical wrapper: wrong-but-confident is the top product risk | ✅ | **Top-3 gap: AI security** | n/a — continuous | Kills pickle CVE + raw-error leak; WAF/mTLS deferred w/ reasons |
-| 19 | Evaluation | RAGAS+custom / DeepEval / promptfoo / none | **RAGAS + calibrated LLM-judge + CI gate**, built BEFORE refactor | Phase 1 bar (faith ≥0.85, refusal ≥95%) enforced; before/after delta = portfolio money chart | ✅ | **#1 audit gap: evaluation** | Easy · golden sets are the versioned asset | NEW: RAGAS; judge calibrated vs human labels |
+| 19 | Evaluation | RAGAS+custom / DeepEval / promptfoo / none | **RAGAS + calibrated LLM-judge + CI gate**, built BEFORE refactor | Phase 1 bar (faith ≥0.85, refusal ≥95%) enforced; before/after delta = portfolio before/after comparison | ✅ | **#1 audit gap: evaluation** | Easy · golden sets are the versioned asset | NEW: RAGAS; judge calibrated vs human labels |
 | 20 | Cost controls | Mechanisms (budgets/quotas/breakers) | Token budgets · session quotas · **daily-spend breaker → CACHE_ONLY_MODE** · kill switch · billing alarms | $0.005/q blended; $30/$150 ceilings | ✅ | Cost engineering | Easy | App counter is real-time; CW billing lags ~8h |
 | 21 | Failure & degradation | Per-failure explicit behaviors | Fallback chain · cache-only degraded · honest don't-know · alias-swap ingest · SSE cancel propagation | SLO 99.5%; never a raw 500; never ungrounded medical answer | ✅ | Degradation design | n/a | Chaos drills (top-3) in Phase 5 |
 | 22 | Repo structure | Polyrepo / flat single-app / monorepo | **uv-workspace monorepo** (apps/ packages/ infra/ tests/ docs/) | Team of 1; atomic cross-cutting commits; single CI | ✅ | Packaging discipline | Moderate · cheap now, dear later | Prompts + evals versioned as code |

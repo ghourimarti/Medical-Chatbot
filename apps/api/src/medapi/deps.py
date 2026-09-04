@@ -49,7 +49,7 @@ class Services:
     reranker: RerankerPort | None = None
     # Held on Services purely so lifespan can WARM it. Without a reference here the BM25
     # model stayed a lazy cached_property inside the pipeline, downloaded on the first
-    # real user query, and took that request down when the network blipped (S20.10).
+    # real user query, and took that request down when the network blipped.
     sparse: Bm25Encoder | None = None
     engine: AsyncEngine | None = None
     redis: Any | None = None
@@ -72,7 +72,7 @@ def build_services(settings: Settings) -> Services:
         )
     else:
         embedder = BgeEmbedder(settings.embedding_model_id, settings.embedding_dim)
-        # In-process reranker so the pipeline ALWAYS reranks (D3). Without this, dev and
+        # In-process reranker so the pipeline always reranks. Without this, dev and
         # test runs would silently measure a non-reranked pipeline.
         reranker = BgeReranker(settings.reranker_model_id)
     sparse = Bm25Encoder() if settings.hybrid_search else None
@@ -81,7 +81,7 @@ def build_services(settings: Settings) -> Services:
         collection=settings.qdrant_collection,
         dimension=settings.embedding_dim,
     )
-    # Multi-venue failover chain (D4b). GroqModel is gone: Groq is now simply one venue
+    # Multi-venue failover chain. There is no GroqModel: Groq is simply one venue
     # in the chain, served by the same OpenAI-compatible adapter as vLLM and SGLang.
     model = build_failover_model(settings)
     pipeline = RagPipeline(
@@ -92,7 +92,7 @@ def build_services(settings: Settings) -> Services:
         reranker=reranker,
         sparse=sparse,
     )
-    # No DATABASE_URL => history disabled, app still answers (D21). The same code path
+    # No DATABASE_URL means history is disabled and the app still answers. Same path
     # serves local dev and a Postgres outage, so the fallback is exercised constantly.
     engine: AsyncEngine | None = None
     factory = None
@@ -103,7 +103,7 @@ def build_services(settings: Settings) -> Services:
             max_overflow=settings.db_max_overflow,
         )
         factory = build_session_factory(engine)
-    # Redis is optional: caching off, rate limiting degrades to per-replica counters (D10).
+    # Redis is optional: caching off, rate limiting degrades to per-replica counters.
     redis_client: Any | None = None
     if settings.redis_url:
         from redis.asyncio import BlockingConnectionPool, Redis
@@ -112,8 +112,8 @@ def build_services(settings: Settings) -> Services:
         # default raises MaxConnectionsError instantly, so a traffic burst becomes an error
         # storm rather than a queue. Blocking makes callers wait up to `timeout` for a free
         # connection — a burst costs milliseconds of latency instead of failed requests.
-        # Measured in P5.2: the default pool produced 78% failures at 1500 RPS.
-        # Wrapped in a circuit breaker (P5.3). Fail-open is per-call, and one request makes
+        # Measured: the default pool produced 78% failures at 1500 RPS.
+        # Wrapped in a circuit breaker. Fail-open is per-call, and one request makes
         # ~10 Redis calls; with Redis DOWN each paid the full socket timeout, which took
         # measured latency from 2.0s to 20.4s. The breaker remembers, so an outage costs
         # ~0ms per call instead of 2s.
@@ -171,7 +171,7 @@ def build_services(settings: Settings) -> Services:
         ),
         reranker=reranker,
         engine=engine,
-        # Accounts are OPTIONAL infrastructure: with no JWKS URL the verifier rejects any
+        # Accounts are optional infrastructure: with no JWKS URL the verifier rejects any
         # token presented, and with no database the service reports itself disabled. Either
         # way the anonymous product is unaffected (D24 sequencing).
         #

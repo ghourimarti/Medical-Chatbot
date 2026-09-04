@@ -1,10 +1,10 @@
-"""S9: idempotency, versioning, and the alias-swap invariant (D11)."""
+"""idempotency, versioning, and the alias-swap invariant."""
 
 from __future__ import annotations
 
 from medworker.ingest import _next_collection_name, chunk_id
 
-# --- idempotency -------------------------------------------------------------------
+# idempotency
 
 
 def test_chunk_id_is_content_addressed() -> None:
@@ -21,7 +21,7 @@ def test_chunk_id_distinguishes_text_and_page() -> None:
     assert base != chunk_id("other text", 1)  # same page, different text
 
 
-# --- collection versioning ---------------------------------------------------------
+# collection versioning
 
 
 def test_version_increments_from_existing_alias_target() -> None:

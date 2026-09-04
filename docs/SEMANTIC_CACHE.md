@@ -1,4 +1,4 @@
-# Semantic cache — go/no-go (S19.4, D10)
+# Semantic cache — go/no-go
 
 **Decision: NO-GO.** `semantic_cache_enabled` stays `False` and the layer is not built. The
 reason is measured, and it is not the reason D10 anticipated.
@@ -13,7 +13,7 @@ Raw output: `eval-reports/semantic-cache-probe.json`
 `cache.py` stated the semantic cache "is implemented but ships DISABLED." It was never
 implemented. `semantic_cache_enabled` and `semantic_cache_threshold` are declared in
 `Settings` and referenced **nowhere else in the codebase** — there is no `SemanticCache`
-class, no lookup path, no call site. So S19.4 is a decision about whether to *build* the
+class, no lookup path, no call site. So this is a decision about whether to *build* the
 thing, not whether to *switch it on*.
 
 D10 also justified its double guard with a specific claim: *"aspirin dose adult" and

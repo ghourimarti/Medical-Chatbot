@@ -1,6 +1,6 @@
-"""S11: PII redaction and metrics (D13, D18).
+"""PII redaction and metrics.
 
-The redaction tests are the important ones. D18 forbids raw query text in application
+The redaction tests are the important ones. forbids raw query text in application
 logs, and "we agreed not to log questions" is a convention — one `logger.info(f"q: {q}")`
 away from a data-protection incident. These tests assert the PROCESSOR makes it
 structurally impossible, so the guarantee survives a careless caller.
@@ -30,7 +30,7 @@ def _process(**fields: object) -> dict[str, object]:
     return redact_processor(None, "info", dict(fields))
 
 
-# --- PII redaction -----------------------------------------------------------------
+# PII redaction
 
 
 @pytest.mark.parametrize("key", sorted(SENSITIVE_KEYS))
@@ -86,11 +86,11 @@ def test_fingerprint_is_short_and_stable() -> None:
     assert SENSITIVE_QUESTION not in f
 
 
-# --- metrics -----------------------------------------------------------------------
+# metrics
 
 
 def test_stage_metrics_are_recorded_per_stage() -> None:
-    """Per-STAGE, not just per-endpoint: S6 needed exactly this granularity to discover
+    """Per-STAGE, not just per-endpoint: needed exactly this granularity to discover
     reranking was 85% of the retrieval path."""
     record_stage("embed", 104.0)
     record_stage("retrieve", 9.0)
@@ -119,7 +119,7 @@ def test_answer_and_cost_metrics() -> None:
 
 
 def test_cache_hit_rate_is_observable() -> None:
-    """Hit rate is the D10 cost lever — if it is not measured it cannot be tuned."""
+    """Hit rate is the cost lever — if it is not measured it cannot be tuned."""
     cache_events.labels(layer="response", result="hit").inc()
     cache_events.labels(layer="response", result="miss").inc()
     dump = generate_latest(REGISTRY).decode()

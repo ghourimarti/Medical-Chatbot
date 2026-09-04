@@ -326,7 +326,7 @@ Expect these to stay red, honestly:
 
 - **request p95 > 6s** — bge-large *and* a cross-encoder on CPU cannot meet the NFR. The fix
   is a GPU reranker or a corrected NFR, not tighter timeouts.
-- **5 superseded Qdrant collections** — I3.7, ingest does not prune.
+- **5 superseded Qdrant collections** — ingest does not prune.
 
 And one gotcha now fixed but worth knowing: the cache key used to name `groq_default_model`
 regardless of who served, so changing `VLLM_LOCAL_MODEL` did **not** invalidate the cache —

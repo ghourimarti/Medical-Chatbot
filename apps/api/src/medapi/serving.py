@@ -1,21 +1,18 @@
-"""Cross-cutting request controls, shared by BOTH query endpoints (S10.6a).
+"""Cross-cutting request controls, shared by both query endpoints.
 
-WHY THIS MODULE EXISTS
-----------------------
-`query()` carried session handling, rate limiting, the kill switch, cache-aside, cost
-attribution, metrics and history persistence inline — 194 lines of it. `query_stream()`
-carried NONE of them, and the browser only ever calls the streaming endpoint. Measured
-before the fix: 25 consecutive requests against a 20/min limit returned 25x 200 on
-/query/stream while /query correctly returned 429 after the 20th.
+`query()` used to carry session handling, rate limiting, the kill switch, cache-aside, cost
+attribution, metrics and history persistence inline, 194 lines of it. `query_stream()`
+carried none of them, and the browser only ever calls the streaming endpoint. Measured: 25
+consecutive requests against a 20/min limit returned 25x 200 on /query/stream while /query
+correctly returned 429 after the 20th.
 
-So in practice the deployed system had no rate limiting, no kill switch, no spend
-accounting, no caching and no history for real users. Every one of those is a documented
-decision (D1, D9, D10, D18, D20, D21) that was simply absent from the path that matters.
+So the deployed system effectively had no rate limiting, no kill switch, no spend
+accounting, no caching and no history for real users.
 
-The fix is EXTRACTION, not duplication. Copying the controls into the stream handler would
-leave two copies to drift again — which is exactly how the first divergence happened (the
-output dosage guardrail, S10.2b, had the identical shape). With one implementation, a
-control added later cannot be added to one endpoint and forgotten in the other.
+Extracted rather than duplicated. Copying the controls into the stream handler leaves two
+copies to drift apart again, which is how the first divergence happened (the output dosage
+guardrail had the same shape). With one implementation, a control added later can't land on
+one endpoint and be forgotten on the other.
 """
 
 from __future__ import annotations
@@ -84,15 +81,15 @@ async def preflight(
     """
     session_id, _ = svc.sessions.resolve(request)
 
-    # A fingerprint, never the question itself (D18) — enough to correlate repeats across
-    # logs without ever storing a health question.
+    # A fingerprint, never the question itself: enough to correlate repeats across logs
+    # without storing a health question.
     log = logger.bind(session=str(session_id)[:8], q=fingerprint(question))
 
-    # TWO independent keys (D18). The session bucket gives a well-behaved client a fair,
-    # generous quota. The IP bucket is the enforcement one: a session id is just a cookie
-    # the caller decides whether to send, so session-only limiting is opt-in and an abuser
-    # opts out by dropping it. Measured in P5.2: 30 cookieless requests against a 20/min
-    # limit produced ZERO 429s before the IP bucket existed.
+    # Two independent keys. The session bucket gives a well-behaved client a fair, generous
+    # quota; the IP bucket does the enforcing. A session id is just a cookie the caller
+    # chooses to send, so session-only limiting is opt-in and an abuser opts out by dropping
+    # it: 30 cookieless requests against a 20/min limit produced zero 429s before the IP
+    # bucket existed.
     buckets: list[tuple[str, str, int, int]] = [
         ("minute", str(session_id), svc.settings.rate_limit_per_minute, 60),
         ("day", str(session_id), svc.settings.rate_limit_per_day, 86_400),
@@ -113,10 +110,10 @@ async def preflight(
             log.warning("rate_limited", scope=scope, limit=limit)
             raise
 
-    # Ownership of a caller-supplied thread is resolved HERE, in the one place both
-    # endpoints pass through, and the authorised id is what travels onward. The request
-    # body's value never reaches the writer: a thread is prompt context, so appending to
-    # someone else's would be a write into their conversation, not merely a read of it.
+    # Ownership of a caller-supplied thread is resolved here, in the one place both
+    # endpoints pass through, and only the authorised id travels onward. The request body's
+    # value never reaches the writer, since a thread is prompt context and appending to
+    # someone else's would be a write into their conversation.
     thread: UUID | None = None
     if conversation_id is not None and svc.conversations is not None:
         caller = Caller(
@@ -134,8 +131,8 @@ async def preflight(
 
 def attach_session(response: Response, pre: Preflight, svc: Services) -> None:
     """Set the session cookie. Separate from preflight because a StreamingResponse is
-    constructed AFTER the controls run — the 429 must be a real HTTP status, not an
-    in-band SSE error delivered once bytes are already on the wire."""
+    built after the controls run, and a 429 has to be a real HTTP status rather than an
+    in-band SSE error delivered once bytes are on the wire."""
     svc.sessions.attach(response, pre.session_id)
 
 
@@ -147,25 +144,20 @@ async def short_circuit(question: str, svc: Services, pre: Preflight) -> Answer 
     DEGRADED, never an error (D20/D21): the kill switch and the daily spend breaker both
     arrive here.
     """
-    # A FOLLOW-UP IS NEVER SERVED FROM CACHE (D10/INFRA-5).
+    # A follow-up is never served from cache.
     #
-    # The cache key is a hash of the question text, namespaced by prompt/corpus/index/model
-    # version — and by nothing about the conversation. So "What causes it?" produced ONE key
-    # for every thread on the system. Asked after pneumonia in one conversation and after
-    # cirrhosis in another, the second reader was served the first reader's answer, with
-    # confident citations to the wrong condition. Proven with `cache_hit: true` returning a
-    # coccydynia answer to a thread that had only ever discussed pneumonia.
+    # The cache key hashes the question text, namespaced by prompt/corpus/index/model
+    # version and by nothing about the conversation. So "What causes it?" produced one key
+    # for every thread on the system: asked after pneumonia in one conversation and after
+    # cirrhosis in another, the second reader got the first reader's answer with confident
+    # citations to the wrong condition. Reproduced with `cache_hit: true` returning a
+    # coccydynia answer to a thread that had only discussed pneumonia.
     #
-    # This module's own docstring states the stakes: a wrong cache hit is a patient-safety
-    # bug, not a stale page.
-    #
-    # WHY NOT CONDENSE FIRST AND KEY ON THE RESULT. That is the better long-term answer -
-    # "What causes pneumonia?" is genuinely shareable and would RAISE the hit rate. But it
-    # puts an LLM call ahead of every cache lookup, which is precisely the cost the cache
-    # exists to avoid, and it restructures the request path. Declining to cache the one
-    # category that is currently WRONG is smaller, safe, and loses almost nothing: a
-    # standalone question - the overwhelming majority - still takes the fast path
-    # untouched.
+    # Condensing first and keying on the result is the better long-term fix, since "What
+    # causes pneumonia?" is genuinely shareable and would raise the hit rate. But it puts an
+    # LLM call ahead of every cache lookup, which is the cost the cache exists to avoid.
+    # Declining to cache the one category that is currently wrong is smaller and safe, and
+    # a standalone question still takes the fast path untouched.
     if is_context_dependent(question):
         cache_events.labels(layer="response", result="skip").inc()
         return None
@@ -174,25 +166,20 @@ async def short_circuit(question: str, svc: Services, pre: Preflight) -> Answer 
     cached = await svc.cache.get(question)
     if cached is not None:
         cache_events.labels(layer="response", result="hit").inc()
-        # THIS request's duration, not the one it avoided.
+        # This request's duration, not the one it avoided. It used to pass
+        # `cached.timings.total_ms`, the original generation time replayed on every hit, so
+        # a 40ms cache hit landed in the latency histogram as an 11-second request. That
+        # compounded: the more traffic the cache served, the worse p95 looked, and the
+        # biggest latency lever in the system reported itself as a regression.
         #
-        # It used to pass `cached.timings.total_ms` - the ORIGINAL generation time, replayed
-        # on every hit. So a 40ms cache hit was recorded into the latency histogram as an
-        # 11-second request, and the effect compounded: the more traffic the cache served,
-        # the WORSE p95 looked. The single largest latency lever in the system reported
-        # itself as a regression, and request p95 was inflated by answers that were never
-        # generated.
-        #
-        # The replayed stage timings stay ON THE ANSWER (they describe how that content was
-        # produced, which is useful) - they simply must not be re-observed as if this
-        # request had done the work.
+        # The replayed stage timings stay on the answer, since they describe how that
+        # content was produced. They just must not be re-observed as this request's work.
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        # venue="cache", NOT the venue that originally generated this answer, and not the
-        # same "none" refusals use. Crediting the original venue would let sub-millisecond
-        # cache reads pull down that venue's latency percentiles and make it look faster
-        # than it serves. Reusing "none" would blend a cheap success into the bucket that
-        # means "nothing was generated". A cache hit is its own kind of answer, so it gets
-        # its own label, and per-venue latency stays a statement about venues.
+        # venue="cache", not the venue that originally generated the answer and not the
+        # "none" that refusals use. Crediting the original venue lets sub-millisecond cache
+        # reads pull down its latency percentiles; reusing "none" blends a cheap success
+        # into the bucket meaning "nothing was generated". A cache hit is its own kind of
+        # answer, so per-venue latency stays a statement about venues.
         record_answer(cached.kind.value, elapsed_ms, venue="cache")
         pre.log.info(
             "cache_hit", kind=cached.kind.value, elapsed_ms=round(elapsed_ms, 1)
@@ -220,8 +207,8 @@ async def postflight(
     it accounted for — returning an un-costed answer while recording spend elsewhere is how
     a dashboard and an invoice end up disagreeing.
     """
-    # Self-hosted venues price at $0/token by construction (their cost is GPU-hours,
-    # tracked separately), so this measures hosted spend specifically.
+    # Self-hosted venues price at $0/token (their cost is GPU-hours, tracked separately),
+    # so this measures hosted spend specifically.
     spent = cost_usd(answer.model_id or "", answer.usage)
     if spent:
         answer = answer.model_copy(
@@ -232,15 +219,14 @@ async def postflight(
         if state is not SpendState.OK:
             pre.log.warning("spend_alert", state=state.value, daily_total_usd=round(total, 4))
 
-    # Instrumented at the STAGE boundary: the pipeline already returns timings, so metrics
-    # are derived here rather than the pipeline importing Prometheus (D13).
+    # Instrumented at the stage boundary: the pipeline already returns timings, so metrics
+    # are derived here rather than the pipeline importing Prometheus.
     t = answer.timings
     for stage, ms in (
-        # condense FIRST because it runs first, and because it was MISSING: rag.py computes
-        # condense_ms and sums it into total_ms, but this loop never recorded it. Grafana's
-        # stage-latency panel renders `by (stage)`, so it silently omitted the slowest
-        # stage at p95 (Jaeger: 4254ms) and the visible stages summed to less than the
-        # total with no gap to explain it.
+        # condense first because it runs first, and because it used to be missing: rag.py
+        # computes condense_ms and sums it into total_ms, but this loop never recorded it.
+        # The stage-latency panel renders `by (stage)`, so it omitted the slowest stage at
+        # p95 (4254ms in Jaeger) and the visible stages summed to less than the total.
         ("condense", t.condense_ms),
         ("embed", t.embed_ms),
         ("retrieve", t.retrieve_ms),
@@ -248,12 +234,11 @@ async def postflight(
         ("generate", t.generate_ms),
     ):
         record_stage(stage, ms)
-    # ttft_ms is None on the non-streaming path, which is exactly right: there is no
-    # first token to time, and record_answer skips the observation rather than
-    # substituting total_ms and silently redefining the SLI.
-    # no_answer_path is derived from whether a prompt was actually spent: the retrieval
-    # gate declines before the model, so prompt_tokens is 0; a model abstention has read
-    # a full context to reach the same word. Same kind, very different bill.
+    # ttft_ms is None on the non-streaming path, which is right: there's no first token to
+    # time, and record_answer skips the observation rather than substituting total_ms.
+    # Derived from whether a prompt was actually spent. The retrieval gate declines before
+    # the model, so prompt_tokens is 0; a model abstention has read a full context to reach
+    # the same word. Same kind of answer, very different bill.
     no_answer_path = None
     if answer.kind is AnswerKind.NO_ANSWER:
         no_answer_path = (
@@ -282,9 +267,9 @@ async def postflight(
     # and degraded responses (D10 safety rule, enforced by the type rather than this call).
     await svc.cache.set(question, answer)
 
-    # D13/D18: the LLM-shaped record. This call is what makes Langfuse show anything at
-    # all - the module was fully written, configured and enabled, and had NO CALLER, so
-    # every container reported healthy while the trace list stayed empty (INFRA-4).
+    # The LLM-shaped record. This call is what makes Langfuse show anything at all: the
+    # module was written, configured and enabled, and had no caller, so every container
+    # reported healthy while the trace list stayed empty.
     #
     # It sits in postflight so the streaming path gets it too: answer_from_done() exists
     # precisely so both paths run this one function, and tracing only the non-streaming
@@ -367,7 +352,7 @@ def _emit(answer: Answer, *, question: str, version: str, sha: str) -> None:
 async def record_short_circuit(
     answer: Answer, *, question: str, svc: Services, pre: Preflight
 ) -> None:
-    """Persist a turn that never reached postflight (INFRA-5).
+    """Persist a turn that never reached postflight.
 
     A cache hit returns from `short_circuit` BEFORE postflight runs, and postflight is the
     only caller of `record_turn`. So every answer the cache served was invisible: absent
@@ -380,7 +365,7 @@ async def record_short_circuit(
 
     Only the history write is repeated here. `short_circuit` already records the answer
     metric and the cache-hit counter, and re-recording spend would bill a request that
-    cost nothing — the bug this deliberately does not create while fixing the other one.
+    cost nothing.
     """
     await svc.history.record_turn(
         pre.session_id,

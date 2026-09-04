@@ -80,7 +80,7 @@ not mean the feature is broken — it means nobody has had a conversation.
 ### Jaeger — the proof
 **The `condense` span with a real duration IS the evidence multi-turn works.** It is the only
 externally visible sign that history reached the pipeline. If it is absent on a follow-up,
-history is not being loaded — which was a real bug (S20.1).
+history is not being loaded — which was a real bug.
 
 ### Langfuse — the subtle and important one
 The trace input shows **what you typed**:

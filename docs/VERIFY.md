@@ -10,7 +10,7 @@
 
 ## PHASE 4 — Execution
 
-### S1–S2 · Eval harness, contracts, CI
+### Eval harness, contracts, CI
 
 ```bash
 make check                       # ruff + mypy + full unit suite
@@ -18,20 +18,20 @@ make validate                    # golden set schema      -> OK: 90 cases {'qa':
 make eval-mock                   # keyless eval smoke     -> prints scores, no API key needed
 ```
 
-### S3–S4 · Thin slice, streaming
+### Query path and streaming
 
 ```bash
 make up                          # start Qdrant/Postgres/Redis
 make api                         # in one shell
 make smoke                       # in another: in-corpus -> kind=grounded; CRISPR -> kind=no_answer
 
-# streaming (S4): tokens must arrive incrementally, not in one blob
+# streaming: tokens must arrive incrementally, not in one blob
 curl -N -X POST localhost:1107/api/v1/query/stream \
   -H 'content-type: application/json' \
   --data-binary '{"question":"What is an abscess?"}'
 ```
 
-### S5 · ml-service
+### ml-service
 
 ```bash
 uv run uvicorn medml.main:app --port 1108        # one shell
@@ -40,7 +40,7 @@ curl -s -X POST localhost:1108/embed -H 'content-type: application/json' \
   --data-binary '{"texts":["What is cirrhosis?"],"is_query":true}' | head -c 200
 ```
 
-### S6 · Retrieval quality + eval gate
+### Retrieval quality and the eval gate
 
 ```bash
 make eval-delta                  # before/after table, no gating
@@ -48,7 +48,7 @@ make eval-gate                   # BLOCKING: exits 1 if any D19 threshold is unm
 uv run medeval compare --before demo --after pipeline
 ```
 
-### S13–S14 · Serving venues + benchmark
+### Serving venues and the engine benchmark
 
 ```bash
 uv run python scripts/bench_venue.py --base-url http://localhost:1110/v1 \
@@ -70,9 +70,9 @@ make load-guardrails             # k6 tier C  -> ~6 ms per refusal
 
 ---
 
-## PHASE 6 / S15 — Helm + kind
+## Helm and kind
 
-### S15.1–S15.4 · Chart correctness (no cluster needed)
+### Chart correctness (no cluster needed)
 
 ```bash
 helm lint infra/k8s/medbot -f infra/k8s/medbot/values-kind.yaml
@@ -83,7 +83,7 @@ helm template medbot infra/k8s/medbot -f infra/k8s/medbot/values-kind.yaml \
 # -> 4 Deployment, 2 StatefulSet, 5 Service, 6 NetworkPolicy, 1 each HPA/PDB/PVC/ConfigMap/Secret/ServiceAccount
 ```
 
-### S15.5 · Build images  ← YOU RUN THESE
+### Build images ← YOU RUN THESE
 
 Heavy (torch + transformers). First build ~10-25 min; rebuilds are cached.
 Run from the repo ROOT — the build context is `.`, not the app folder.
@@ -97,7 +97,7 @@ docker build -f apps/worker/Dockerfile     -t medbot-worker:0.1.0 .
 docker images --filter=reference='medbot-*'
 ```
 
-### S15.5 · Cluster
+### Cluster
 
 ```bash
 kind get clusters                              # -> medbot
@@ -106,7 +106,7 @@ kubectl get nodes                              # -> 3 nodes, all Ready, v1.31.6
 kubectl get deploy -n kube-system metrics-server
 ```
 
-### S15.5 · Load images into kind and install
+### Load images into kind and install
 
 kind nodes cannot see the host's Docker images; they must be side-loaded.
 
@@ -126,7 +126,7 @@ helm install medbot infra/k8s/medbot \
 kubectl get pods -w                            # watch until all Running/Ready
 ```
 
-### S15.5 · Smoke test in-cluster
+### Smoke test in-cluster
 
 ```bash
 kubectl port-forward svc/medbot-api 8000:80    # one shell
@@ -155,7 +155,7 @@ kind delete cluster --name medbot
 
 ## Environment notes
 
-**cgroup v1 constraint (found in S15.5).** Docker Desktop runs cgroup v1; Kubernetes >= 1.32
+**cgroup v1 constraint.** Docker Desktop runs cgroup v1; Kubernetes >= 1.32
 refuses to start on it, so `kind-cluster.yaml` pins `kindest/node:v1.31.6`. Check yours:
 
 ```bash

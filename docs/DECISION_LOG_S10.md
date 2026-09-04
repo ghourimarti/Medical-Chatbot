@@ -1,6 +1,6 @@
-# Decision Log — S10 Frontend (D23–D27b)
+# Decision log — frontend (D23–D27b)
 
-> Extends [DECISION_LOG_V2.md](DECISION_LOG_V2.md). Status: **signed off**, S10.2 implemented.
+> Extends [DECISION_LOG_V2.md](DECISION_LOG_V2.md). Status: **signed off**, backend gaps implemented.
 > Design reference: Consensus.app — take the evidence-led, "shows its work" quality; reject
 > its assumption that the user is a researcher. A medical assistant must refuse, abstain and
 > disclaim in ways a paper-search tool never needs to.
@@ -28,18 +28,18 @@ scale; vendor lock) · Auth.js v5 ($0/MAU, own Postgres, vendor-portable — **r
 chosen**) · Cognito (cheap at scale, AWS-only, conflicts with Phase 7's DOKS-first portability).
 **Decision:** **Clerk**, speed prioritised over portability by explicit user decision.
 **Accepted cost, recorded so it is not rediscovered later:** per-MAU pricing above ~10k MAU, an
-external identity dependency, and a deviation from the P3.3 vendor-portability principle.
+external identity dependency, and a deviation from the vendor-portability principle.
 **Flip-trigger:** MAU > ~50k, a client data-residency requirement, or Clerk pricing changes →
 migrate to Auth.js (the seam is the session-merge point in D25).
 **Sequencing (decided, not asked twice):** Clerk answers *who is this person*; it does **not**
 create the `users`/`conversations` schema that logged-in history needs. That backend work does
-not exist. Therefore **S10 ships anonymous-first**, and auth lands as **S20 (backend) → S21
+not exist. Therefore **the frontend ships anonymous-first**, and auth lands later as **backend →
 (frontend)**. Anonymous chat never gets a signup wall.
 
 ## D25 — Capability split
 Anonymous: ask · stream · citations · refusals · single-thread history (30d) · delete-my-data ·
 per-session+per-IP quota · client-side transcript export.
-Signed-in (S21): all of the above · multiple named conversations · cross-device · higher quota ·
+Signed-in: all of the above · multiple named conversations · cross-device · higher quota ·
 full account delete.
 
 ## D26 — State layer: **server components + one client island; no TanStack Query**
@@ -57,7 +57,7 @@ unmissable when it fires.
 Surface `#FAFAF8` (not pure white — harsh at 2 a.m.) · accent teal · grounded teal ·
 no_answer slate (calm, *not* a warning) · refused amber (care, not scold) · **emergency red** ·
 degraded stone. 4 px spacing base, 1.7 line-height on answers, 68ch measure. Contrast verified
-in S10.12, not assumed.
+by measurement, not assumed.
 
 ## D27b — Two answer densities *(user addition, better than the either/or offered)*
 **Clinical Calm** is the default: airy, evidence in a side panel. **Editorial Evidence** is an
@@ -66,9 +66,9 @@ per user; one renderer, two layouts — not two codebases.
 
 ---
 
-# S10.2 — Backend gap closure (implemented)
+# Backend gap closure (implemented)
 
-## S10.2a — `refusal_category` reaches the client
+## `refusal_category` reaches the client
 `guardrails.py` classified EMERGENCY / SELF_HARM / DOSAGE / DIAGNOSIS / injection and had
 distinct copy for each, then **logged the category and discarded it**. Any client wanting an
 emergency-specific treatment had to pattern-match refusal prose — a second source of truth for
@@ -76,7 +76,7 @@ a safety rule, guaranteed to drift the first time a message is reworded.
 Added to `Answer` and `DoneEvent`, with a validator: the field is only valid when
 `kind == refused`.
 
-## S10.2b — 🔴 DEFECT FOUND AND FIXED: the output dosage net never covered the streaming path
+## 🔴 Defect found and fixed: the output dosage net never covered the streaming path
 `contains_dosage_instruction` — described in-code as the last line of defence against a dose
 reaching a user — was called only in `_generate`, which serves `answer()`. **`stream_answer()`
 had no output-side check at all**, and the browser uses that path for every question.
@@ -90,7 +90,7 @@ whenever `done.kind != "grounded"`.
 Proven: with the fix disabled the regression test observed
 `kind=GROUNDED, text="Take 500mg twice daily."` — a dose delivered as a cited medical answer.
 
-## S10.2c — public `GET /api/v1/status`
+## Public `GET /api/v1/status`
 Separate from the key-gated `/admin/status`, which exposes spend, circuit state and the serving
 chain — operator facts that tell an attacker which provider to target and how much budget is
 left. Public surface returns `status` (ok|degraded|unavailable), the two readiness checks,
@@ -99,7 +99,7 @@ status page and `/readyz` can never disagree.
 
 ---
 
-# S10.6a — Endpoint parity (the largest finding of S10)
+# Endpoint parity (the largest finding of the frontend work)
 
 ## The defect
 
@@ -108,12 +108,12 @@ subset — none:
 
 | Control | `query()` | `query_stream()` (before) |
 |---|---|---|
-| Rate limiting (D18/D20) | yes | **no** |
-| Kill switch (D20) | yes | **no** |
-| Spend tracking / cost attribution (D20) | yes | **no** |
-| Response cache (D10) | yes | **no** |
-| History persistence (D1/S7) | yes | **no** |
-| Session identity (D9) | yes | **no** |
+| Rate limiting | yes | **no** |
+| Kill switch | yes | **no** |
+| Spend tracking / cost attribution | yes | **no** |
+| Response cache | yes | **no** |
+| History persistence | yes | **no** |
+| Session identity | yes | **no** |
 
 Measured against the running service before the fix, one session, 25 requests each:
 
@@ -125,14 +125,14 @@ Measured against the running service before the fix, one session, 25 requests ea
 The browser only ever calls the streaming endpoint. So the deployed rate limit was
 bypassable by using the default path; the kill switch could not stop browser traffic
 during a cost incident; streamed answers were never cached, never costed, and never
-persisted — which also meant the S7 history feature was inert for real usage.
+persisted — which also meant the history feature was inert for real usage.
 
 ## Why it stayed invisible
 
 Every test and the eval harness exercise `answer()` or `query()`. `PipelineTarget` calls
 `answer_verbose()`. The load tests drove the non-streaming path. So every quality, safety
 and performance number this project has published describes a code path a browser never
-takes. This is the SECOND instance of that shape: S10.2b found the output dosage guardrail
+takes. This is the second instance of that shape: the output dosage guardrail
 missing from the same handler for the same reason.
 
 ## The fix
@@ -168,9 +168,9 @@ needs per-token accounting during generation, which is a separate change.
 
 ---
 
-# S10.6b - S10.9 findings
+# Later frontend findings
 
-## S10.6b - browser verification (Playwright pulled forward from S10.13)
+## Browser verification (Playwright pulled forward)
 
 Everything before this was verified at the HTTP level, which proves the contract but not
 the product: a client can receive a correct `refused` event and still render it as a
@@ -187,7 +187,7 @@ Two findings from writing the tests:
   screen readers. That is the accessibility layer working correctly. `data-answer-kind`
   now carries the RESOLVED treatment, so tests assert the decision rather than the wording.
 
-## S10.7 - citations
+## Citations
 
 Inline `[n]` markers are real controls that open their passage. Click, not hover: a
 hover-only preview does not exist on a phone, and this is used on phones.
@@ -201,7 +201,7 @@ it and an e2e test asserting it.
 Retrieved passages the answer never cited are shown and labelled "not cited" rather than
 hidden, because hiding them would misrepresent what the answer was built from.
 
-## S10.8 - session controls, and a session race
+## Session controls, and a session race
 
 History renders as a PLAIN TRANSCRIPT, not the treatment components. `GET /session/history`
 returns only role and content; the database does store `kind`, but the repository drops it
@@ -220,9 +220,9 @@ for. Only a write establishes one. Two regression tests pin it.
 Delete-my-data reports the number of rows removed, because the API does. A delete control
 that says "Done" without evidence passes review and fails an audit, and the person most
 likely to use it wants proof. It is on the main surface rather than in a settings page, and
-it uses NO red button: red is reserved for medical emergencies (D27).
+it uses NO red button: red is reserved for medical emergencies.
 
-## S10.9 - designed failure states
+## Designed failure states
 
 Each cause gets its own copy, because "what do I do now" differs for each: a quota is a
 wait, a provider outage is a retry, a degraded service is a partial capability. A single

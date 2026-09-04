@@ -1,4 +1,4 @@
-"""Compare torch vs ONNX model backends: latency AND numerical compatibility (S5.9).
+"""Compare torch vs ONNX model backends: latency and numerical compatibility.
 
 Latency alone is not enough to justify a backend swap. Query embeddings must remain
 compatible with the document vectors ALREADY WRITTEN to the index — if ONNX produces

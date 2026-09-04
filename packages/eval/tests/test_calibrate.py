@@ -1,4 +1,4 @@
-"""S19.2 calibration maths and reporting.
+"""Calibration maths and reporting.
 
 The kappa tests are the important ones: raw agreement is the metric a naive implementation
 would report, and it is actively misleading on the skewed data this project produces.
@@ -20,7 +20,7 @@ from medeval.calibrate import (
     score,
 )
 
-# --- Cohen's kappa ------------------------------------------------------------------
+# Cohen's kappa
 
 
 def test_perfect_agreement_on_mixed_labels() -> None:
@@ -51,7 +51,7 @@ def test_empty_input_does_not_crash() -> None:
     assert cohens_kappa([], []) == 0.0
 
 
-# --- Agreement verdicts (Landis & Koch) ----------------------------------------------
+# Agreement verdicts (Landis & Koch)
 
 
 @pytest.mark.parametrize(
@@ -75,7 +75,7 @@ def test_small_sample_is_flagged_not_scored() -> None:
     assert Agreement("m", 4, 4, 1.0, 4, 4).verdict == "INSUFFICIENT DATA"
 
 
-# --- Reporting -----------------------------------------------------------------------
+# Reporting
 
 
 def test_report_blocks_gating_on_weak_scorer() -> None:
@@ -101,7 +101,7 @@ def test_report_flags_thin_samples_separately_from_pass() -> None:
 
 def test_report_records_scorer_versions() -> None:
     """A calibration is only valid for the scorer version it measured. Asserted against the
-    live constant, not a frozen copy: S19.3 bumped the classifier to deterministic_v2 and a
+    live constant, not a frozen copy: bumped the classifier to deterministic_v2 and a
     hardcoded 'v1' here would have failed for the one reason that is not a defect."""
     from medeval.metrics import CLASSIFIER_VERSION
 
@@ -110,7 +110,7 @@ def test_report_records_scorer_versions() -> None:
     assert CLASSIFIER_VERSION in report
 
 
-# --- Sheet round-trip -----------------------------------------------------------------
+# Sheet round-trip
 
 
 def _sheet(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
@@ -202,7 +202,7 @@ def test_labelling_instructions_differ_by_category() -> None:
     assert "dont_know" in prompt_for("ooc")
 
 
-# --- S19.2 round 2: defects the first real calibration run exposed --------------------
+# round 2: defects the first real calibration run exposed
 
 
 def test_zero_variance_is_not_reported_as_agreement() -> None:
@@ -258,7 +258,7 @@ def test_citation_presence_is_not_calibrated_against_faithfulness() -> None:
     assert "citation_presence" not in {r.metric for r in results}
 
 
-# --- S19.2g: planted negatives --------------------------------------------------------
+# planted negatives
 
 
 def test_the_subtle_plants_actually_fool_the_classifier() -> None:

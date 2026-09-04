@@ -36,9 +36,9 @@ flowchart TD
 **Why the guardrail is first.** It is a rule engine, not a model — so there is nothing to
 prompt-inject, it costs no GPU and no tokens, and a refusal returns in ~6 ms. Putting safety
 after retrieval would make it depend on retrieval *failing*, which is exactly the accident
-that measured `refusal_correctness` at 0.50 in S6.
+that measured `refusal_correctness` at 0.50.
 
-**Why the output guardrail exists too.** Defence in depth: S10.2b found the input rules can
+**Why the output guardrail exists too.** Defence in depth: the input rules can
 pass a question whose *answer* still contains a dosing schedule. It runs on both the
 buffered and the streaming path — it originally ran only on the buffered one, which is not
 the path the browser uses.
@@ -65,7 +65,7 @@ flowchart LR
 
 `SERVING_ENGINE` selects vLLM **or** SGLang *within* a GPU venue. SGLang is deliberately not
 its own chain entry: two engines on one GPU die together, so chaining them would sell
-redundancy that does not exist (D12 v2.1). A test enforces it.
+redundancy that does not exist. A test enforces it.
 
 Every leg speaks the same OpenAI-compatible protocol, so one adapter serves all four and a
 venue with no URL is skipped rather than erroring — configuration and provisioning proceed

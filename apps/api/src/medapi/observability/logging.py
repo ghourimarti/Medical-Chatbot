@@ -1,16 +1,14 @@
-"""Structured logging with PII redaction (D13, D18).
+"""Structured logging with PII redaction.
 
-THE CONSTRAINT THAT SHAPES THIS MODULE: health questions are sensitive by nature, so D18
-forbids raw query text in application logs. But production still has to be debuggable.
+Health questions are sensitive, so raw query text can't go into application logs, but
+production still has to be debuggable. So: log everything about a request (stage latencies,
+token counts, cache hits, refusal reasons, a stable query fingerprint) and never the query
+itself. Langfuse is the one sanctioned store for content, access-controlled and sampled,
+under the 30-day retention policy.
 
-The resolution: log everything *about* a request — stage latencies, token counts, cache
-hits, refusal reasons, a stable query fingerprint — and never the query itself. Langfuse
-becomes the single sanctioned store for content, access-controlled, sampled, and subject
-to the 30-day retention policy.
-
-Redaction is implemented as a structlog PROCESSOR rather than a convention, because a
-convention is one careless `logger.info(f"query: {q}")` away from a data-protection
-incident. The processor cannot be forgotten; a code-review guideline can.
+Redaction is a structlog processor rather than a convention, because a convention is one
+careless `logger.info(f"query: {q}")` away from an incident. A processor can't be
+forgotten; a review guideline can.
 """
 
 from __future__ import annotations
@@ -62,18 +60,18 @@ def redact_processor(
 
 
 def configure_logging(level: str = "INFO", *, json_output: bool = True) -> None:
-    """12-factor: JSON to STDOUT, never to a file.
+    """JSON to stdout, never to a file.
 
-    demo/ wrote to `logs/` inside the container — invisible to `kubectl logs`, lost on pod
-    restart, and requiring a sidecar to ship. Stdout is the only log destination a
-    container should know about; collection is the platform's job (Loki, S11 compose).
+    Writing to `logs/` inside the container is invisible to `kubectl logs`, lost on pod
+    restart, and needs a sidecar to ship. Stdout is the only log destination a container
+    should know about; collection is the platform's job.
     """
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level.upper())
     processors: list[Any] = [
         structlog.contextvars.merge_contextvars,  # request-scoped fields, no plumbing
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        redact_processor,  # ALWAYS last before rendering — nothing may bypass it
+        redact_processor,  # last before rendering, so nothing can bypass it
     ]
     processors.append(
         structlog.processors.JSONRenderer()

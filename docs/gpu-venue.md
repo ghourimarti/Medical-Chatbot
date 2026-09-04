@@ -1,6 +1,6 @@
-# GPU Venue Spike (S3b) — findings
+# GPU Venue Spike — findings
 
-> **Purpose:** de-risk S13 (self-hosted serving) *before* integration, by proving vLLM runs
+> **Purpose:** de-risk self-hosted serving *before* integration, by proving vLLM runs
 > on available hardware and measuring what it actually delivers. Timeboxed spike; the
 > deliverable is this document.
 > **Outcome: ✅ vLLM runs locally at $0, and the measured numbers beat our NFR targets by 20×.**
@@ -56,16 +56,16 @@ way, so local's TTFT edge narrows to the *server-to-provider* hop it actually sa
 | 2 | Weight download stalled at ~0.4 MB/s | Unauthenticated HF Hub requests are rate-limited | `-e HF_TOKEN` passthrough |
 | 3 | Restarts appeared to lose all progress | **`huggingface_hub` 1.27 does NOT resume across process restarts** — each attempt writes a new `.{uuid}.incomplete` and starts from byte 0. Four orphaned partials (~4.6 GB) accumulated. | **Never restart mid-download.** Budget one uninterrupted run. |
 | 4 | `403 Forbidden` from Groq via `urllib` | Cloudflare rejects requests with no `User-Agent` | Set `User-Agent` in `scripts/bench_venue.py` |
-| 5 | Qdrant rejected string point IDs (S3) | Qdrant requires uint or UUID ids | deterministic `uuid5` from content hash |
+| 5 | Qdrant rejected string point IDs | Qdrant requires uint or UUID ids | deterministic `uuid5` from content hash |
 
 **Performance caveat for this venue:** vLLM logs `Using 'pin_memory=False' as WSL is detected.
 This may slow down performance.` WSL2 cannot pin host memory, so **local is inherently slower
-than native Linux**. This is an evidence-based reason the *published* S14 benchmark should run
+than native Linux**. This is an evidence-based reason the *published* benchmark should run
 on a native-Linux cloud GPU.
 
 ## 4. What this venue is and isn't good for
 
-**Good for:** S13 development iteration (restart 50× for free), adapter/failover-chain
+**Good for:** development iteration (restart 50× for free), adapter/failover-chain
 debugging, keeping health queries entirely in-box (privacy), proving the pattern at $0.
 
 **Not good for:** published production-representative benchmarks — it's a consumer card,
@@ -81,7 +81,7 @@ This spike confirms the multi-venue design is correct and worth building:
 | `local` | ✅ **proven, measured** | Dev iteration, free debugging, privacy path |
 | `groq` | ✅ **proven, measured** | Always-available hosted floor; highest throughput |
 | `runpod` | ⏳ not yet exercised | Production-representative GPU, native Linux, no quota wait |
-| `aws` | ⏳ quota request pending | AWS-depth gap closure; S16 Terraform target |
+| `aws` | ⏳ quota request pending | AWS-depth gap closure; Terraform target |
 
 Two of four venues are now measured with the **same tool on the same prompt** — which is
 exactly the comparison D4b exists to enable.
@@ -90,4 +90,4 @@ exactly the comparison D4b exists to enable.
 - Start: `docker run --rm -it --gpus all --ipc=host -e VLLM_USE_V2_MODEL_RUNNER=0 -e HF_TOKEN -v vllm-hf-cache:/root/.cache/huggingface -p 1110:8000 --name vllm-local vllm/vllm-openai:latest --model Qwen/Qwen2.5-7B-Instruct-AWQ --gpu-memory-utilization 0.80 --max-model-len 8192`
 - Weights live in the named volume **`vllm-hf-cache`** (do not delete — re-download is slow).
 - ~4.6 GB of orphaned `.incomplete` files can be reclaimed later; harmless meanwhile.
-- Llama-3.1-8B-Instruct-AWQ-INT4 is partially cached in the same volume for the S13 swap.
+- Llama-3.1-8B-Instruct-AWQ-INT4 is partially cached in the same volume for the swap.

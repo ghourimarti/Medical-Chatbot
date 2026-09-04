@@ -1,4 +1,4 @@
-# P5.1 — Security audit
+# Security audit
 
 > Reproduce: `make audit` · Date: 2026-08-17 · Scope: secrets, dependencies, attack surface
 
@@ -25,8 +25,8 @@ present in history is still compromised, and a `git grep` of HEAD would never se
 
 The remaining nine all live in the LangChain family, pinned to `0.3.x`. **The pin is not a
 choice**: `ragas` 0.4.3 (the newest release) imports
-`langchain_community.chat_models.vertexai`, which LangChain 1.x removed. Discovered in S1;
-confirmed against PyPI in P5.1 that no newer ragas exists.
+`langchain_community.chat_models.vertexai`, which LangChain 1.x removed. Confirmed against
+PyPI that no newer ragas exists.
 
 **Exploitability assessment — each CVE checked against actual code, not assumed:**
 
@@ -45,7 +45,7 @@ Verified by search: `load_prompt`, `split_text_from_url`, `HTMLHeaderTextSplitte
 **nowhere** in this codebase.
 
 What we actually use from LangChain is deliberately tiny:
-- `langchain_core.runnables` — LCEL composition over our own functions (D6)
+- `langchain_core.runnables` — LCEL composition over our own functions
 - `langchain_core.messages` — plain message types
 - `RecursiveCharacterTextSplitter.split_text()` — on a **local** PDF, never `split_text_from_url`
 
@@ -67,10 +67,10 @@ reachable, and each dragged a dependency into the production image:
 
 | Removed | Superseded by | Dependency dropped |
 |---|---|---|
-| `adapters/model.py` (`GroqModel`) | S13 `OpenAICompatModel` (raw httpx) | **langchain-groq**, tiktoken |
-| `scripts/reindex.py` | S9 `medworker-ingest` (verify-then-swap) | — |
+| `adapters/model.py` (`GroqModel`) | `OpenAICompatModel` (raw httpx) | **langchain-groq**, tiktoken |
+| `scripts/reindex.py` | `medworker-ingest` (verify-then-swap) | — |
 
-`reindex.py` also mutated the **live** collection, which S9 replaced precisely because that
+`reindex.py` also mutated the **live** collection, which the worker replaced precisely because that
 lets readers observe a half-ingested corpus. Leaving it wired meant the unsafe path was
 still one `make reindex` away. `make reindex` now calls the worker.
 

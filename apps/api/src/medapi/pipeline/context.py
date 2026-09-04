@@ -1,9 +1,9 @@
-"""Context construction (pure, no I/O). D3 (token-budgeted, numbered) + D18 (citations).
+"""Context construction. Pure, no I/O.
 
-Passages are numbered [1], [2], ... and the model is told to cite those numbers; the same
-numbering drives Citation extraction so a rendered citation maps to an exact retrieved chunk.
-Token budget is approximated by characters (~4 chars/token) — good enough at this stage;
-the real tokenizer-based budget lands with cost controls (S18).
+Passages are numbered [1], [2], ... and the model is told to cite those numbers. The same
+numbering drives Citation extraction, so a rendered citation maps to an exact retrieved
+chunk. The token budget is approximated by characters (~4 chars/token), which is close
+enough here; a real tokenizer-based budget can come later.
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ a rounding difference.
 **What actually moved it:** model size, not runtime. `jina-reranker-tiny` at **64 ms** vs
 `bge-reranker-base` at **540 ms** — an 8× lever sitting next to the 0.95× one I had proposed.
 
-I published the refutation of my own recommendation rather than quietly dropping it (S5.9).
+I published the refutation of my own recommendation rather than quietly dropping it.
 The projection was arithmetic; the 0.95× was a stopwatch.
 
 ## 2. The semantic cache was guarding against a danger that wasn't there
@@ -46,7 +46,7 @@ pairs) and **inert** — it would catch 1 paraphrase in 12, while exact-match ca
 handles verbatim repeats. Reaching a useful hit rate needs ~0.92, which sits **0.007** above
 a known-dangerous pair ("maximum daily dose" vs "minimum daily dose", 0.9133). The safety
 margin at a useful threshold is thinner than the sampling error on the danger estimate.
-Decision: **no-go**, on evidence rather than on the assumption. (S19.4,
+Decision: **no-go**, on evidence rather than on the assumption. (
 `docs/SEMANTIC_CACHE.md`)
 
 ## 3. A flawless system scored 0.0
@@ -62,7 +62,7 @@ The scorer matched the substring `"don't have information"`. The system says *"I
 
 **The lesson generalises past the bug:** *a metric must survive a reword of the thing it
 measures.* Substring matching against implementation phrasing produces a metric that breaks
-precisely when the system improves its wording. (S6.8)
+precisely when the system improves its wording.
 
 ## 4. The eval was run on 21% of the corpus
 
@@ -93,13 +93,13 @@ everything else 0.0, collapsing two behaviours that could not be more different:
 
 A metric that cannot separate *unhelpful* from *unsafe* cannot gate a medical system. Safety
 scoring is now three-way, with `unsafe_answer_rate` split out as an invariant gated at zero.
-(S19.3)
+
 
 ## 6. The guardrail had been fitted to its own test set
 
 The most uncomfortable finding in the project.
 
-`test_guardrails.py` read `golden_core_v1.jsonl`. S19.1 grew the safety stratum from 20 cases
+`test_guardrails.py` read `golden_core_v1.jsonl`. The safety stratum later grew from 20 cases
 to 50 and **that pin never moved**, so the suite kept certifying the rules against the same
 20 questions they had been patched against, one miss at a time.
 
@@ -129,7 +129,7 @@ the exact word it was written to probe.
 
 **Stated honestly: 50/50 is evidence of fit, not generalisation.** Those rules were rewritten
 while looking at the cases they failed — the same process that produced the original overfit.
-That set is now spent. (S19.3)
+That set is now spent.
 
 ## 7. κ = 1.00, "almost perfect", meaning nothing
 
@@ -140,14 +140,14 @@ With no negative case in the sample there is nothing for a scorer to get wrong, 
 agreement was unearned — the kappa paradox, and my own report walked straight into the false
 confidence κ exists to prevent.
 
-Worse, it could not be fixed by labelling more real rows: after the S19.3 guardrail work the
+Worse, it could not be fixed by labelling more real rows: after the guardrail rewrite the
 system **emits no failing safety answers at all**. A sample drawn from passing behaviour can
 never contain a negative. You cannot measure a detector using only cases with nothing to
 detect.
 
 So the failures were written deliberately — 12 planted defective answers, labelled blind. The
 honest κ that came back: **refusal 0.68 substantial, don't-know 0.60 — below the gating bar.**
-(S19.2)
+
 
 ## 8. The calibration was certifying code the pipeline never runs
 
@@ -159,7 +159,7 @@ Fixing the two classifier defects that calibration had exposed moved κ by **exa
 shipping scorers.
 
 Same defect as #3 and #6, one layer up: measuring something adjacent to the thing that ships.
-(S19.2)
+
 
 ## 9. Two classifier holes a human saw instantly
 
@@ -173,7 +173,7 @@ Both found only because a person disagreed with the machine:
   COVID-19, but antivirals such as Paxlovid are generally recommended"* scored as an honest
   abstention, because the check only asked whether an admission appeared *anywhere*.
 
-Both classifiers scored on the presence of a marker and ignored what surrounded it. (S19.2)
+Both classifiers scored on the presence of a marker and ignored what surrounded it.
 
 ## 10. `helm lint` and `helm template` both passed on a chart that dropped Services
 
@@ -182,18 +182,18 @@ Both classifiers scored on the presence of a marker and ignored what surrounded 
 document, duplicate keys collapsed, and **Services were silently discarded**.
 
 Both `helm lint` and `helm template` reported success. The object census that would have
-caught it — counting rendered `kind:` lines — is now part of `make chart-lint`. (S15)
+caught it — counting rendered `kind:` lines — is now part of `make chart-lint`.
 
 ## 11. Readiness that means "a name resolved"
 
 The same mistake in three unrelated places, which is why it is worth naming once rather than
 listing three fixes:
 
-| where | what readiness actually proved | what it should have proved |
+| probe | what readiness actually proved | what it should have proved |
 |---|---|---|
-| P6.3.5 | the collection name resolves | the index has content to search |
-| P6.4.1 | the Qdrant binary can execute | the Qdrant HTTP API answers |
-| P6.5.4 | the vector store is reachable | every dependency a query needs is reachable |
+| collection check | the collection name resolves | the index has content to search |
+| container check | the Qdrant binary can execute | the Qdrant HTTP API answers |
+| dependency check | the vector store is reachable | every dependency a query needs is reachable |
 
 In all three the pod advertised itself as able to serve while every query failed. **A probe
 that cannot fail for the reason you care about is close to no probe at all.**
@@ -229,7 +229,7 @@ It stayed hidden because the eval harness calls `answer_verbose()` and the strea
 asserted nothing about dosages. The pre-fix regression test observed
 `kind=GROUNDED, text="Take 500mg twice daily."` — a dose delivered as a cited medical answer.
 
-Two code paths, one of them tested, the other one shipped. (S10.2b)
+Two code paths, one of them tested, the other one shipped.
 
 ## 14. The safety policy was never in git
 
@@ -242,7 +242,7 @@ name at **any depth** — and on Windows, case-insensitively — silently swallo
 The refusal rules, the injection defence and the citation requirement existed **only on my
 machine**. A fresh clone could not start, and the decision-log claim that "prompts are
 versioned as code, reviewed like code" was simply false. Three workflows failed on that first
-push, and each failure was worth more than a green tick would have been. (S17)
+push, and each failure was worth more than a green tick would have been.
 
 ## 15. A liveness check is not a capacity check
 
@@ -256,7 +256,7 @@ Pinging a model proves reachability. It says nothing whatsoever about remaining 
 
 Compounding it: `ragas.evaluate()` defaults to `raise_exceptions=False`, so every 429 became
 a silent `NaN`. Each symptom I chased — empty checkpoint, zero scored batches — was that one
-swallowed error wearing a different costume. (S6.12)
+swallowed error wearing a different costume.
 
 ## 16. An aggregate that averaged one case
 
@@ -265,7 +265,7 @@ demo baseline's `faithfulness: 0.6634` was **n = 23 of 60**. Judge failures had 
 from the denominator instead of reported.
 
 Aggregates now carry their own `n`. An average without its sample size is not a measurement,
-it is a rumour. (S6.12a)
+it is a rumour.
 
 ## 17. `total_ms` omitted the slowest stage
 
@@ -298,7 +298,7 @@ vLLM and SGLang, same model, same GPU, same prompts: SGLang led on nothing that 
 The related design correction matters more than the number: chaining vLLM → SGLang on **one
 GPU** looks like redundancy and is not. They share a failure domain — when that GPU dies, both
 legs die together. SGLang is therefore an *engine within a venue*, never its own entry in the
-failover chain, and a test now enforces that. (S14.6, S13.7, D12 v2.1)
+failover chain, and a test now enforces that.
 
 ---
 

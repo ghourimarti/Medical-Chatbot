@@ -1,4 +1,4 @@
-"""S18: cost attribution, spend breaker, and kill switch (D20)."""
+"""cost attribution, spend breaker, and kill switch."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class FakePipe:
         return out
 
 
-# --- pricing ------------------------------------------------------------------------
+# pricing
 
 
 def test_self_hosted_models_cost_zero_per_token() -> None:
@@ -89,7 +89,7 @@ def test_vendor_prefixes_resolve_to_the_same_price() -> None:
     assert price_for("groq/llama-3.1-8b-instant") == PRICE_TABLE["llama-3.1-8b-instant"]
 
 
-# --- spend tracker ------------------------------------------------------------------
+# spend tracker
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_daily_key_rolls_over_without_a_cron_job() -> None:
 
 @pytest.mark.asyncio
 async def test_spend_tracking_fails_open() -> None:
-    """D21: a cost control must not take the product down when Redis blips."""
+    """a cost control must not take the product down when Redis blips."""
     tracker = SpendTracker(FakeRedis(broken=True), "ns", daily_limit_usd=1.0)
     assert await tracker.record(5.0) == 0.0
     assert await tracker.state() is SpendState.OK
@@ -124,7 +124,7 @@ async def test_zero_limit_disables_the_breaker() -> None:
     assert tracker.state_for(await tracker.record(999.0)) is SpendState.OK
 
 
-# --- kill switch --------------------------------------------------------------------
+# kill switch
 
 
 @pytest.mark.asyncio

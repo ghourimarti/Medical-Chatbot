@@ -1,9 +1,9 @@
-# P7.1 — Vendor selection and cost model
+# Vendor selection and cost model
 
 **Decision: DigitalOcean DOKS first, AWS EKS second.** Committed, with the exit criteria
 that would reverse it stated below.
 
-This is the decision S17.6 and S17.7 were waiting on. Those workflows are written but
+This is the decision the deploy workflows were waiting on. They are written but
 deliberately unexercised, because their apply step would otherwise be a guess at
 DOKS-vs-EKS auth, registry and secret handling — a guess Phase 7 would then rewrite.
 
@@ -35,9 +35,9 @@ are what you actually buy.
 Two replicas of `api` is not padding: a PodDisruptionBudget can never be satisfied with one.
 
 **Node plan: 3 × 2 vCPU / 4 GB.** Three nodes rather than two so a drain has somewhere to
-drain *to* — proven necessary in the P6.5 drills, where a two-node cluster could not
+drain *to* — proven necessary in the kind drills, where a two-node cluster could not
 reschedule a PDB-protected pod. Bursting to HPA max needs a fourth node or a larger class,
-which is a Phase-7 measurement (P7.9), not a guess to bake in now.
+which is a Phase-7 measurement, not a guess to bake in now.
 
 ## Monthly cost
 
@@ -102,7 +102,7 @@ Two consequences:
 
 - **The $200 DigitalOcean credit (Track D.4) covers roughly 7–8 weeks** of the DOKS build at
   ~$121/mo. The same credit against an EKS-shaped bill would last ~3.5 weeks. Phase 7 should
-  therefore be run against a **teardown runbook that works** (P7.12), not left standing.
+  therefore be run against a **teardown runbook that works**, not left standing.
 - **LLM inference cost is separate and dominates at real volume.** Infra is a floor you pay
   for existing; tokens are the marginal cost. The per-request budget accounting in
   `budget.py` covers the token side; this document covers only the floor.
@@ -119,7 +119,7 @@ Two consequences:
 **EKS is not dropped — it is Phase 8, and it is the point.** Deploying the *same chart* to a
 second vendor is what converts "vendor-portable" from a claim into a measurement. If the
 diff is anything more than `values-aws.yaml` plus `infra/terraform/aws/`, the claim failed
-and that failure is the finding worth writing up (P8.8).
+and that failure is the finding worth writing up.
 
 ## What would reverse this decision
 
@@ -132,10 +132,10 @@ Stated in advance so it is a criterion rather than a rationalisation:
    per-pod cloud credentials rather than a mounted secret.
 3. **An employer or client is an AWS shop.** Then EKS depth is the deliverable and the cost
    argument is irrelevant.
-4. **Measured DOKS reliability disappoints** in P7.9/P7.10 — a real finding beats a
+4. **Measured DOKS reliability disappoints** once it is running — a real finding beats a
    projected saving.
 
-## Open before P7.2
+## Open before provisioning
 
 - [ ] Track **D.4** — DigitalOcean account, apply the $200 credit
 - [ ] `infra/terraform/do/` — currently only `infra/terraform/aws/` exists
@@ -143,5 +143,5 @@ Stated in advance so it is a criterion rather than a rationalisation:
 - [ ] Registry decision — DOCR vs GHCR (GHCR is vendor-neutral and would keep P8 honest)
 - [ ] Fill the `TODO(P7)` markers in the deploy workflow, one per environment
 
-Until D.4 lands, the correct status for every Phase 7 item is **blocked**, and S17.6/S17.7
+Until D.4 lands, the correct status for every managed-cluster item is **blocked**, and the deploy workflows
 stay written-but-unexercised rather than being marked done.

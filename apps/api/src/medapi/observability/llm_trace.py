@@ -1,18 +1,16 @@
-"""Langfuse — LLM-level tracing (D13).
+"""Langfuse: LLM-level tracing.
 
-WHAT THIS ADDS over OTel. An OTel span says "generate took 240ms". It cannot tell you
-that the answer was bad because prompt v1 retrieved the wrong passage and the model
-hedged. Langfuse stores the LLM-shaped facts: prompt version, the retrieved context, the
-completion, token counts, cost, and per-stage scores — the things you need to debug
-ANSWER QUALITY rather than latency.
+An OTel span says "generate took 240ms". It can't tell you the answer was bad because
+prompt v1 retrieved the wrong passage and the model hedged. Langfuse stores the LLM-shaped
+facts instead: prompt version, retrieved context, completion, token counts, cost and
+per-stage scores. That's what you need to debug answer quality rather than latency.
 
-PII: this is the ONE sanctioned store for prompt/completion content (D18) — access
-controlled, 30-day retention. Everywhere else (logs, OTel spans, metrics) carries only
-fingerprints. That asymmetry is deliberate: quality debugging genuinely requires the text,
-so the text lives in exactly one auditable place instead of leaking into five.
+This is the one sanctioned store for prompt and completion content, access-controlled with
+30-day retention. Logs, OTel spans and metrics carry fingerprints only. Quality debugging
+genuinely needs the text, so the text lives in one auditable place instead of five.
 
-Optional by design: no keys configured -> every call is a no-op. The pipeline must never
-depend on an observability backend being reachable.
+With no keys configured every call is a no-op. The pipeline must never depend on an
+observability backend being reachable.
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ def configure_llm_tracing(
             environment=environment,
         )
         _ENABLED = True
-    except Exception:  # noqa: BLE001 — a broken tracer must not take down the service
+    except Exception:  # noqa: BLE001 (a broken tracer must not take the service down)
         _CLIENT = None
         _ENABLED = False
 
@@ -67,32 +65,28 @@ def trace_answer(
     cache_hit: bool,
     venue: str | None = None,
 ) -> None:
-    """Record one answered query. Never raises — a tracing failure must not fail a request.
+    """Record one answered query. Never raises: a tracing failure can't fail a request.
 
-    `contexts` and the raw question are included ON PURPOSE here (and nowhere else): a
-    faithfulness regression is undebuggable without seeing what the model was shown.
+    `contexts` and the raw question are included here and nowhere else. A faithfulness
+    regression isn't debuggable without seeing what the model was shown.
     """
     if not _ENABLED or _CLIENT is None:
         return
     try:
-        # A GENERATION observation, not an EVENT (INFRA-5).
+        # A generation observation, not an event. An event has no model, usage or cost
+        # fields, so Langfuse's LLM-specific charts (cost per model, tokens/sec, spend over
+        # time) read zero across 318 traces while the real numbers sat one level down in
+        # `metadata`, where none of those charts look.
         #
-        # An EVENT has no model, no usage and no cost fields, so Langfuse's entire
-        # LLM-specific surface — cost per model, tokens/sec, spend over time — read zero
-        # across 318 traces while the real numbers sat one level down in `metadata`,
-        # where none of those charts look. The data was captured and unusable.
+        # `model` and `usage_details` are what Langfuse aggregates on, so they're promoted
+        # out of metadata. The metadata copy stays: it costs nothing and keeps every value
+        # visible when reading a single trace.
         #
-        # `model` and `usage_details` are the fields Langfuse actually aggregates, so they
-        # are promoted out of metadata here. The metadata copy stays: it costs nothing and
-        # keeps every value visible on the observation itself when reading one trace.
-        #
-        # `start_observation(as_type="generation")` — there is NO `create_generation` on the
-        # v4 client. Calling one silently stopped ALL tracing: the AttributeError went
-        # straight into the except below, which exists so a broken tracer cannot fail a
-        # medical answer. Correct behaviour, and it means a wrong method name looks exactly
-        # like a healthy system with nothing to trace. The trace count simply stopped
-        # moving. Verify this by COUNTING traces after a change, never by the absence of
-        # errors.
+        # Note there is no `create_generation` on the v4 client. Calling one stopped all
+        # tracing silently, because the AttributeError went into the except below that
+        # exists so a broken tracer can't fail a medical answer. So a wrong method name
+        # looks exactly like a healthy system with nothing to trace: check by counting
+        # traces after a change, not by the absence of errors.
         # The observation is ended immediately: this records a completed call, so there is
         # no interval to leave open.
         _CLIENT.start_observation(
@@ -109,8 +103,8 @@ def trace_answer(
             cost_details={"total": round(cost_usd, 6)},
             metadata={
                 "prompt_version": prompt_version,
-                # The exact prompt revision that produced this answer. Without it, a
-                # quality regression cannot be attributed to a prompt change (D6).
+                # The exact prompt revision behind this answer. Without it a quality
+                # regression can't be attributed to a prompt change.
                 "prompt_sha": prompt_sha[:12],
                 "model_id": model_id,
                 "venue": venue,
@@ -121,7 +115,7 @@ def trace_answer(
                 **{k: v for k, v in timings.items() if v is not None},
             },
         ).end()
-    except Exception:  # noqa: BLE001 — see docstring
+    except Exception:  # noqa: BLE001 (see docstring)
         return
 
 

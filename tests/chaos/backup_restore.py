@@ -1,11 +1,11 @@
-"""P5.4 backup / restore drill with measured RTO and RPO.
+"""Backup / restore drill with measured RTO and RPO.
 
 The first question is not "how do we back this up" but "is this a system of record at all".
 Three stores, and only one holds data that cannot be reconstructed:
 
   Postgres  SYSTEM OF RECORD. Sessions and chat history exist nowhere else. If it is lost,
             it is lost — and with it the audit trail and the ability to service a GDPR
-            deletion request (D1, D9). This is the only true backup target.
+            deletion request. This is the only true backup target.
 
   Qdrant    DERIVED from the corpus PDF by the ingestion pipeline. It can always be rebuilt,
             so a snapshot is not protection against data loss — it is purely an RTO
@@ -63,7 +63,7 @@ def drill_postgres() -> dict[str, Any]:
     print(f"  live rows: sessions={before_sessions} messages={before_messages}")
     result["rows_before"] = {"sessions": before_sessions, "messages": before_messages}
 
-    # --- BACKUP ---
+    # BACKUP
     t0 = time.perf_counter()
     code, out = sh(
         "docker", "exec", PG_CONTAINER, "sh", "-c",
@@ -79,7 +79,7 @@ def drill_postgres() -> dict[str, Any]:
     result["backup_seconds"] = round(backup_s, 2)
     result["backup_bytes"] = size
 
-    # --- RESTORE into a parallel database ---
+    # RESTORE into a parallel database
     sh("docker", "exec", PG_CONTAINER, "psql", "-U", PG_USER, "-d", "postgres",
        "-c", f'DROP DATABASE IF EXISTS {RESTORE_DB};')
     t0 = time.perf_counter()
@@ -97,7 +97,7 @@ def drill_postgres() -> dict[str, Any]:
     print(f"  restore: {restore_s:.1f}s -> database {RESTORE_DB}")
     result["restore_seconds"] = round(restore_s, 2)
 
-    # --- VERIFY: a restore nobody verified is a backup nobody has ---
+    # VERIFY: a restore nobody verified is a backup nobody has
     after_sessions = pg_query(RESTORE_DB, "select count(*) from sessions;")
     after_messages = pg_query(RESTORE_DB, "select count(*) from messages;")
     partitions = pg_query(
@@ -198,13 +198,13 @@ def drill_redis() -> dict[str, Any]:
     print(f"  keys currently held: {out.strip() if code == 0 else 'unavailable'}")
     print("  strategy: NO BACKUP — restoring stale quota counters and retired cache")
     print("            entries would be actively harmful. Recovery = start empty.")
-    print("  proven in P5.3: Redis stopped -> service kept answering (cache off).")
+    print("  proven in the chaos drill: Redis stopped -> service kept answering (cache off).")
     result["keys"] = out.strip() if code == 0 else None
     return result
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="P5.4 backup/restore drill")
+    ap = argparse.ArgumentParser(description="backup/restore drill")
     ap.add_argument("--collection", default="gale_medical_full_v1")
     ap.add_argument("--out", default="eval-reports/backup-restore.json")
     args = ap.parse_args()

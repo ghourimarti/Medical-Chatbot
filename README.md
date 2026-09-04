@@ -78,7 +78,7 @@ including the ones that refuted my own recommendations. If you read one file, re
 | 🧪 **Blocking eval gate** | `make eval-gate` exits 1 on regression against 215 curated cases. Proving it worked found **4 defects in the gate itself**. |
 | 💰 **Cost controls + kill switch** | Daily spend breaker, per-session and per-IP quotas, response + embedding caches, and a runtime kill switch (`make kill-on`). |
 | 📉 **Graceful degradation** | Redis down → cache bypass. Postgres down → history disabled, answers continue. Qdrant down → typed 503. Every dependency was stopped in a drill; nothing crashed. |
-| 🔭 **Full observability** | OpenTelemetry traces, Prometheus metrics, Grafana dashboards, Langfuse LLM traces — with a deliberate PII split (no query text in OTel spans). |
+| 🔭 **Full observability** | OpenTelemetry traces, Prometheus metrics, Grafana dashboards, Langfuse LLM traces — with a strict PII split (no query text in OTel spans). |
 | 👤 **Optional accounts** | Clerk JWT verification and saved conversations. With no JWKS URL configured, accounts are simply off and the anonymous product is unaffected. |
 
 ---
@@ -104,8 +104,7 @@ hand — so they cannot drift from the UI they document.
 | ![landing](docs/screenshots/light-01-landing.png) | ![design system](docs/screenshots/light-06-design-system.png) |
 | Public entry point | Tokens, states and components on one sheet |
 
-Category-specific refusals are deliberate: one generic refusal would make both safety cases
-worse. Someone describing chest pain needs an emergency redirect, and if *every* refusal
+Category-specific refusals matter: one generic refusal would make both safety cases worse. Someone describing chest pain needs an emergency redirect, and if *every* refusal
 mentioned emergency services the advice would become noise.
 
 Dark-mode variants (`dark-01` … `dark-06`) and additional stills are in
@@ -578,7 +577,7 @@ filtered:**
 | **Backup / restore** | Postgres RTO **0.5 s** · Qdrant **3.5 s**, 7,080/7,080 points verified | [backup-restore.json](eval-reports/backup-restore.json) |
 | **Engines** | vLLM vs SGLang on one RTX 3060: SGLang wins p95 (735 vs 902 ms), **vLLM wins p99** (1034 vs 2504 ms) and throughput (58 vs 52 tok/s) | [benchmarks/](docs/benchmarks/vllm-vs-sglang.md) |
 | **Images** | 26.18 GB → **6.59 GB** (−75%) across three services | [IMAGES.md](docs/IMAGES.md) |
-| **Kubernetes (kind)** | Rollout, drain, force-delete and a deliberately broken deploy — 90/90 requests OK | [K8S_DRILLS.md](docs/K8S_DRILLS.md) |
+| **Kubernetes (kind)** | Rollout, drain, force-delete and an intentionally broken deploy — 90/90 requests OK | [K8S_DRILLS.md](docs/K8S_DRILLS.md) |
 | **Hybrid retrieval** | 8–13 ms over 7,080 chunks, RRF fused server-side | [EVAL_S6_FINDINGS.md](docs/EVAL_S6_FINDINGS.md) |
 
 ### Proven vs. built-but-unexercised
@@ -638,13 +637,13 @@ Local → cloud, with honest status at every stage:
 | **Helm chart lint + object census** | ✅ passing | `make chart-lint` — added after `helm lint` and `helm template` **both passed** on a chart that silently dropped Services |
 | **Terraform (AWS: VPC, EKS, RDS w/ PITR, ElastiCache, SQS + DLQ, IRSA)** | ⚠️ **authored and `validate`-clean offline — never `plan`ned, never applied** | `make tf-validate` |
 | **Managed Kubernetes (DOKS)** | ⏳ vendor selected, **nothing provisioned** | [VENDOR_SELECTION.md](docs/VENDOR_SELECTION.md) |
-| **AWS EKS portability proof** | ⏳ not started | Phase 8 |
+| **AWS EKS portability proof** | ⏳ not started | — |
 
 CI (`.github/workflows/`): `ci` (lint + types + unit) and `web` run on every push and PR.
-`eval-gate`, `load-smoke`, `images` and `deploy` are `workflow_dispatch` — deliberately, and the
-reason is written into each workflow file.
+`eval-gate`, `load-smoke`, `images` and `deploy` are `workflow_dispatch`, and the reason is
+written into each workflow file.
 
-**Phases 7 and 8 are blocked on vendor accounts, not on code.** The Helm chart is exercised on
+**The remaining cloud work is blocked on vendor accounts, not on code.** The Helm chart is exercised on
 kind and the Terraform validates offline. Nothing has run on real managed Kubernetes, and this
 README keeps "validated" and "applied" in separate columns.
 
@@ -658,10 +657,10 @@ README keeps "validated" and "applied" in separate columns.
    a pipeline that no longer exists; until a fresh run exists, those safety numbers are stale by
    construction.
 2. **Faithfulness scoring** — blocked on a daily judge token cap, not on code.
-3. **Provision DOKS via Terraform** (Phase 7, 1/12 done) — cluster, registry, managed data tier,
+3. **Provision DOKS via Terraform** — cluster, registry, managed data tier,
    ingress + TLS, secrets, then load and chaos drills **against the real cluster**.
-4. **`terraform plan` against a real AWS account** (Phase 6's last open item) — needs credentials.
-5. **AWS EKS portability proof** (Phase 8) — the same chart via `values-aws.yaml`; the diff must be
+4. **`terraform plan` against a real AWS account** — needs credentials.
+5. **AWS EKS portability proof** — the same chart via `values-aws.yaml`; the diff must be
    config-only, or the portability claim is false.
 6. **Measured cost per 1k queries** on real managed infrastructure.
 
@@ -694,24 +693,22 @@ README keeps "validated" and "applied" in separate columns.
 | [VERIFY.md](docs/VERIFY.md) | how to reproduce any claim in this README |
 | [INTERVIEW.md](docs/INTERVIEW.md) | the hard questions, answered honestly |
 
-**Project status** is tracked in [`update_todos.md`](update_todos.md), the authoritative record:
+**Where things stand:**
 
-| Phase | | |
+| Area | | |
 |---|---|---|
-| 0–3 recon, NFRs, decisions, plan | ✅ | complete |
-| 4 execution | 🔄 | 17 / 22 steps |
-| 5 hardening — security, load, chaos, backup | ✅ | 5 / 5 |
-| 6 local + kind validation | 🔄 | 6 / 7 — the last needs AWS credentials |
-| 7 managed Kubernetes | 🔄 | 1 / 12 — vendor selected, nothing provisioned |
-| 8 AWS EKS portability proof | ⏳ | 0 / 8 |
-| 9 portfolio | 🔄 | 5 / 6 |
+| Application, pipeline and eval harness | ✅ | complete |
+| Hardening — security, load, chaos, backup | ✅ | complete |
+| Local + kind validation | 🔄 | one item left, needs AWS credentials |
+| Managed Kubernetes | 🔄 | vendor selected, nothing provisioned |
+| AWS EKS portability proof | ⏳ | not started |
 
 ---
 
 ## 👤 About the Author
 
-Built by **Zaini** as a deliberate exercise in taking a bootcamp-grade RAG demo to a production
-bar — and in *measuring* the difference rather than asserting it.
+Built by **Zaini** to take a bootcamp-grade RAG demo to a production bar, and to *measure* the
+difference rather than assert it.
 
 What this repository is meant to demonstrate:
 
@@ -721,7 +718,7 @@ What this repository is meant to demonstrate:
   numbers are marked stale rather than quietly replaced, and [`FINDINGS.md`](docs/FINDINGS.md)
   documents the measurements that refuted my own recommendations.
 - **Production concerns treated as first-class:** typed contracts, structural safety, circuit
-  breakers and degradation paths, cost controls, observability with a deliberate PII split,
+  breakers and degradation paths, cost controls, observability with a strict PII split,
   backup/restore drills, and a vendor-portable deployment path.
 - **Knowing the difference between validated and applied** — and keeping them in separate columns.
 

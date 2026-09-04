@@ -13,9 +13,9 @@ MAX_BATCH = 512  # request-size cap is a resource control (D18), not a nicety
 
 class EmbedRequest(BaseModel):
     texts: list[str] = Field(min_length=1, max_length=MAX_BATCH)
-    # bge models want an instruction prefix on QUERIES and nothing on DOCUMENTS.
-    # Making it an explicit flag (rather than inferring) is what stops ingestion and
-    # query-time from drifting apart — a silent retrieval-quality killer.
+    # bge models want an instruction prefix on queries and nothing on documents. An
+    # explicit flag rather than inference is what stops ingestion and query time drifting
+    # apart, which would quietly cost retrieval quality.
     is_query: bool = False
 
 

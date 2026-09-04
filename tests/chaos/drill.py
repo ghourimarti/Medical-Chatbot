@@ -1,4 +1,4 @@
-"""P5.3 chaos drills — dependency failure against REAL processes.
+"""Chaos drills: dependency failure against real processes.
 
 Why this exists when unit tests already cover the degradation paths: those tests use fakes
 that raise instantly on command. A real dependency does not fail that politely.
@@ -9,7 +9,7 @@ that raise instantly on command. A real dependency does not fail that politely.
   * Recovery needs the connection POOL to heal, not just the dependency. A fake never had a
     pool, so "it works again after the outage" is genuinely untested until now.
   * Fail-open and fail-safe are opposite requirements living in one request path: caching
-    must degrade to slower (D10), quotas must degrade to stricter (D20). A drill is how you
+    must degrade to slower, quotas must degrade to stricter. A drill is how you
     find out that one of them silently took the other's behaviour.
 
 SAFETY: this script only STOPS and STARTS containers. It never runs `docker rm`, never
@@ -224,7 +224,7 @@ def _fmt(p: Probe) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="P5.3 chaos drills (stop/start only)")
+    ap = argparse.ArgumentParser(description="chaos drills (stop/start only)")
     ap.add_argument(
         "--targets",
         default="redis,qdrant,postgres,provider",
@@ -273,11 +273,11 @@ def main() -> int:
 
     # What counts as passing.
     #
-    #   200  answered, degraded or not          -> designed
-    #   503  service-degraded / retrieval-down  -> designed: a TYPED, retryable refusal
-    #   429  quota                              -> designed
-    #   500  "unexpected error"                 -> FAIL: nobody anticipated this
-    #     0  transport failure / no response    -> FAIL
+    # 200 answered, degraded or not -> designed
+    # 503 service-degraded / retrieval-down -> designed: a TYPED, retryable refusal
+    # 429 quota -> designed
+    # 500 "unexpected error" -> FAIL: nobody anticipated this
+    # 0 transport failure / no response -> FAIL
     #
     # The 500-vs-503 line is the whole point. Both are "the request did not succeed", but
     # 503 means a dependency is down and the client should retry, while 500 means we have a

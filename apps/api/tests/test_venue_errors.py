@@ -1,7 +1,7 @@
-"""Venue error diagnosability (P5.2 finding #4).
+"""Venue error diagnosability.
 
 The defect: `ProviderError(f"{self.venue}: {e}")` logged `local: ` — an empty message —
-because httpx's transport exceptions carry an empty `str()`. During the P5.2 run the logs
+because httpx's transport exceptions carry an empty `str()`. During the run the logs
 could not distinguish "nothing is listening" from "the request timed out" from "the server
 hung up mid-response". Every one of those has a different operator response.
 
@@ -69,7 +69,7 @@ def test_body_is_truncated_and_single_line() -> None:
     assert len(out) < 400
 
 
-# --- S13.7: serving_engine actually selects an engine ---------------------------------
+# serving_engine actually selects an engine
 
 
 def _settings(**overrides: object):
@@ -83,7 +83,7 @@ def _settings(**overrides: object):
 
 
 def test_serving_engine_selects_the_gpu_endpoint() -> None:
-    """The whole point of S13.7. `serving_engine` was declared in Settings and read
+    """The whole point of. `serving_engine` was declared in Settings and read
     NOWHERE — `vllm_local_url` was hardcoded, so SERVING_ENGINE=sglang served vLLM."""
     from medapi.venues import ChainLeg, _venue_config
 
@@ -118,7 +118,7 @@ def test_groq_ignores_the_engine_setting() -> None:
 def test_sglang_is_not_a_venue_name() -> None:
     """SGLang is an ENGINE, never a venue of its own.
 
-    It is now reachable as a chain leg (`local-sglang`) because D12 v2.1 asked for
+    It is now reachable as a chain leg (`local-sglang`) because v2.1 asked for
     engine-level failover, but the failure-domain caveat is unchanged and is why the
     spelling matters: `local-vllm -> local-sglang` share a GPU and a box, so that pair
     covers an engine fault and nothing else. A bare `sglang` would imply a venue — an

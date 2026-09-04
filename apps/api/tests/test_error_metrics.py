@@ -1,4 +1,4 @@
-"""Error metrics feed the availability SLO (P5.5 findings).
+"""Error metrics feed the availability SLO.
 
 Two defects this pins down:
 

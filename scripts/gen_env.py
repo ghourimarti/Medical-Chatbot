@@ -1,7 +1,7 @@
 """Generate .env and .env.example from ONE spec, so they cannot drift apart.
 
 Why a generator instead of two hand-maintained files: they had already drifted. `.env`
-still carried NEXT_PUBLIC_API_URL (removed from the example in S10.14 because nothing
+still carried NEXT_PUBLIC_API_URL (removed from the example because nothing
 reads it) and was missing 13 keys the example documents, including every SGLANG_* name.
 Two files edited by hand always end up describing two different systems.
 
@@ -140,7 +140,7 @@ TIERS: list[tuple[str, list[Section]]] = [
         ("ML-SERVICE — embeddings + reranking", "http://localhost:5006/readyz", (
             ("ML_SERVICE_PORT", "5006", (
                 "Must be up BEFORE the API: readiness checks it",
-                "(P6.5.4).",
+                "the readiness probe.",
             )),
             ("ML_SERVICE_URL", "http://ml-service:8001", (
                 "EMPTY = run the models in-process (tests, single-process dev).",
@@ -148,7 +148,7 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "One line switches the topology.",
             )),
             ("ML_BACKEND", "torch", (
-                "torch = reference implementation. onnx = ONNX Runtime (S5.9), needed to meet",
+                "torch = reference implementation. onnx = ONNX Runtime, needed to meet",
                 "the 250ms retrieval NFR — measured: fewer candidates alone cannot get there.",
             )),
             ("ML_RERANK_BACKEND", "", (
@@ -162,7 +162,7 @@ TIERS: list[tuple[str, list[Section]]] = [
             )),
             ("RERANKER_MODEL_ID", "BAAI/bge-reranker-base", (
                 "Cross-encoder. Dominates query latency",
-                "(S5.9).",
+                "the retrieval budget.",
             )),
             ("EMBED_TIMEOUT", "8.0", (
                 "Seconds. Was 5.0 against a measured p95 of 2.35s, which looks like",
@@ -315,7 +315,7 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("GROQ_API_KEY", "gsk_...", ("SECRET. THE ONLY REQUIRED VALUE in this file.",)),
             ("GROQ_BASE_URL", "https://api.groq.com/openai/v1", ()),
             ("GROQ_DEFAULT_MODEL", "openai/gpt-oss-20b", (
-                "MODEL DEPRECATION IS REAL (S19/S6.12): Groq retired the whole Llama family on",
+                "Model deprecation is real: Groq retired the whole Llama family on",
                 "this account — llama-3.1-8b-instant and llama-3.3-70b-versatile both 404 now,",
                 "and both worked in S6. A hosted vendor can retire your pinned model underneath",
                 "you; a self-hosted engine cannot, because its weights are a file we hold.",
@@ -380,7 +380,7 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "gale_live_v2 ... and repoints the alias ATOMICALLY on success, so readers",
                 "never see a half-ingested corpus and rollback is one alias operation.",
                 "The API only ever VERIFIES it — creating it here would take the name the",
-                "alias needs and permanently break the swap (P6.3.5).",
+                "alias needs and permanently break the swap.",
             )),
             ("CHUNK_SIZE", "500", ()),
             ("CHUNK_OVERLAP", "50", ()),
@@ -390,7 +390,7 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("REDIS_URL", "redis://redis:6379/0", (
                 "EMPTY = caching off AND rate limiting falls back to PER-REPLICA in-process",
                 "counters, so the effective limit becomes N x the configured one. Required",
-                "outside local for exactly that reason (P5.2.9).",
+                "outside local for exactly that reason.",
             )),
             ("REDIS_MAXMEMORY", "256mb", ()),
             ("CACHE_TTL_SECONDS", "86400", (
@@ -402,7 +402,7 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "live longer.",
             )),
             ("SEMANTIC_CACHE_ENABLED", "false", (
-                "OFF, and measured (S19.4 / docs/SEMANTIC_CACHE.md). The premise was tested and",
+                "OFF, and measured (docs/SEMANTIC_CACHE.md). The premise was tested and",
                 "REFUTED: across 23,005 golden pairs the max similarity was 0.8541 — nothing",
                 "reached the safe 0.95 threshold, so a safe setting is inert, while a useful",
                 "one leaves 0.007 of margin against clinically different questions.",
@@ -427,7 +427,7 @@ TIERS: list[tuple[str, list[Section]]] = [
             ("REDIS_MAX_CONNECTIONS", "128", (
                 "BOUNDED pool with a WAIT. The default pool errors the moment every connection",
                 "is checked out, which under burst turned a 2ms cache lookup into a storm of",
-                "MaxConnectionsError and took the process down at 1500 RPS (P5.2.6).",
+                "MaxConnectionsError and took the process down at 1500 RPS.",
             )),
         )),
         ("LOCALSTACK — SQS for the ingestion worker (D11)", "http://localhost:5005", (

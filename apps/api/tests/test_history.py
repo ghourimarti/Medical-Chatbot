@@ -1,4 +1,4 @@
-"""S7.7: session identity + fail-soft history (D9, D21, D18).
+"""session identity + fail-soft history.
 
 No database required — HistoryService's degradation path IS the code under test, and it is
 the same path production takes when Postgres is down.
@@ -26,7 +26,7 @@ def _manager(secret: str = "test-secret") -> SessionManager:
     return SessionManager(secret, secure_cookies=False)
 
 
-# --- session identity ---------------------------------------------------------------
+# session identity
 
 
 def test_new_visitor_gets_a_fresh_session() -> None:
@@ -62,13 +62,13 @@ def test_cookie_flags_are_hardened() -> None:
     resp = Response()
     mgr.attach(resp, uuid.uuid4())
     header = resp.headers["set-cookie"].lower()
-    assert "httponly" in header  # unreadable to JS (XSS mitigation, D18)
+    assert "httponly" in header  # unreadable to JS (XSS mitigation,)
     assert "samesite=lax" in header
     assert "secure" in header
 
 
 def test_client_ip_is_hashed_never_stored_raw() -> None:
-    """An IP is personal data under GDPR (D18)."""
+    """An IP is personal data under GDPR."""
     h = SessionManager.client_hash(_FakeRequest(host="203.0.113.9"))  # type: ignore[arg-type]
     assert h is not None and len(h) == 64
     assert "203.0.113.9" not in h
@@ -80,12 +80,12 @@ def test_missing_client_is_tolerated() -> None:
     assert SessionManager.client_hash(_FakeRequest(host=None)) is None  # type: ignore[arg-type]
 
 
-# --- fail-soft history --------------------------------------------------------------
+# fail-soft history
 
 
 @pytest.mark.asyncio
 async def test_history_disabled_returns_empty_not_error() -> None:
-    """No DATABASE_URL: the app must answer, just without memory (D21)."""
+    """No DATABASE_URL: the app must answer, just without memory."""
     svc = HistoryService(None)
     assert not svc.enabled
     assert await svc.load(uuid.uuid4()) == []
@@ -103,7 +103,7 @@ async def test_record_turn_reports_false_when_disabled() -> None:
 
 @pytest.mark.asyncio
 async def test_database_failure_degrades_load_instead_of_raising() -> None:
-    """Postgres down => stateless chat, never a 500 (D21)."""
+    """Postgres down => stateless chat, never a 500."""
 
     class ExplodingFactory:
         def __call__(self) -> object:
@@ -120,7 +120,7 @@ async def test_database_failure_degrades_load_instead_of_raising() -> None:
 @pytest.mark.asyncio
 async def test_clear_failure_propagates_rather_than_degrading() -> None:
     """Deliberate asymmetry: a failed DELETE must NOT report success. Losing history is a
-    degraded experience; a silently failed erasure is a compliance violation (D18)."""
+    degraded experience; a silently failed erasure is a compliance violation."""
 
     class ExplodingFactory:
         def __call__(self) -> object:

@@ -1,4 +1,4 @@
-# In-cluster failure drills (P6.5)
+# In-cluster failure drills
 
 Measured on the local `kind` cluster (3 nodes, kindnet CNI, Helm release `medbot`).
 Every result below is from a probe pod issuing **90 sequential requests, 1/second** through
@@ -7,14 +7,14 @@ observed by a client on the cluster network, not an inference from pod status.
 
 | Drill | Fault injected | Result | Notes |
 |---|---|---|---|
-| P6.5.1 | `kubectl delete pod --grace-period=0 --force` | **90 ok / 0 fail** | Worst case: no preStop, no graceful shutdown. Second replica absorbed it |
-| P6.5.2 | `kubectl rollout restart` (before fix) | **89 ok / 1 fail** | Endpoint race — see below |
-| P6.5.2 | `kubectl rollout restart` (after fix) | **90 ok / 0 fail** | preStop + `maxUnavailable: 0` |
-| P6.5.3 | `kubectl drain medbot-worker` | **90 ok / 0 fail** | PDB honoured; api pod rescheduled. **Caveat below** |
-| P6.5.4 | `kubectl scale deploy/medbot-ml --replicas=0` | 503 typed, not 500 | Readiness bug found — see below |
-| P6.5.5 | Deploy a nonexistent image tag, then `rollout undo` | **90 ok / 0 fail** | Broken deploy had zero user-visible impact |
+| 1 | `kubectl delete pod --grace-period=0 --force` | **90 ok / 0 fail** | Worst case: no preStop, no graceful shutdown. Second replica absorbed it |
+| 2 | `kubectl rollout restart` (before fix) | **89 ok / 1 fail** | Endpoint race — see below |
+| 2 | `kubectl rollout restart` (after fix) | **90 ok / 0 fail** | preStop + `maxUnavailable: 0` |
+| 3 | `kubectl drain medbot-worker` | **90 ok / 0 fail** | PDB honoured; api pod rescheduled. **Caveat below** |
+| 4 | `kubectl scale deploy/medbot-ml --replicas=0` | 503 typed, not 500 | Readiness bug found — see below |
+| 5 | Deploy a nonexistent image tag, then `rollout undo` | **90 ok / 0 fail** | Broken deploy had zero user-visible impact |
 
-## P6.5.2 — "zero-downtime" was not zero
+## Drill 2 — "zero-downtime" was not zero
 
 The first rolling restart lost one request in ninety (a connection failure, `code=000`).
 
@@ -47,7 +47,7 @@ strategy:
 
 Re-measured after the change: **90/90**.
 
-## P6.5.3 — what the drain number does and does not prove
+## Drill 3 — what the drain number does and does not prove
 
 The drain drill reports 90/90, and that is true of what it measured: the **API's health
 endpoint**. It is not a claim about end-to-end query availability, because only
@@ -70,10 +70,10 @@ correct choice for a local cluster — the point is that **the same drill on Pha
 infrastructure must probe an actual query**, not `/healthz`, or it will keep reporting a
 availability the system does not have.
 
-## P6.5.4 — readiness that could not see its own dependency
+## Drill 4 — readiness that could not see its own dependency
 
 Scaling `medbot-ml` to zero produced exactly the right *client* behaviour: a typed RFC 7807
-`503 retrieval-unavailable`, never a raw 500 or a leaked exception (D21).
+`503 retrieval-unavailable`, never a raw 500 or a leaked exception.
 
 But `/readyz` returned **200** throughout. It consulted only the vector store, so the pod
 advertised itself as able to serve while every query failed. Embedding is the first step of
@@ -87,8 +87,8 @@ would remove the entire deployment from service to no one's benefit.
 
 The general rule this phase kept re-teaching: **readiness must mean "can serve", not "a
 name resolved" or "a dependency I happened to check is up".** The same defect appeared in
-three separate places — an empty index reported healthy (P6.3.5), a probe that only proved a
-binary could execute (P6.4.1), and this one.
+three separate places — an empty index reported healthy, a probe that only proved a
+binary could execute, and this one.
 
 ## Reproducing
 ```bash

@@ -66,8 +66,8 @@ def _sse(event: str, payload: BaseModel) -> str:
 
 @router.get("/metrics")
 async def metrics() -> PlainTextResponse:
-    """Prometheus scrape endpoint (D13). Deliberately unauthenticated in-cluster and
-    excluded at the ingress — a NetworkPolicy restricts it to the scraper (S15)."""
+    """Prometheus scrape endpoint. Unauthenticated in-cluster and excluded at the
+    ingress; a NetworkPolicy restricts it to the scraper."""
     return PlainTextResponse(
         generate_latest(REGISTRY).decode(), media_type=CONTENT_TYPE_LATEST
     )
@@ -83,11 +83,11 @@ async def healthz() -> dict[str, str]:
 async def readyz(request: Request) -> JSONResponse:
     """Readiness means "this pod can answer a query", not "one dependency responded".
 
-    P6.5.4: with ml-service scaled to zero the API reported READY while every single query
-    returned 503, because readiness only consulted the vector store. Embedding is the FIRST
-    step of retrieval — no vector, nothing to search — so an unreachable embedder is just
-    as disqualifying as an unreachable index. Both are checked here, concurrently so a slow
-    dependency cannot serialise the probe.
+    With ml-service scaled to zero the API reported Ready while every query returned 503,
+    because readiness only consulted the vector store. Embedding is the first step of
+    retrieval, so an unreachable embedder disqualifies a pod just as much as an unreachable
+    index. Both are checked here, concurrently, so a slow dependency can't serialise the
+    probe.
 
     Deliberately NOT checked: Redis and Postgres. Losing either degrades the service
     (cache bypass, history disabled) but it can still answer, and failing readiness would
@@ -109,9 +109,9 @@ async def _always_true() -> bool:
     return True
 
 
-# A probe must always answer faster than the orchestrator is willing to wait. Kubernetes
-# defaults readinessProbe.timeoutSeconds to 1, so a check with no deadline of its own does
-# not "run long" - it is recorded as a FAILURE, and the pod leaves the load balancer.
+# A probe has to answer faster than the orchestrator will wait. Kubernetes defaults
+# readinessProbe.timeoutSeconds to 1, so a check with no deadline of its own doesn't run
+# long, it gets recorded as a failure and the pod leaves the load balancer.
 _READINESS_TIMEOUT = 2.0
 
 # How long a pod may coast on its last successful check while a dependency is merely slow.
@@ -142,14 +142,14 @@ async def _readiness_checks(services: Services) -> tuple[bool, bool]:
     status page. Two endpoints computing readiness independently WILL drift, and a status
     page that reports healthy while the probe fails is worse than no status page.
 
-    P6.5.4: with ml-service scaled to zero the API reported READY while every query failed,
-    because readiness only consulted the vector store. Both are checked now.
+    With ml-service scaled to zero the API reported Ready while every query failed, because
+    readiness only consulted the vector store. Both are checked now.
 
-    INFRA-3: and then the opposite failure. Immediately after a 7,080-chunk ingest, Qdrant
-    was optimising into its segments and `get_collection` blocked past 20s - while the pod
-    happily served a grounded query with citations throughout. Unbounded checks turn a
-    dependency's slow spell into a self-inflicted outage, and they do it to every replica
-    at once, right after a re-index: exactly the D11 alias swap this design exists to make
+    Then the opposite failure. Straight after a 7,080-chunk ingest, Qdrant was optimising
+    into its segments and `get_collection` blocked past 20s, while the pod happily served
+    grounded queries with citations throughout. Unbounded checks turn a dependency's slow
+    spell into a self-inflicted outage, and they do it to every replica at once, right
+    after a re-index: exactly the alias swap this design exists to make
     seamless. So each check is bounded, and a timeout falls back to the last good result
     within _READINESS_GRACE rather than immediately declaring the pod unfit.
     """
@@ -187,10 +187,11 @@ async def _readiness_checks(services: Services) -> tuple[bool, bool]:
 
 @router.get("/api/v1/status")
 async def public_status(request: Request) -> dict[str, object]:
-    """PUBLIC operational status (S10.2c) — deliberately a different endpoint from
-    /admin/status, which is key-gated because it exposes spend, circuit state and the
-    serving chain. Those are operator facts; leaking them tells an attacker which
-    provider to target and how much budget is left to burn.
+    """Public operational status, kept separate from /admin/status.
+
+    /admin/status is key-gated because it exposes spend, circuit state and the serving
+    chain. Those are operator facts, and leaking them tells an attacker which provider to
+    target and how much budget is left to burn.
 
     What a visitor legitimately needs: can it answer right now, is generation degraded,
     and which corpus/index version produced the answers they are reading.
@@ -220,8 +221,8 @@ async def query(req: QueryRequest, request: Request, response: Response) -> Answ
     """Non-streaming answer.
 
     The cross-cutting controls live in medapi.serving so this path and the streaming path
-    cannot diverge (S10.6a). They used to live inline here — 194 lines of them — while the
-    streaming endpoint had none.
+    cannot diverge. They used to live inline here, 194 lines of them, while the streaming
+    endpoint had none.
     """
     svc = _services(request)
     pre = await preflight(req.question, request, svc, req.conversation_id)
@@ -247,16 +248,16 @@ async def session_history(request: Request, response: Response) -> dict[str, obj
     svc = _services(request)
     session_id, is_new = svc.sessions.resolve(request)
 
-    # A READ MUST NOT MINT A SESSION.
+    # A read must not mint a session.
     #
-    # This endpoint used to resolve-and-attach unconditionally, which meant a first-time
-    # visitor loading the page raced their own first question: both requests arrive without
-    # a cookie, both mint a session, and whichever Set-Cookie lands last silently orphans
-    # the other session. The symptom was history that intermittently failed to appear —
-    # caught only because a browser test failed roughly one run in two.
+    # This used to resolve-and-attach unconditionally, so a first-time visitor loading the
+    # page raced their own first question: both requests arrive with no cookie, both mint a
+    # session, and whichever Set-Cookie lands last orphans the other. The symptom was
+    # history that intermittently failed to appear, caught because a browser test failed
+    # about one run in two.
     #
-    # A visitor with no session has no history by definition, so there is nothing to mint
-    # a session FOR. Only a write (a query) establishes one.
+    # A visitor with no session has no history anyway, so there's nothing to mint one for.
+    # Only a write establishes a session.
     if is_new:
         return {"session_id": None, "enabled": svc.history.enabled, "messages": []}
 
@@ -273,9 +274,9 @@ async def session_history(request: Request, response: Response) -> dict[str, obj
 async def clear_session(request: Request, response: Response) -> dict[str, object]:
     """GDPR right-to-erasure (D18).
 
-    Reports how many rows were actually removed rather than a bare 200 — a delete endpoint
-    that claims success without proving removal passes review and fails an audit. Failures
-    here deliberately propagate (as RFC 7807) instead of degrading silently.
+    Reports how many rows were actually removed rather than a bare 200, since a delete
+    endpoint that claims success without proving removal passes review and fails an audit.
+    Failures here propagate as RFC 7807 instead of degrading silently.
     """
     svc = _services(request)
     session_id, _ = svc.sessions.resolve(request)
@@ -315,11 +316,11 @@ async def admin_status(request: Request) -> dict[str, object]:
         "circuits": svc.model.status(),
         "collection_alias": svc.settings.qdrant_collection,
         "cache_namespace": svc.settings.cache_namespace,
-        # Accounts health is reported HERE and deliberately not in /readyz or the public
-        # status page. A JWKS outage stops new sign-ins from being verified; it does not
-        # stop the pod answering questions. Failing readiness on it would take the whole
-        # anonymous product down over a dependency the anonymous product never uses
-        # (D21, D24) — and an autoscaler would then cycle healthy pods during the outage.
+        # Accounts health is reported here and not in /readyz or the public status page.
+        # A JWKS outage stops new sign-ins being verified; it doesn't stop the pod
+        # answering questions. Failing readiness on it would take the anonymous product
+        # down over a dependency it never uses, and an autoscaler would then cycle healthy
+        # pods during the outage.
         "accounts": await _accounts_status(svc),
     }
 
@@ -357,12 +358,12 @@ async def admin_kill_switch(request: Request, enabled: bool, reason: str = "") -
 
 @router.post("/api/v1/query/stream")
 async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse:
-    """Streaming answer — the endpoint a browser actually uses.
+    """Streaming answer, the endpoint a browser actually uses.
 
-    S10.6a: this handler previously carried NONE of the cross-cutting controls that
-    query() carried. No rate limiting, no kill switch, no cache, no spend accounting, no
-    history, no session. Measured before the fix: 25 consecutive requests against a 20/min
-    limit returned 25x 200 here while /api/v1/query correctly 429'd after the 20th. In
+    This handler used to carry none of the cross-cutting controls query() carried: no rate
+    limiting, no kill switch, no cache, no spend accounting, no history, no session.
+    Measured before the fix: 25 consecutive requests against a 20/min limit returned 25x 200
+    here while /api/v1/query correctly 429'd after the 20th. In
     other words the deployed rate limit could be bypassed by using the default endpoint.
 
     ORDER MATTERS. The controls run BEFORE the StreamingResponse is constructed, so a
@@ -398,8 +399,8 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
                     terminal = event
                 yield _sse(_EVENT_NAMES[type(event)], event)
         except asyncio.CancelledError:
-            # Client disconnected. Propagating closes the provider stream, which stops
-            # token spend for an answer nobody will read (D20). Never swallow this.
+            # Client disconnected. Propagating closes the provider stream and stops token
+            # spend for an answer nobody will read, so never swallow this.
             logger.info("client disconnected mid-stream; provider stream aborted")
             raise
         except MedbotError as exc:
@@ -420,10 +421,10 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
             return
 
         if terminal is not None:
-            # Accounting runs after the final byte. A cancelled stream deliberately skips
-            # it: a partial generation has no usage figures to attribute, and inventing
-            # them would corrupt the spend ledger. That gap is bounded now that rate
-            # limiting applies to this endpoint, and it is recorded rather than hidden.
+            # Accounting runs after the final byte, and a cancelled stream skips it: a
+            # partial generation has no usage figures to attribute, and inventing them
+            # would corrupt the spend ledger. The gap is bounded now that rate limiting
+            # covers this endpoint.
             await postflight(
                 answer_from_done(terminal), question=req.question, svc=svc, pre=pre
             )

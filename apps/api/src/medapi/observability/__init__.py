@@ -1,10 +1,9 @@
-"""Observability (D13): structured logs, RED metrics, and traces.
+"""Structured logs, RED metrics and traces.
 
-Ordering principle used throughout: instrument at the STAGE boundary, not inside the
-stage. The pipeline stages already return timings (S3/S6); this package turns those into
-metrics and log fields without the pipeline importing Prometheus or structlog. Business
-logic stays free of observability plumbing, and observability stays swappable (D13's
-"OTel is vendor-neutral, that's why it's first").
+Instrument at the stage boundary, not inside the stage. The pipeline stages already return
+timings; this package turns those into metrics and log fields without the pipeline ever
+importing Prometheus or structlog. Business logic stays free of plumbing, and the backend
+stays swappable.
 """
 
 from medapi.observability.logging import configure_logging, fingerprint, get_logger

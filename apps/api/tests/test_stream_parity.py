@@ -1,6 +1,6 @@
-"""S10.6a — the streaming and non-streaming endpoints must enforce the SAME controls.
+"""The streaming and non-streaming endpoints must enforce the same controls.
 
-WHY THIS FILE EXISTS
+Why this file exists
 --------------------
 `query_stream()` shipped with none of the cross-cutting controls `query()` had: no rate
 limiting, no kill switch, no cache, no spend accounting, no history, no session. Measured
@@ -96,7 +96,7 @@ class _History:
     ) -> list[Message]:
         """Condense reads the THREAD, not the whole session: a session is a browser
         identity, a conversation is a train of thought, and only the second gives a
-        pronoun its referent (S20.9)."""
+        pronoun its referent."""
         return await self.load(session_id)
 
     async def load(self, session_id: UUID) -> list[Message]:
@@ -222,9 +222,7 @@ def _post(client: TestClient, path: str, **extra: Any) -> Any:
     return client.post(path, json=body)
 
 
-# --------------------------------------------------------------------------------------
 # THE REGRESSION: rate limiting must apply to BOTH paths.
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize("path", BOTH_ENDPOINTS)
 def test_rate_limit_applies_to_both_endpoints(path: str) -> None:
     client, _ = build_client(limit=3)
@@ -248,9 +246,7 @@ def test_quota_rejection_is_a_real_http_status(path: str) -> None:
     assert "event:" not in rejected.text, "quota failure was delivered in-band, not as a status"
 
 
-# --------------------------------------------------------------------------------------
 # The other controls, asserted on both paths.
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize("path", BOTH_ENDPOINTS)
 def test_session_cookie_is_set_on_both(path: str) -> None:
     client, _ = build_client()
@@ -289,7 +285,7 @@ def test_cache_hit_short_circuits_both(path: str) -> None:
 @pytest.mark.parametrize("path", BOTH_ENDPOINTS)
 def test_kill_switch_degrades_on_both(path: str) -> None:
     """With generation disabled both paths must return DEGRADED — never an error, and
-    never a normal answer. Before S10.6a the kill switch did nothing at all for browser
+    never a normal answer. Before the kill switch did nothing at all for browser
     traffic, so a cost incident could not actually be stopped."""
     client, _ = build_client(llm_enabled=False)
     response = _post(client, path)
@@ -301,9 +297,7 @@ def test_kill_switch_degrades_on_both(path: str) -> None:
         assert response.json()["kind"] == AnswerKind.DEGRADED.value
 
 
-# --------------------------------------------------------------------------------------
-# S10.8 — a READ must not mint a session.
-# --------------------------------------------------------------------------------------
+# — a READ must not mint a session.
 def test_history_read_does_not_mint_a_session() -> None:
     """Found via an intermittently-failing browser test.
 
@@ -333,13 +327,11 @@ def test_history_read_still_serves_an_established_session() -> None:
     assert len(services.history.turns) == 1
 
 
-# --------------------------------------------------------------------------------------
-# S20b — conversation_id is caller-supplied, so BOTH paths must authorise it.
+# — conversation_id is caller-supplied, so BOTH paths must authorise it.
 #
 # The failure this prevents is a WRITE-side IDOR, which is worse than the read-side one:
 # a thread is prompt context, so appending a turn to a stranger's conversation puts text
 # of the attacker's choosing into what that person's next request sends to the model.
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize("path", BOTH_ENDPOINTS)
 def test_an_unowned_thread_is_rejected_on_both_endpoints(path: str) -> None:
     client, svc = build_client(conversations=_Conversations(owned={uuid4()}))
@@ -362,7 +354,7 @@ def test_an_owned_thread_is_persisted_on_both_endpoints(path: str) -> None:
 
 @pytest.mark.parametrize("path", BOTH_ENDPOINTS)
 def test_an_unverifiable_thread_still_answers_on_both_endpoints(path: str) -> None:
-    """D21: a database outage costs history, not the ability to answer.
+    """a database outage costs history, not the ability to answer.
 
     "Cannot prove ownership" must resolve to "write no thread", never to "allow" — the
     answer is still served, and nothing lands in anyone's conversation."""

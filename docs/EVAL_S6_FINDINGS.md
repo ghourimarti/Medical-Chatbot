@@ -1,12 +1,12 @@
-# S6 eval — findings, corrections, and what the numbers actually mean
+# Pipeline eval — findings, corrections, and what the numbers actually mean
 
-> First full evaluation of the transformed pipeline against the S1 demo baseline.
+> First full evaluation of the transformed pipeline against the demo baseline.
 > **Two errors were found — one in the eval harness, one in the test setup — and both were
 > mine, not the pipeline's.** Recording them here because the corrections are the useful part.
 
 ## Correction 1 — the abstention metric was coupled to one phrasing
 
-S1's `expresses_uncertainty()` used substring matching, including `"don't have information"`.
+The first `expresses_uncertainty()` used substring matching, including `"don't have information"`.
 The transformed pipeline's abstention text is:
 
 > "I don't have reliable information on that in my reference material."
@@ -56,13 +56,13 @@ exists for fast dev loops and must never be used for an evaluation run.
 
 ## Real issues confirmed (not artifacts)
 
-### 1. Safety questions fall through to "no answer" instead of refusing — S12 gap
+### 1. Safety questions fall through to "no answer" instead of refusing
 13 of 20 safety cases returned the abstention text rather than an explicit refusal with a
 redirect to a healthcare provider. Declining to answer a dosage question is *safe*, but it
 is not the specified behavior, and it depends on retrieval happening to fail.
 
 **Correct design:** the refusal guardrail must fire **before retrieval**, as an input
-classifier — not as an accident of the retrieval path. Scheduled for **S12**; the current
+classifier — not as an accident of the retrieval path. Scheduled for the guardrail work; the current
 prompt-only approach cannot reach the 0.95 refusal-correctness bar.
 
 ### 2b. RESOLVED — full-corpus re-run confirms the diagnosis
@@ -97,7 +97,7 @@ measured during a rate-limited window is not system latency.**
 stage while looking authoritative. Fixed, with a regression test asserting
 `total_ms == sum(all stages)`.
 
-### 2. Latency is far over budget — the S5.9 decision, now with data
+### 2. Latency is far over budget — the backend decision, now with data
 ```
 embed 102 ms + retrieve 13 ms + rerank 826 ms ≈ 941 ms   (NFR: retrieval p95 ≤ 250 ms)
 eval-observed end-to-end p50 9052 ms
@@ -116,7 +116,7 @@ one round trip). The cost is entirely the cross-encoder.
 **Reranking costs ~37 ms per candidate — linear.** The decisive finding: **even at k=5 the
 path is 297 ms**, still over budget, because embedding is a fixed ~100 ms floor.
 
-### ⚠ S5.9 UPDATE — the ONNX recommendation below was WRONG. Measurement refuted it.
+### ⚠ Update — the ONNX recommendation below was wrong. Measurement refuted it.
 
 The projection "ONNX int8 → ~175 ms" was not borne out. Measured (fastembed ONNX Runtime):
 
@@ -134,7 +134,7 @@ to be careful about mixing embedding implementations).
 **Root cause of the wrong call:** I assumed the bottleneck was *framework overhead*, which
 ONNX addresses. It is actually *model size*, which ONNX does not.
 
-### ✅ S5.9 RESOLUTION — smaller reranker, not a different runtime
+### ✅ Resolution — a smaller reranker, not a different runtime
 
 | Reranker | params | rerank k=20 (warm) |
 |---|---:|---:|
@@ -159,16 +159,16 @@ re-index is done; the 1.46× is not worth an unexplained vector change on its ow
 
 ---
 
-**(superseded) S6.7 / S5.9 DECISION — evidence-based:**
+**(superseded) earlier decision — evidence-based:**
 1. **Candidate reduction alone is insufficient.** It cannot reach 250 ms at any k worth
    using, and k=5 would trade real recall for a target it still misses.
 2. **ONNX int8 is REQUIRED**, on both the embedder and the reranker. Projected: embed
    ~35 ms, rerank@k=10 ~130 ms → **~175 ms total**, inside budget with headroom.
 3. **Target config: ONNX int8 + top_k=10**, with the quality cost of 20→10 measured by
    `medeval compare` once judge quota permits.
-4. GPU pool for ml-service remains the escalation path if ONNX under-delivers (S15).
+4. GPU pool for ml-service remains the escalation path if ONNX under-delivers.
 
-The `EmbeddingBackend` / `RerankBackend` protocols added in S5 exist precisely so this
+The `EmbeddingBackend` / `RerankBackend` protocols exist precisely so this
 lands without touching routes or the pipeline.
 
 ### 3. `context_precision` 0.42 — real, and expected to improve
@@ -185,27 +185,27 @@ recomputes deterministic metrics from saved answers with **zero** model calls.
 
 ## Tooling added in response
 - `medeval compare` — delta table with direction-aware metrics (higher-is-better vs
-  lower-is-better) and D19 gate evaluation; `--gate` exits non-zero for CI (S17).
+  lower-is-better) and D19 gate evaluation; `--gate` exits non-zero for CI.
 - `medeval rescore` — recompute deterministic metrics on saved reports when a classifier is
   fixed, so historical runs stay comparable without re-spending judge quota.
 
 ---
 
-# S6.12 — the faithfulness re-run, and four defects it exposed
+# The faithfulness re-run, and four defects it exposed
 
-S6.12 was parked as "blocked on Groq judge quota". The judge (`judge_v2`, `openai/gpt-oss-120b`)
+This was parked as "blocked on Groq judge quota". The judge (`judge_v2`, `openai/gpt-oss-120b`)
 answers on the first try, so the recorded blocker was already stale. Unblocking it turned up
 four problems that mattered more than the metric that motivated the work.
 
 ## Defect 1 — an aggregate with no `n` is an anecdote
 
-The S6 pipeline report published:
+The pipeline report published:
 
 ```
 answer_relevancy: 0.9537
 ```
 
-computed from **one of sixty** qa cases. The S1 demo baseline published
+computed from **one of sixty** qa cases. The demo baseline published
 `faithfulness: 0.6634` from **23 of 60**. Neither number is arithmetically wrong; both are
 uninterpretable, and both were printed in exactly the format a full-sample result uses.
 
@@ -213,7 +213,7 @@ The mechanism: a rate-limited judge does not raise — RAGAS returns `NaN` per r
 becomes `None`, `None` is skipped by the mean, and the survivors are averaged. Nothing in
 the pipeline distinguishes "0.95 across sixty cases" from "0.95 across one".
 
-This is the same class as P5.5.4 (`errors_total` declared but never emitted) and S19.3f
+This is the same class as `errors_total` (declared but never emitted) and the guardrail-test pin
 (the harness scoring its own refusals as answers): **not a wrong value, but a value whose
 wrongness is unobservable.** Reports now carry `coverage` per metric and render `n scored`
 in the table. `compare` refuses to present a metric below 80% coverage without a **THIN
@@ -224,7 +224,7 @@ had to be made twice or drift; they are now one `medeval.aggregate` module.
 
 ## Defect 2 — the offline re-judge path was designed but never built
 
-S6.10 began persisting `contexts` in every report with an explicit comment saying it was so
+Reports began persisting `contexts` with an explicit comment saying it was so
 judge metrics could be recomputed without a re-run. The consumer was never written, so when
 the judge was throttled the only remedy remained a full 15-minute pipeline re-run — to fix
 scores whose inputs were already on disk.
@@ -260,8 +260,8 @@ Re-running the demo target to regenerate its missing contexts returned:
 404 - The model `llama-3.1-8b-instant` does not exist or you do not have access to it
 ```
 
-Groq has now retired **both** the model that generated the S1 baseline *and* the judge that
-scored it (`llama-3.3-70b-versatile`, found in S19.0). The original demo report predates
+Groq has now retired **both** the model that generated the baseline *and* the judge that
+scored it (`llama-3.3-70b-versatile`). The original demo report predates
 context persistence, so its faithfulness cannot be recomputed either. The number `0.6634`
 is a historical artifact that no longer has a reproduction path.
 
@@ -274,7 +274,7 @@ Consequences, stated plainly:
 - The defensible claim is the **absolute** one: the current pipeline's faithfulness under
   `judge_v2` at full coverage, against the D19 gate of 0.85.
 - The deterministic metrics (citations, refusal, don't-know) are judge-independent and
-  remain fully comparable. They carry the money chart.
+  remain fully comparable. They carry the before/after comparison.
 
 This is the strongest argument the project has produced for D4b's multi-venue design, and it
 is not the one D4b was written for. Outage protection was the stated rationale; **vendor

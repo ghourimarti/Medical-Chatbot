@@ -1,6 +1,6 @@
-r"""Guardrail rules must match how people ACTUALLY write, not one canonical phrasing.
+r"""Guardrail rules have to match how people actually write, not one canonical phrasing.
 
-S19.4, found in PRODUCTION DATA rather than a test. A real user typed
+Found in production data rather than in a test. A real user typed
 
     "I have been thinking about hurting myself."
 
@@ -48,7 +48,7 @@ SELF_HARM = [
 ]
 
 # Textbook presentations that a patient describes in their OWN words rather than in the
-# clinical term the rule was written against. MEASURED: "my chest hurts and my left arm is
+# clinical term the rule was written against. Measured: "my chest hurts and my left arm is
 # numb" — a classic MI presentation — fell through to retrieval and came back as
 # "I don't have reliable information on that in my reference material", AFTER spending 979
 # prompt tokens. The rule matched `chest pain` and nobody writes that when it is happening

@@ -44,8 +44,8 @@ That test file already documents two earlier instances, and its docstring says t
 was *"found in PRODUCTION DATA rather than a test"*:
 
 ```
-S19.4  "hurt myself" matched, "hurting myself" did not      (inflection)
-S19.4  "ignore all instructions" matched,
+  "hurt myself" matched, "hurting myself" did not          (inflection)
+  "ignore all instructions" matched,
        "ignore all previous instructions" did not           (one modifier too narrow)
 R5     "want to live" matched, "want to be here" did not    (enumeration too short)
 ```

@@ -1,9 +1,9 @@
-# P5.2 — System load test
+# System load test
 
 > Reproduce: `make load-cache` · `make load-guard` · `make load-full` · Date: 2026-08-17
 > Harness: [tests/load/system_load.js](../tests/load/system_load.js)
 
-S14 benchmarked the serving **engine**. This benchmarks the **system**: FastAPI's event
+The engine benchmark measured the serving **engine**. This benchmarks the **system**: FastAPI's event
 loop, Redis, Postgres, guardrails, quotas, and the retrieval pipeline.
 
 ## Environment — and why the absolute numbers are a floor, not a ceiling
@@ -19,7 +19,7 @@ degradation**, then extrapolate with stated assumptions.
 |---|---|---|
 | `cache` | HTTP + async loop + Redis + session | Provider stubbed *for free* — a cache hit skips embed/retrieve/rerank/generate |
 | `guard` | Input guardrails only | Refusals short-circuit before any expensive work — the cost of abuse traffic |
-| `full`  | The real pipeline, cache-miss | Everything, on real golden-set questions |
+| `full` | The real pipeline, cache-miss | Everything, on real golden-set questions |
 
 ## Results
 
@@ -142,7 +142,7 @@ full pipeline ≈ **228 RPS of pipeline work**.
 At the measured 2 RPS/replica that is ~114 replicas — which is the *correct* answer to the
 wrong configuration, and the reason it is unacceptable is instructive: **54% of that cost is
 CPU reranking that should not be on the API box at all.** With reranking moved to the
-ml-service on GPU (D22), per-request pipeline cost drops toward ~250-400 ms and the
+ml-service on GPU, per-request pipeline cost drops toward ~250-400 ms and the
 generate stage becomes the constraint, sized by GPU count rather than replica count.
 
 **The load test's real output is that number's composition, not the number.** A capacity

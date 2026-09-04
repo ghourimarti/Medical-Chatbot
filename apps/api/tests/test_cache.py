@@ -1,4 +1,4 @@
-"""S8: caching rules and quota behaviour (D10, D20, D21).
+"""caching rules and quota behaviour.
 
 Uses a fake Redis rather than a live one: the behaviours under test are policy decisions
 (what may be cached, what happens when Redis dies), not Redis semantics.
@@ -66,7 +66,7 @@ def _grounded(text: str = "An abscess is a pus-filled area [1].") -> Answer:
     )
 
 
-# --- normalization -----------------------------------------------------------------
+# normalization
 
 
 def test_normalization_is_conservative() -> None:
@@ -78,7 +78,7 @@ def test_normalization_is_conservative() -> None:
     assert normalize_question("is it cancer?") != normalize_question("is it not cancer?")
 
 
-# --- response cache ----------------------------------------------------------------
+# response cache
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_unsafe_answers_are_never_cached(kind: AnswerKind) -> None:
 
 @pytest.mark.asyncio
 async def test_version_bump_invalidates_without_a_purge() -> None:
-    """D10 Gate C: invalidation is version-key composition. A prompt/corpus/model change
+    """Invalidation is version-key composition. A prompt/corpus/model change
     makes old entries unreachable atomically — no purge job, no stale-serve window."""
     redis = FakeRedis()
     old = ResponseCache(redis, "medbot:pv1:cv1:iv1:m8b")
@@ -116,7 +116,7 @@ async def test_version_bump_invalidates_without_a_purge() -> None:
 
 @pytest.mark.asyncio
 async def test_cache_fails_open_when_redis_is_down() -> None:
-    """D21: Redis down => slower and costlier, never wrong or unavailable."""
+    """Redis down => slower and costlier, never wrong or unavailable."""
     cache = ResponseCache(FakeRedis(broken=True), "ns:v1")
     assert await cache.get("q") is None  # miss, not an exception
     assert await cache.set("q", _grounded()) is False
@@ -130,7 +130,7 @@ async def test_cache_disabled_without_redis() -> None:
     assert await cache.set("q", _grounded()) is False
 
 
-# --- embedding cache ---------------------------------------------------------------
+# embedding cache
 
 
 @pytest.mark.asyncio
@@ -150,7 +150,7 @@ async def test_embedding_cache_fails_open() -> None:
     assert await cache.set("q", [0.1] * 1024) is False
 
 
-# --- rate limiting -----------------------------------------------------------------
+# rate limiting
 
 
 @pytest.mark.asyncio
@@ -189,11 +189,11 @@ async def test_limiter_without_redis_still_limits() -> None:
         await limiter.check("s", scope="minute", limit=1, window_seconds=60)
 
 
-# --- S19.4: the semantic cache decision, pinned -------------------------------------
+# the semantic cache decision, pinned
 
 
 def test_semantic_cache_stays_off_by_default() -> None:
-    """S19.4 measured it and said no (docs/SEMANTIC_CACHE.md). Flipping this default is a
+    """Measured and declined (docs/SEMANTIC_CACHE.md). Flipping this default is a
     patient-safety decision, not a performance tweak: at a threshold loose enough to be
     useful (~0.92) the margin above a known-dangerous pair is 0.007, which is thinner than
     the sampling error on the 15-pair adversarial set that produced it."""
@@ -203,7 +203,7 @@ def test_semantic_cache_stays_off_by_default() -> None:
 
 
 def test_no_semantic_cache_implementation_exists() -> None:
-    """Guards against the defect S19.4 found in the docstring rather than the code: the
+    """Guards against the defect found in the docstring rather than the code: the
     comment claimed a semantic cache was 'implemented but disabled' when none existed. If
     someone builds one, this test fails and forces docs/SEMANTIC_CACHE.md to be revisited
     along with the threshold evidence — rather than the layer arriving silently."""

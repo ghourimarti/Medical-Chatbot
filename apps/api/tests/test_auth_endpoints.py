@@ -1,4 +1,4 @@
-"""S20b: identity verification and the conversation endpoints (D24, D25).
+"""identity verification and the conversation endpoints.
 
 Uses a STUB verifier rather than a Clerk account, so the authorisation rules are provable
 today instead of "once someone configures an identity provider". That is the reason
@@ -144,9 +144,7 @@ def _auth(token: str) -> dict[str, str]:
 CONVOS = "/api/v1/conversations"
 
 
-# ---------------------------------------------------------------------------------------
 # The rule: present-but-invalid is 401, never a silent downgrade
-# ---------------------------------------------------------------------------------------
 async def test_an_invalid_token_is_401_not_anonymous(app_factory: Factory) -> None:
     """Downgrading a bad token to anonymous hides an attack (a forged token looks exactly
     like a signed-out visitor) AND confuses an honest user whose session expired: they stay
@@ -184,9 +182,7 @@ def test_a_malformed_authorization_header_is_treated_as_absent() -> None:
     assert bearer_token("Bearer tok") == "tok"
 
 
-# ---------------------------------------------------------------------------------------
 # Ownership over HTTP
-# ---------------------------------------------------------------------------------------
 async def test_one_user_gets_404_not_403_for_anothers_conversation(
     app_factory: Factory,
 ) -> None:
@@ -222,9 +218,7 @@ async def test_a_user_only_lists_their_own(app_factory: Factory) -> None:
     assert his["conversations"] == []
 
 
-# ---------------------------------------------------------------------------------------
 # The sign-in seam, end to end
-# ---------------------------------------------------------------------------------------
 async def test_signing_in_claims_the_anonymous_conversation(app_factory: Factory) -> None:
     """One browser: ask anonymously, then sign in. The conversation must survive — it is
     usually the reason the person signed up."""
@@ -265,9 +259,7 @@ async def test_claiming_while_anonymous_is_a_no_op(app_factory: Factory) -> None
     assert body == {"claimed": 0, "signed_in": False}
 
 
-# ---------------------------------------------------------------------------------------
 # Deletion reports evidence
-# ---------------------------------------------------------------------------------------
 async def test_delete_reports_how_many_messages_it_removed(app_factory: Factory) -> None:
     async with app_factory(StubVerifier({"alice": "clerk|alice"})) as client:
         created = await client.post(CONVOS, json={"title": "x"}, headers=_auth("alice"))
@@ -280,14 +272,12 @@ async def test_delete_reports_how_many_messages_it_removed(app_factory: Factory)
     assert gone.status_code == 404
 
 
-# ---------------------------------------------------------------------------------------
-# resolve_thread — the authorisation seam the QUERY path uses (S20b)
+# resolve_thread — the authorisation seam the QUERY path uses
 #
 # test_stream_parity.py proves both endpoints CALL this and honour its three outcomes, but
 # it does so against a stub. These exercise the real service, because the interesting case
 # — "the database is unreachable, so ownership cannot be proven" — is a property of this
 # implementation and would not be caught by a stub that hardcodes the answer.
-# ---------------------------------------------------------------------------------------
 async def test_resolve_thread_accepts_a_thread_the_caller_owns(app_factory: Factory) -> None:
     async with app_factory(StubVerifier({"alice": "clerk|alice"})) as client:
         created = await client.post(CONVOS, json={"title": "mine"}, headers=_auth("alice"))
@@ -301,7 +291,7 @@ async def test_resolve_thread_accepts_a_thread_the_caller_owns(app_factory: Fact
     # Same id, different caller: rejected, and by the SAME error the read path uses.
     with pytest.raises(ConversationNotFound):
         await svc.resolve_thread(stranger, cid)
-    # No thread requested is always fine — the anonymous path (D24).
+    # No thread requested is always fine — the anonymous path.
     assert await svc.resolve_thread(owner, None) is None
 
 
@@ -324,9 +314,7 @@ async def test_resolve_thread_degrades_rather_than_authorising_when_the_db_is_do
     assert await svc.resolve_thread(caller, uuid.uuid4()) is None
 
 
-# ---------------------------------------------------------------------------------------
-# Accounts health is an OPERATOR fact (D21, D24)
-# ---------------------------------------------------------------------------------------
+# Accounts health is an OPERATOR fact
 async def test_accounts_health_is_reported_without_touching_the_request_path() -> None:
     """Three independent facts, because they fail independently: identity can be
     unconfigured, storage can be down, and the JWKS can be unreachable while the other two

@@ -1,4 +1,4 @@
-"""S20: users, conversations, and the anonymous-to-signed-in seam (D24, D25).
+"""users, conversations, and the anonymous-to-signed-in seam.
 
 Runs against a real Postgres; skips if unreachable. The CHECK constraint and the FK cascade
 are half the design, and neither exists in SQLite — testing this against a fake would verify
@@ -87,9 +87,7 @@ async def engine() -> AsyncEngine:  # type: ignore[misc]
     await eng.dispose()
 
 
-# ---------------------------------------------------------------------------------------
 # Users
-# ---------------------------------------------------------------------------------------
 async def test_user_upsert_is_idempotent(engine: AsyncEngine) -> None:
     """One human, one row. Two rows for one subject would split their history in half, and
     nothing would report an error — the user would simply find half their conversations."""
@@ -103,7 +101,7 @@ async def test_user_upsert_is_idempotent(engine: AsyncEngine) -> None:
 
 
 async def test_users_store_no_pii_beyond_the_subject(engine: AsyncEngine) -> None:
-    """Data minimisation (D18): the table must not grow an email or name column without a
+    """Data minimisation: the table must not grow an email or name column without a
     deliberate decision, because each one is a deletion obligation and a breach surface."""
     async with engine.connect() as conn:
         cols = {
@@ -118,9 +116,7 @@ async def test_users_store_no_pii_beyond_the_subject(engine: AsyncEngine) -> Non
     assert cols == {"id", "auth_subject", "created_at", "last_seen_at"}, cols
 
 
-# ---------------------------------------------------------------------------------------
 # Ownership — the security property
-# ---------------------------------------------------------------------------------------
 async def test_a_conversation_cannot_be_ownerless(engine: AsyncEngine) -> None:
     factory = build_session_factory(engine)
     async with session_scope(factory) as s:
@@ -178,9 +174,7 @@ async def test_a_session_cannot_read_a_claimed_conversation(engine: AsyncEngine)
         assert await convos.owned_by(convo_id, user_id=user_id, session_id=None) is not None
 
 
-# ---------------------------------------------------------------------------------------
 # The sign-in seam
-# ---------------------------------------------------------------------------------------
 async def test_signing_in_claims_the_anonymous_conversation(engine: AsyncEngine) -> None:
     """The conversation someone just had is usually the reason they signed up. Losing it at
     the moment of sign-in is the worst possible time to lose it."""
@@ -229,9 +223,7 @@ async def test_claiming_never_steals_an_already_claimed_conversation(
         assert (await convos.owned_by(convo_id, user_id=second_id, session_id=None)) is None
 
 
-# ---------------------------------------------------------------------------------------
 # Deletion — provable, not merely claimed
-# ---------------------------------------------------------------------------------------
 async def test_deleting_a_conversation_removes_its_messages_and_says_how_many(
     engine: AsyncEngine,
 ) -> None:

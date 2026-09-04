@@ -1,4 +1,4 @@
-"""Vector-store adapter contracts (P6.3.5).
+"""Vector-store adapter contracts.
 
 Read path and ingestion path have DIFFERENT rights over the collection: the API
 may only verify, the worker may create. These tests pin that boundary.
@@ -6,7 +6,7 @@ may only verify, the worker may create. These tests pin that boundary.
 
 import pytest
 
-# --- P6.3.5: the read path must verify, never create -------------------------------
+# the read path must verify, never create
 
 class _FakeQdrant:
     """Minimal stand-in: records whether create_collection was ever called."""
@@ -44,7 +44,7 @@ def _store(fake: _FakeQdrant):
 
 
 async def test_verify_refuses_to_create_a_missing_collection() -> None:
-    """The API must never create `gale_live`: that name belongs to the D11 alias, and
+    """The API must never create `gale_live`: that name belongs to the alias, and
     Qdrant forbids an alias sharing a name with a collection. Auto-creating it on a fresh
     cluster permanently blocks the zero-downtime swap."""
     fake = _FakeQdrant(exists=False)
@@ -68,13 +68,13 @@ async def test_ingestion_path_may_still_create() -> None:
 
 async def test_health_is_false_for_an_empty_index() -> None:
     """An empty index cannot answer anything, so readiness must not claim it can —
-    the query path already treats zero candidates as a fault (P5.3.6)."""
+    the query path already treats zero candidates as a fault."""
     assert await _store(_FakeQdrant(exists=True, points=0)).health() is False
     assert await _store(_FakeQdrant(exists=True, points=7080)).health() is True
     assert await _store(_FakeQdrant(exists=False)).health() is False
 
 
-# --- P6.5.4: readiness must mean "can answer a query" ------------------------------
+# readiness must mean "can answer a query"
 
 async def test_readiness_fails_when_embedder_is_down() -> None:
     """With ml-service unreachable the API returned READY while every query 503'd.
@@ -112,7 +112,7 @@ async def test_readiness_fails_when_embedder_is_down() -> None:
     assert r.status_code == 200
 
 
-# --- S10.2c: the PUBLIC status surface -------------------------------------------
+# the PUBLIC status surface
 
 async def test_public_status_reports_ok_degraded_and_unavailable() -> None:
     """The status page drives a user-facing banner, so its three states must be distinct

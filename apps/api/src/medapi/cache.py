@@ -1,30 +1,22 @@
-"""Caching layers (D10, D20).
+"""Caching layers.
 
-At the Phase-1 target a 25-35% hit rate is worth ~$4-6k/month, which makes this an
-economic component rather than an optimization. But the medical domain inverts the usual
-priority: **a wrong cache hit is a patient-safety bug, not a stale page.** Three rules
-follow, and the type system already carries two of them:
+At the full-load target a 25-35% hit rate is worth ~$4-6k/month, so this is an economic
+component rather than an optimisation. The medical domain flips the usual priority though:
+a wrong cache hit is a safety bug, not a stale page. Three rules follow, and the types
+already carry two of them:
 
-  1. Only GROUNDED answers are cacheable — never a refusal, no-answer, or degraded
-     response. `Answer.is_cacheable` (S2) encodes this; the cache only has to respect it.
-  2. Invalidation is VERSION-KEY COMPOSITION, never a manual purge. Keys are namespaced by
-     prompt + corpus + index + model version (`Settings.cache_namespace`, S2 Gate C), so
-     bumping any version makes every stale entry unreachable atomically.
-  3. FAIL-OPEN. Redis down means slower and more expensive, never wrong or unavailable.
+  1. Only grounded answers are cacheable, never a refusal, no-answer or degraded response.
+     `Answer.is_cacheable` encodes that; the cache just respects it.
+  2. Invalidation is version-key composition, never a manual purge. Keys are namespaced by
+     prompt + corpus + index + model version, so bumping any of them makes stale entries
+     unreachable atomically.
+  3. Fail open. Redis down means slower and more expensive, never wrong or unavailable.
 
-There is NO semantic cache. Only the two exact-match layers below ship, and S19.4 decided
-against building the third — see docs/SEMANTIC_CACHE.md for the measurements.
-
-(An earlier version of this docstring claimed the semantic cache "is implemented but ships
-DISABLED". It never was: `semantic_cache_enabled` and `semantic_cache_threshold` exist in
-Settings and are referenced nowhere else in the codebase. Corrected in S19.4 — a comment
-that overstates what exists is worse than no comment, because it stops anyone looking.)
-
-The same docstring also justified D10's guard by asserting that "aspirin dose adult" and
-"aspirin dose child" sit closer than 0.95 in embedding space. Measured with the production
-embedder (bge-large-en-v1.5, query prefix, L2-normalised): **0.8235**. The premise was
-wrong, and the real obstacle turned out to be the opposite of the one feared — see
-`packages/eval/tools/semantic_cache_probe.py`.
+There is no semantic cache: only the two exact-match layers below ship. See
+docs/SEMANTIC_CACHE.md for the measurements behind that, and
+`packages/eval/tools/semantic_cache_probe.py` for the probe. Worth noting the original
+premise was wrong: "aspirin dose adult" vs "aspirin dose child" measures 0.8235 with the
+production embedder, not the >0.95 that was assumed.
 """
 
 from __future__ import annotations
@@ -102,7 +94,7 @@ class ResponseCache:
 
 
 class EmbeddingCache:
-    """Query-embedding cache — small, safe, and pure upside.
+    """Query-embedding cache: small, safe, pure upside.
 
     Embeddings are a deterministic function of (text, model), so unlike answers there is no
     correctness risk at all. Vectors are stored as packed float32 (~4KB for 1024 dims)

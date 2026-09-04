@@ -1,12 +1,12 @@
-"""The RAG query pipeline as an LCEL chain of SELF-AUTHORED runnables (D6 v2.1).
+"""The RAG query pipeline, an LCEL chain of self-authored runnables.
 
-Every stage is a plain async function wrapped as a RunnableLambda; they compose with `|`.
-LCEL supplies composition/streaming/batching plumbing — never hidden business logic. No
-prebuilt chain (RetrievalQA, create_retrieval_chain) is used or importable (ruff-banned):
-that opacity is exactly what let demo's k=1 ship unexamined.
+Every stage is a plain async function wrapped as a RunnableLambda, composed with `|`. LCEL
+supplies the composition, streaming and batching plumbing and nothing else. Prebuilt chains
+(RetrievalQA, create_retrieval_chain) are ruff-banned: that kind of opacity is what let the
+original k=1 ship unexamined.
 
-S3 pipeline: embed -> retrieve -> (no-answer gate) -> build_context -> generate.
-Reranking/hybrid (S6), streaming (S4), and caching (S8) slot in as added stages later.
+Order: condense -> embed -> retrieve -> rerank -> no-answer gate -> build_context ->
+generate.
 """
 
 from __future__ import annotations
@@ -52,18 +52,18 @@ logger = logging.getLogger("medapi.pipeline")
 
 
 class SparseEncoder(Protocol):
-    """Minimal structural contract for BM25 encoding — keeps the pipeline free of any
-    fastembed/qdrant import (the medcore no-vendor-SDK rule, applied one layer out)."""
+    """Minimal structural contract for BM25 encoding, so the pipeline needs no
+    fastembed or qdrant import of its own."""
 
     def encode_query(self, text: str) -> object: ...
 
 
 NO_ANSWER_TEXT = "I don't have reliable information on that in my reference material."
 
-# The model is instructed to emit NO_ANSWER_TEXT when the context is insufficient. When it
-# does, the answer is NOT grounded even though retrieval cleared the (coarse, dense-only)
-# threshold — so we relabel it NO_ANSWER and drop the (irrelevant) citations. S6's hybrid
-# retrieval + reranker + tuned threshold makes the retrieval-side gate do more of this work.
+# The model emits NO_ANSWER_TEXT when the context is insufficient. When it does, the answer
+# isn't grounded even though retrieval cleared the threshold, so relabel it NO_ANSWER and
+# drop the citations. Hybrid retrieval plus the reranker moves more of this work back onto
+# the retrieval-side gate.
 _ABSTENTION_MARKERS = (
     "don't have reliable information",
     "do not have reliable information",
@@ -84,10 +84,9 @@ class PipelineState:
     # Prior turns, oldest-first. Empty for a first question and for any caller that
     # does not thread history - the pipeline stays usable standalone.
     history: list[Message] = field(default_factory=list)
-    # What RETRIEVAL searches for. Usually identical to `question`; for a follow-up it
-    # is the condensed standalone form. Kept separate on purpose: the user must be
-    # shown, and the model must answer, the question they actually TYPED - not our
-    # rewrite of it.
+    # What retrieval searches for. Usually the same as `question`; for a follow-up it's
+    # the condensed standalone form. Kept separate so the user sees, and the model answers,
+    # the question they actually typed rather than our rewrite of it.
     search_question: str = ""
     query_vector: list[float] = field(default_factory=list)
     chunks: list[RetrievedChunk] = field(default_factory=list)
@@ -117,11 +116,11 @@ _CONTINUATION_RE = re.compile(
 
 
 def is_followup(question: str) -> bool:
-    """Loose test, used to decide whether to ATTEMPT a condense rewrite.
+    """Loose test for whether to attempt a condense rewrite.
 
-    Two signals, both cheap: the question REFERS to something (anaphora), or is too short
-    to name a subject at all ("why?"). Deliberately over-eager — a false positive costs one
-    small rewrite that returns the question unchanged.
+    Two cheap signals: the question refers to something (anaphora), or is too short to name
+    a subject at all ("why?"). Over-eager on purpose, since a false positive costs one small
+    rewrite that returns the question unchanged.
     """
     if len(question.split()) <= 3:
         return True
@@ -129,19 +128,19 @@ def is_followup(question: str) -> bool:
 
 
 def is_context_dependent(question: str) -> bool:
-    """Strict test, used to decide whether the question is SAFE TO CACHE (D10/INFRA-5).
+    """Strict test for whether a question is safe to cache.
 
-    Deliberately NOT the same predicate as `is_followup`, and the difference is the point.
-    The two have opposite cost asymmetries:
+    Not the same predicate as `is_followup`, and the difference matters, because the two
+    have opposite cost asymmetries:
 
-      condense — a false positive wastes one cheap rewrite. Over-eager is correct.
-      cache    — a false positive permanently disables caching for that question shape.
+      condense  a false positive wastes one cheap rewrite, so over-eager is right.
+      cache     a false positive permanently disables caching for that question shape.
 
-    `is_followup` treats anything of three words or fewer as dependent, which is right for
-    condense and catastrophic here: "What is cirrhosis?" IS three words. Reusing it would
-    have switched off the response cache for the single most common question shape in the
-    product — a large, silent cost increase that no test would have flagged as a failure.
-    Caught by a test asserting the fast path SURVIVES, which is why that test exists.
+    `is_followup` treats three words or fewer as dependent, which suits condense and is
+    wrong here: "What is cirrhosis?" is three words. Reusing it would have switched off the
+    response cache for the most common question shape in the product, a silent cost increase
+    no test would report as a failure. There's a test asserting the fast path survives for
+    exactly that reason.
 
     So this asks the narrower question: does the text point at something outside itself?
     Anaphora does. A one- or two-word fragment ("why?", "and then?") does too, having no
@@ -149,16 +148,15 @@ def is_context_dependent(question: str) -> bool:
     """
     if len(question.split()) <= 2:
         return True
-    # A CONTINUATION opener ("and the treatment?", "what about children?") carries the
-    # subject forward from the previous turn without using a pronoun, so the pronoun test
-    # alone misses it.
+    # A continuation opener ("and the treatment?", "what about children?") carries the
+    # subject forward without a pronoun, so the pronoun test alone misses it.
     if _CONTINUATION_RE.match(question.strip()):
         return True
-    # PRONOUNS ONLY — not the looser `the (condition|treatment|...)` alternation that
-    # `is_followup` uses. That alternation matches "Describe the treatment options for
-    # pneumonia", which names its own subject and is perfectly safe to cache; treating it
-    # as thread-bound would lose the hit on a very ordinary phrasing for no correctness
-    # gain. Anything that reaches here and still refers outward does so with a pronoun.
+    # Pronouns only, not the looser `the (condition|treatment|...)` alternation
+    # `is_followup` uses. That one matches "Describe the treatment options for pneumonia",
+    # which names its own subject and is safe to cache, so treating it as thread-bound
+    # would lose the hit on an ordinary phrasing for no correctness gain. Anything getting
+    # this far and still referring outward does so with a pronoun.
     return bool(_PRONOUN_RE.search(question))
 
 class RagPipeline:
@@ -182,8 +180,8 @@ class RagPipeline:
         self._answer_prompt = load_prompt("answer", settings.prompt_version)
         self._condense_prompt = load_prompt("condense", settings.prompt_version)
         # Self-authored stages, composed with LCEL. Each is inspectable and unit-testable.
-        # Explicit generic params pin the async-callable overload (LCEL's RunnableLambda
-        # stubs otherwise infer Never — the framework-indirection tax D6 acknowledged).
+        # The explicit generic params pin the async-callable overload; RunnableLambda's
+        # stubs otherwise infer Never.
         # Prep = everything up to generation. Shared by both the streaming and
         # non-streaming paths so their answers cannot diverge.
         _RL = RunnableLambda[PipelineState, PipelineState]
@@ -240,8 +238,8 @@ class RagPipeline:
 
         Exists for evaluation (D19): RAGAS faithfulness compares answer claims against the
         retrieved context, so truncated citation snippets would penalize a perfectly
-        grounded answer. The API response deliberately does not carry full passages —
-        that would bloat every user-facing payload to serve an offline concern.
+        grounded answer. The API response doesn't carry full passages, since that would
+        bloat every user-facing payload to serve an offline concern.
         """
         state: PipelineState = await self._chain.ainvoke(PipelineState(question=question))
         assert state.answer is not None
@@ -252,9 +250,9 @@ class RagPipeline:
     ) -> AsyncIterator[SourcesEvent | TokenEvent | DoneEvent]:
         """Streaming counterpart of answer().
 
-        The prep stages (embed -> retrieve -> build_context) are the SAME LCEL chain
-        used by answer() — deliberately shared, so a streamed answer can never drift
-        from its non-streamed equivalent. Only the generate stage differs.
+        The prep stages (embed -> retrieve -> build_context) are the same LCEL chain
+        answer() uses, shared so a streamed answer can't drift from its non-streamed
+        equivalent. Only the generate stage differs.
         """
         t_start = time.perf_counter()
         state: PipelineState = await self._prep_chain.ainvoke(
@@ -273,7 +271,7 @@ class RagPipeline:
             )
             return
 
-        # Citations are known before generation — emit them first (see schema note).
+        # Citations are known before generation, so emit them first.
         yield SourcesEvent(citations=state.citations)
 
         user = self._answer_prompt.render(context=state.context, question=state.question)
@@ -296,10 +294,9 @@ class RagPipeline:
             served["model_id"] = model_id
             served["venue"] = venue
 
-        # Providers report usage in the FINAL SSE frame, long after the first token, so it
-        # cannot be a return value - it arrives through a callback or not at all. Without
-        # capturing it here DoneEvent.usage stayed the empty default, and every streamed
-        # answer was recorded as costing nothing.
+        # Providers report usage in the final SSE frame, long after the first token, so it
+        # can't be a return value: it arrives via callback or not at all. Without capturing
+        # it here DoneEvent.usage stayed empty and every streamed answer looked free.
         usage_seen = Usage()
 
         def _record_usage(u: Usage) -> None:
@@ -307,9 +304,9 @@ class RagPipeline:
             usage_seen = u
 
         ttft_ms: float | None = None
-        # Hold the provider stream so we can close it DETERMINISTICALLY. Relying on GC
-        # to finalize it leaves the provider connection open after a client disconnects,
-        # which means we keep paying for tokens nobody will read (D20).
+        # Hold the provider stream so it can be closed deterministically. Leaving it to GC
+        # keeps the connection open after a client disconnects, so we go on paying for
+        # tokens nobody will read.
         # on_venue exists only on FailoverModel; a plain ModelPort (tests, a single
         # configured venue) must keep working untouched, so it is passed conditionally.
         stream_kwargs: dict[str, Any] = {}
@@ -324,17 +321,18 @@ class RagPipeline:
             temperature=0.2,
             **stream_kwargs,
         )
-        # S10.2b DEFECT FIX: the output dosage net (D18/S12.3) ran ONLY in _generate,
-        # which serves answer(). stream_answer() had no such check — and the browser uses
-        # this path for every question, so the "last line of defence" defended the one
-        # path real users never take. It passed every test because the eval harness calls
-        # answer_verbose() and test_streaming.py asserts nothing about dosages.
+        # The output dosage net used to run only in _generate, which serves answer().
+        # stream_answer() had no check at all, and the browser uses this path for every
+        # question, so the last line of defence covered the one path real users never take.
+        # It passed every test because the eval harness calls answer_verbose() and the
+        # streaming tests assert nothing about dosages.
         #
-        # A stream cannot un-send bytes, so detection stops generation immediately and the
-        # terminal DoneEvent carries the refusal. CONTRACT: done.text is AUTHORITATIVE —
-        # a client MUST discard accumulated tokens whenever done.kind != "grounded".
-        # Scanning the whole buffer per token is O(n^2), bounded by llm_max_output_tokens
-        # (512 -> ~2KB), i.e. microseconds; correctness beats cleverness in a safety net.
+        # A stream can't un-send bytes, so detection stops generation immediately and the
+        # terminal DoneEvent carries the refusal. done.text is authoritative: a client must
+        # discard accumulated tokens whenever done.kind != "grounded".
+        #
+        # Rescanning the whole buffer per token is O(n^2), but bounded by
+        # llm_max_output_tokens (512, so ~2KB) it's microseconds.
         blocked = False
         try:
             async for delta in provider_stream:
@@ -394,12 +392,12 @@ class RagPipeline:
         )
 
     async def _guard(self, state: PipelineState) -> PipelineState:
-        """Input guardrail — the FIRST stage, before any expensive or model-driven work.
+        """Input guardrail, and the first stage, before any expensive or model-driven work.
 
-        S6 measured refusal_correctness at 0.50 because refusals depended on retrieval
-        failing. Classifying here makes the control structural: it cannot be prompt-
-        injected (no model is involved), costs nothing (no GPU or provider call), and
-        is deterministic (D18).
+        An early eval put refusal_correctness at 0.50 because refusals depended on
+        retrieval failing. Classifying here makes the control structural: no model is
+        involved so it can't be prompt-injected, it costs no GPU or provider call, and it
+        is deterministic.
         """
         refusal = classify_input(state.question)
         if refusal is None:
@@ -415,11 +413,10 @@ class RagPipeline:
             ),
         )
 
-    # A follow-up is short and leans on the previous turn. Gating on that shape is
-    # deliberate: an unconditional LLM rewrite would add a model round-trip to EVERY
-    # question, and TTFT is already ~6s because embed+rerank run on CPU before
-    # generation even starts. First questions - the overwhelming majority - must not
-    # pay for a feature they cannot use.
+    # A follow-up is short and leans on the previous turn, so gate on that shape. An
+    # unconditional LLM rewrite adds a model round-trip to every question, and TTFT is
+    # already ~6s with embed and rerank on CPU before generation starts. First questions,
+    # which are most of them, shouldn't pay for a feature they can't use.
     _ANAPHORA = re.compile(
         r"\b(it|its|that|this|those|these|they|them|their|he|she|him|her|"
         r"the (condition|disease|drug|treatment|illness|infection|one))\b",
@@ -431,16 +428,14 @@ class RagPipeline:
         return is_followup(question)
 
     async def _condense(self, state: PipelineState) -> PipelineState:
-        """Rewrite a follow-up into a standalone question, for RETRIEVAL ONLY.
+        """Rewrite a follow-up into a standalone question, for retrieval only.
 
-        S20: "Describe the treatment options for pneumonia." answered correctly, and
-        the follow-up "What causes it?" returned no_answer - because the pipeline
-        embedded the literal string "What causes it?", which matches nothing in a
-        medical encyclopedia. History was stored, shown in the sidebar, and never
-        reached retrieval: a chat UI over a stateless engine. `condense_ms` had been
-        in StageTimings since the schema was written, and was summed into total_ms by
-        a stage that did not exist - the same declared-but-dead shape as trace_answer
-        (I4.3) and the four unwritten metrics (I5.4).
+        "Describe the treatment options for pneumonia." answered correctly while the
+        follow-up "What causes it?" returned no_answer, because the pipeline embedded the
+        literal string "What causes it?", which matches nothing in a medical encyclopedia.
+        History was stored and shown in the sidebar but never reached retrieval: a chat UI
+        over a stateless engine. `condense_ms` had been in StageTimings since the schema was
+        written and was summed into total_ms by a stage that did not exist.
 
         `state.question` is NEVER overwritten. The user is shown, and the model
         answers, what they actually typed; only the retrieval query is rewritten.
@@ -464,24 +459,23 @@ class RagPipeline:
                 max_tokens=self._s.condense_max_tokens,
                 temperature=0.0,
             )
-            # `.splitlines()[0]` on an EMPTY string raises IndexError, and an empty
-            # completion is not hypothetical: a reasoning model given a small max_tokens
-            # spends the whole budget on reasoning and returns "". Measured on
-            # groq/openai/gpt-oss-20b - 64 tokens -> "", 256 tokens -> "What causes
-            # pneumonia?". The except below then swallowed the IndexError as though the
-            # model had failed, so every follow-up in every thread quietly fell back to
-            # searching the literal pronoun.
+            # `.splitlines()[0]` on an empty string raises IndexError, and an empty
+            # completion isn't hypothetical: a reasoning model with a small max_tokens
+            # spends the whole budget reasoning and returns "". On gpt-oss-20b, 64 tokens
+            # gave "" and 256 gave "What causes pneumonia?". The except below then
+            # swallowed the IndexError as if the model had failed, so every follow-up fell
+            # back to searching the literal pronoun.
             lines = completion.text.strip().strip('"').splitlines()
             rewritten = lines[0].strip() if lines else ""
         except Exception:  # noqa: BLE001
-            # Degrade to the literal question rather than failing the request: a
-            # broken rewrite must cost CONTEXT, never the answer (D21).
+            # Degrade to the literal question rather than failing the request. A broken
+            # rewrite should cost context, never the answer.
             logger.warning("condense failed; searching the literal question")
             return state
 
-        # Guard against a model that ignores the instruction and ANSWERS instead of
-        # rewriting. A "rewrite" many times longer than the original is not a rewrite,
-        # and feeding an essay into the embedder would poison retrieval outright.
+        # Guard against a model that ignores the instruction and answers instead of
+        # rewriting. A "rewrite" many times longer than the original isn't one, and feeding
+        # an essay to the embedder poisons retrieval.
         if rewritten and len(rewritten) <= max(200, len(state.question) * 6):
             state.search_question = rewritten
         # model_copy, not dataclasses.replace: StageTimings is a pydantic model. The
@@ -516,22 +510,21 @@ class RagPipeline:
             "query_text": state.search_question or state.question,
             "top_k": self._s.retrieval_top_k,
         }
-        # Hybrid (D3): BM25 sparse alongside dense, fused server-side by RRF. Optional so
-        # the pipeline still works dense-only (tests, or before a hybrid re-index).
+        # BM25 sparse alongside dense, fused server-side by RRF. Optional, so the pipeline
+        # still works dense-only in tests or before a hybrid re-index.
         if self._sparse is not None:
-            # DEGRADE to dense-only rather than failing the request.
+            # Degrade to dense-only rather than failing the request.
             #
-            # S20.10: `Bm25Encoder._model` is a cached_property that constructs
-            # SparseTextEmbedding on FIRST USE, and fastembed downloads the model from
-            # HuggingFace at that moment. Nothing warms it, so the first real query paid
-            # the download - and when the network blipped, the raw httpx ConnectError
-            # propagated out of _retrieve untyped, past every degradation ladder, into the
-            # generic `except Exception` in the stream route. 17 requests were counted as
-            # medbot_errors_total{error_type="unhandled",status="500"}.
+            # `Bm25Encoder._model` is a cached_property that builds SparseTextEmbedding on
+            # first use, and fastembed downloads the model from HuggingFace at that moment.
+            # Nothing warms it, so the first real query paid the download, and when the
+            # network blipped the raw httpx ConnectError propagated out of _retrieve
+            # untyped, past every degradation ladder, into the generic `except Exception`
+            # in the stream route. 17 requests were counted as unhandled 500s.
             #
-            # Dense retrieval alone still answers; losing the sparse half costs RECALL on
-            # keyword-ish queries, which is a quality regression, not an outage. So it is
-            # metered like the reranker fallback instead of being invisible.
+            # Dense retrieval alone still answers. Losing the sparse half costs recall on
+            # keyword-ish queries, which is a quality regression rather than an outage, so
+            # it's metered like the reranker fallback instead of being invisible.
             try:
                 kwargs["sparse_vector"] = await asyncio.to_thread(
                     self._sparse.encode_query, state.search_question or state.question
@@ -557,8 +550,8 @@ class RagPipeline:
     async def _rerank(self, state: PipelineState) -> PipelineState:
         """Cross-encoder rerank of the fused candidates (D3).
 
-        DEGRADES, never fails (D21): if the reranker is down we serve fusion order with a
-        logged quality dip. A reranker outage must not become a user-visible outage.
+        Degrades, never fails: if the reranker is down, serve fusion order and log the
+        quality dip. A reranker outage shouldn't become a user-visible one.
         """
         if self._reranker is None or not state.chunks:
             return state
@@ -570,12 +563,10 @@ class RagPipeline:
                 top_k=self._s.rerank_top_k,
             )
         except RerankerError:
-            # METERED, not just logged. Skipping the reranker changes which passages
-            # ground the answer - it is a quality regression the user cannot see and the
-            # caller is never told about. A log line cannot be graphed or alerted on, so
-            # with RERANK_TIMEOUT below the reranker's own p95 this path became the NORMAL
-            # path while every dashboard stayed green. A degradation that publishes no
-            # signal is indistinguishable from working.
+            # Metered, not just logged. Skipping the reranker changes which passages
+            # ground the answer, and that's a quality regression nobody can see. A log line
+            # can't be graphed or alerted on, so with RERANK_TIMEOUT set below the
+            # reranker's own p95 this became the normal path while dashboards stayed green.
             degradations_total.labels(component="reranker", reason="unavailable").inc()
             logger.warning("reranker unavailable; serving fusion order (quality degraded)")
             return state
@@ -590,38 +581,37 @@ class RagPipeline:
     async def _build_context(self, state: PipelineState) -> PipelineState:
         if state.answer is not None:  # refused upstream
             return state
-        # ZERO candidates is a FAULT, not an abstention (P5.3).
+        # Zero candidates is a fault, not an abstention.
         #
-        # These two used to share a branch, and they mean opposite things. A vector search
-        # over a populated collection always returns its nearest neighbours — however
-        # irrelevant — so "scores were all too low" is a real, correct abstention. Getting
-        # back NOTHING means the collection is empty, missing, or the alias points at
+        # These two used to share a branch and they mean opposite things. A vector search
+        # over a populated collection always returns its nearest neighbours, however
+        # irrelevant, so "scores were all too low" is a real abstention. Getting back
+        # nothing means the collection is empty or missing, or the alias resolves to
         # nothing: the index is unavailable.
         #
-        # Conflating them is the worst failure mode this system has. A broken index would
-        # answer every single question with a confident "I don't have reliable information
-        # on that in my reference material" — indistinguishable, to the user, from a
-        # truthful answer about a gap in the corpus. Every response is 200, no alert fires,
-        # and the service looks perfectly healthy while being uniformly wrong.
+        # Conflating them is the worst failure mode here. A broken index answers every
+        # question with a confident "I don't have reliable information on that in my
+        # reference material", which to a user is indistinguishable from a truthful answer
+        # about a gap in the corpus. Every response is 200, no alert fires, and the service
+        # looks healthy while being uniformly wrong.
         #
-        # Surfaced by the P5.3 Qdrant drill: after a restart, the first query returned
-        # no_answer while the collection was still loading.
+        # Found in a Qdrant drill: after a restart the first query returned no_answer while
+        # the collection was still loading.
         if not state.chunks:
             raise RetrievalError(
                 "retrieval returned zero candidates — the index is empty, missing, or the "
                 "alias resolves to nothing; refusing to report this as 'no information'"
             )
-        # No-answer gate (D3): if nothing cleared the confidence floor, don't generate.
+        # No-answer gate: if nothing cleared the confidence floor, don't generate.
         best = max((c.effective_score for c in state.chunks), default=0.0)
         if best < self._s.no_answer_threshold:
-            # total_ms MUST be summed here too. This path returns before _generate, which
-            # is the only other place that computes it, so `state.timings.total_ms` was
-            # still its 0.0 default - and postflight feeds exactly that number into
-            # medbot_request_duration_seconds. Every free decline therefore observed ZERO
-            # seconds into the latency histogram while really costing ~1.3s of embed +
-            # retrieve + rerank, dragging p95 down and making the service look faster than
-            # it is. Same defect as the one the comment in _generate describes, arrived at
-            # from the other direction: there it under-counted, here it counted nothing.
+            # total_ms has to be summed here too. This path returns before _generate,
+            # which is the only other place that computes it, so `state.timings.total_ms`
+            # was still 0.0, and postflight feeds exactly that into the duration histogram.
+            # Every free decline observed zero seconds while really costing ~1.3s of embed
+            # + retrieve + rerank, dragging p95 down. Same defect as the one _generate
+            # describes, from the other direction: there it under-counted, here it counted
+            # nothing.
             gate_timings = state.timings.model_copy(
                 update={
                     "total_ms": (state.timings.embed_ms or 0)
@@ -653,9 +643,8 @@ class RagPipeline:
             temperature=0.2,
         )
         gen_ms = (time.perf_counter() - t0) * 1000
-        # total_ms must sum EVERY stage. An earlier version omitted rerank_ms and reported
-        # 354ms for a request whose wall time was 1113ms — a metric that hides the single
-        # most expensive stage is worse than no metric, because it looks authoritative.
+        # total_ms sums every stage. An earlier version omitted rerank_ms and reported
+        # 354ms for a request whose wall time was 1113ms.
         timings = state.timings.model_copy(
             update={
                 "generate_ms": gen_ms,
@@ -666,8 +655,8 @@ class RagPipeline:
                 + (state.timings.condense_ms or 0),
             }
         )
-        # OUTPUT guardrail (D18) — last line of defence. If a dosage instruction slipped
-        # past the input rules and the system prompt, it must not reach a user.
+        # Output guardrail, the last line of defence. If a dosage instruction slipped past
+        # the input rules and the system prompt, it must not reach a user.
         if contains_dosage_instruction(completion.text):
             logger.warning("output guardrail blocked a dosage instruction")
             return replace(
@@ -682,23 +671,21 @@ class RagPipeline:
                     timings=timings,
                 ),
             )
-        # An EMPTY completion is an abstention too — and it must be caught BEFORE the
-        # grounded branch below (INFRA-5 #7).
+        # An empty completion is an abstention too, and has to be caught before the
+        # grounded branch below.
         #
-        # `Answer` refuses to construct a grounded answer with no text, and it is right to:
-        # an uncited, wordless "answer" is the one thing this schema exists to prevent. But
-        # the pipeline was handing it exactly that, so a legitimate model behaviour turned
-        # into a ValidationError and a 500 — the user saw a crash where they should have
-        # seen "I don't have reliable information on that".
+        # `Answer` refuses to construct a grounded answer with no text, which is right: an
+        # uncited, wordless answer is what the schema exists to prevent. But the pipeline
+        # was handing it exactly that, so ordinary model behaviour became a ValidationError
+        # and a 500, and the user saw a crash instead of "I don't have reliable information
+        # on that".
         #
-        # Not hypothetical, and not rare enough to ignore: a REASONING model emits its
-        # reasoning inside the token budget and can return "" when the budget runs out
-        # first. Observed on groq/openai/gpt-oss-20b for "Describe the treatment options
-        # for pneumonia." The same root cause as the condense fix above, one stage later.
+        # Not rare either: a reasoning model spends the token budget on reasoning and can
+        # return "" when it runs out. Seen on gpt-oss-20b for "Describe the treatment
+        # options for pneumonia." Same root cause as the condense fix above, one stage on.
         #
-        # NO_ANSWER rather than DEGRADED: from the reader's side nothing is degraded — the
-        # system simply has nothing to say, which is precisely what no_answer means. It is
-        # also the honest label, and honest beats flattering when the subject is medical.
+        # NO_ANSWER rather than DEGRADED, because from the reader's side nothing is
+        # degraded: the system has nothing to say, which is what no_answer means.
         if not completion.text.strip():
             logger.warning(
                 "empty completion from %s; relabelling as no_answer", completion.model_id

@@ -23,9 +23,9 @@ questioned on.
 
 Then stop. That last sentence is the hook — let them pull the thread.
 
-## Senior vs junior: the same task, done two ways
+## The same task, done two ways
 
-| Task | What a junior does | What this repo does | Why it matters |
+| Task | The quick way | What this repo does | Why it matters |
 |---|---|---|---|
 | Prove the rewrite worked | "It looks better" | Measured `demo/` baseline **first**, same harness, same 90 cases | Without a before, there is no after |
 | Pick a reranker | Benchmark blog post | Measured ONNX int8 at **0.95× — slower** and published the refutation of my own proposal | The projection was arithmetic; the number was a stopwatch |

@@ -37,33 +37,22 @@ vectorstore/
 .DS_Store
 Thumbs.db
 
-# Local-only folders (not pushed to repo).
-# LEADING SLASH IS LOAD-BEARING (S17, found by CI): an unanchored `Prompts/` matches a
-# directory of that name at ANY depth, and on Windows the match is case-insensitive — so
-# it also swallowed packages/core/src/medcore/prompts/. The entire safety policy (refusal
-# rules, injection defence, citation requirement) was therefore never in version control,
-# and a fresh clone could not start: `prompt system_v1 not found; available: []`.
-# Silent, because the files existed locally and every local run passed.
+# Local-only folders. The leading slash matters: unanchored `Prompts/` matches a directory
+# of that name at any depth, and case-insensitively on Windows, so it also swallowed
+# packages/core/src/medcore/prompts/ and the safety policy never reached git. A fresh clone
+# then failed to start with `prompt system_v1 not found; available: []`.
 /demo/
 .terraform/
 *.tfstate
 *.tfstate.*
 /Documents/
 
-# --- Node / Next.js (S10.3) ---
-# Every rule below is written with its match-depth INTENDED, not copied from a template.
-# S17-A1: `Prompts/` (no leading slash) matched a directory of that name at ANY depth and
-# silently excluded packages/core/src/medcore/prompts/ — the safety policy never reached git.
-# So: unanchored here means "at any depth, deliberately", because these are generated in
-# every app directory. Anything that must match only at the repo root gets a leading slash.
-# CAUGHT WHILE WRITING THIS BLOCK: git only treats `#` as a comment when it is the FIRST
-# character of a line. `node_modules/   # note` is a pattern that literally matches a path
-# containing that text, so the rule silently does nothing — same failure shape as the
-# python-dotenv `VAR=  # note` finding in I.1. Verified empirically: with trailing comments
-# `git check-ignore apps/web/node_modules/probe.js` reported NOT ignored.
+# Node / Next.js. Unanchored here means "at any depth", which is what we want since these
+# are generated in every app directory. Anything that should match only at the repo root
+# gets a leading slash.
 #
-# Unanchored below = "at any depth", deliberately: these are generated in every app dir.
-# Anything that must match only at the repo root gets a leading slash.
+# Note: git only treats `#` as a comment at the start of a line, so `node_modules/  # note`
+# is a pattern matching a path containing that text, and the rule silently does nothing.
 node_modules/
 .next/
 out/
@@ -71,10 +60,22 @@ next-env.d.ts
 .turbo/
 *.tsbuildinfo
 
-# Playwright (S10.6b)
+# Playwright
 test-results/
 playwright-report/
 
-# HuggingFace cache accidentally committed in b5ae0dd (86 MB safetensors blob, GH001).
+# HuggingFace cache; an 86 MB safetensors blob got committed from here once.
 # Containers use HF_HOME=/models backed by the named `hf_models` volume, never this dir.
 /hub/
+
+# Working notes kept locally, not part of the published repo.
+update_todos*.md
+docs/update_todos*.md
+docs/TRANSFORMATION_PLAN.md
+docs/learn/
+docs/learn_docs/
+docs/learning/
+
+# Personal prep notes, not published.
+BRIEFING.local.md
+*.local.md

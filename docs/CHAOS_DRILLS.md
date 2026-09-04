@@ -1,4 +1,4 @@
-# P5.3 — Chaos drills
+# Chaos drills
 
 > Reproduce: `make chaos` · Date: 2026-08-17 · Harness: [tests/chaos/drill.py](../tests/chaos/drill.py)
 > **Safety:** the harness only runs `docker stop` / `docker start`. It never runs `docker rm`,
@@ -114,7 +114,7 @@ criterion was wrong, not the system.
 
 ## Confirmed live
 
-P5.2's empty venue error message is now proven fixed by observation, not just by test.
+The empty venue error message is now proven fixed by observation, not just by test.
 Stopping SGLang produced:
 
 ```
