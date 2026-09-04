@@ -68,6 +68,7 @@ function toAnswer(event: DoneEvent, streamed: string): Answer {
     timings: event.timings,
     cache_hit: false,
     refusal_category: event.refusal_category,
+    venue: event.venue,
   };
 }
 

@@ -1,13 +1,13 @@
-"""BM25 sparse encoding for hybrid retrieval (D3).
+"""BM25 sparse encoding for hybrid retrieval.
 
-Dense embeddings match *meaning*; BM25 matches *exact terms*. Medical text is full of
-proper nouns, drug names, and acronyms where exact match matters and semantic similarity
-misleads ("hepatitis B" vs "hepatitis C" are near-identical in embedding space). Hybrid
-retrieval covers both failure modes; that is the whole point of D3.
+Dense embeddings match meaning, BM25 matches exact terms. Medical text is full of proper
+nouns, drug names and acronyms where exact match matters and semantic similarity actively
+misleads: "hepatitis B" and "hepatitis C" sit almost on top of each other in embedding
+space. Running both covers each other's failure mode.
 
-Uses Qdrant's own fastembed BM25 rather than a hand-rolled implementation: IDF estimation,
-stemming, and document-length normalization are exactly the kind of details where a
-from-scratch BM25 is subtly wrong and nobody notices until retrieval quality is bad.
+Uses Qdrant's fastembed BM25 rather than a hand-rolled one. IDF estimation, stemming and
+document-length normalisation are the kind of details where a from-scratch BM25 is subtly
+wrong and nobody notices until retrieval quality is bad.
 """
 
 from __future__ import annotations

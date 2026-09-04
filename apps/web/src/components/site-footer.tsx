@@ -8,6 +8,7 @@ import Link from "next/link";
  * what it actually knows are the ones a user needs, so they get the primary position.
  */
 const LINKS = [
+  { href: "/about", label: "About" },
   { href: "/how-it-works", label: "How it works" },
   { href: "/safety", label: "Safety & limitations" },
   { href: "/sources", label: "Sources" },

@@ -1,4 +1,4 @@
-"""Repo-anchored paths. medeval lives at packages/eval/src/medeval — repo root is 4 up."""
+"""Repo-anchored paths. medeval sits at packages/eval/src/medeval, so root is 4 up."""
 
 from __future__ import annotations
 

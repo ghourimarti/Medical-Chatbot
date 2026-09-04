@@ -1,10 +1,8 @@
-"""Typed errors + RFC 7807 problem envelope.
+"""Typed errors and the RFC 7807 problem envelope.
 
-Two rules encoded here:
-  1. Users never see internal exception text (D18). demo/ does the opposite:
-     `error_msg = f"Error : {str(e)}"` rendered straight into the page.
-  2. Failures carry `retryable` / `degradable` flags so the degradation ladder (D21)
-     branches on *types*, not on string matching against provider error messages.
+Two rules live here: users never see internal exception text, and failures carry
+`retryable` / `degradable` flags so the degradation ladder branches on types rather than
+string-matching provider error messages.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ PROBLEM_BASE_URI = "https://p5-medical-chatbot/problems"
 
 
 class ProblemDetail(BaseModel):
-    """RFC 7807. `detail` is a SAFE, public message. Internals go to logs, never here."""
+    """RFC 7807. `detail` is public and safe; internals go to the logs, never here."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -64,7 +62,7 @@ class RetrievalError(MedbotError):
 
 
 class RerankerError(MedbotError):
-    """Non-fatal by design (D21): skip reranking, serve fusion order, log the quality dip."""
+    """Non-fatal: skip reranking, serve fusion order, log the quality dip."""
 
     status, title, slug = 503, "Reranker Unavailable", "reranker-unavailable"
     public_detail = "Answer quality is temporarily reduced."
@@ -91,8 +89,8 @@ class QuotaExceededError(MedbotError):
 
 
 class GuardrailRefusal(MedbotError):
-    """Not an error condition — a *product behavior* (D18). Modeled as an exception only
-    so the pipeline can short-circuit; the API renders it as a normal refused Answer."""
+    """A product behaviour rather than a failure. It is an exception only so the pipeline
+    can short-circuit; the API renders it as a normal refused Answer."""
 
     status, title, slug = 200, "Refused", "guardrail-refusal"
     public_detail = (

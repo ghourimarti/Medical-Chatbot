@@ -1,11 +1,9 @@
-"""Typed, fail-fast configuration (Decision 17).
+"""Typed, fail-fast configuration.
 
-demo/ reads `os.environ.get("GROQ_API_KEY")` at import time. Missing key => `None` =>
-the app boots "successfully" and dies on the first user request. Here, a missing or
-malformed setting raises at construction: the process refuses to start. Deploy-time
-error, not 3 a.m. pager.
+A missing or malformed setting raises at construction, so the process refuses to start
+instead of booting and dying on the first request.
 
-Nothing outside this module may read os.environ.
+Nothing outside this module reads os.environ.
 """
 
 from __future__ import annotations
@@ -18,10 +16,9 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# DECISION GATE B (locked, D5 v2.1): bge-large-en-v1.5 => 1024 dims.
-# This constant is baked into the Qdrant collection schema and every stored vector.
-# Changing it = new collection + full re-embed. It is the most expensive-to-reverse
-# constant in the repo, which is why it is a Literal, not an int.
+# bge-large-en-v1.5 => 1024 dims. Baked into the Qdrant collection schema and every stored
+# vector, so changing it means a new collection and a full re-embed. Literal rather than
+# int to make that hard to do by accident.
 EMBEDDING_DIM: Literal[1024] = 1024
 
 Environment = Literal["local", "dev", "staging", "prod"]
@@ -41,25 +38,17 @@ class Settings(BaseSettings):
     environment: Environment = "local"
     log_level: str = "INFO"
 
-    # --- Serving venues (D4b). Every venue speaks the SAME OpenAI-compatible protocol, so
-    # one adapter serves all of them; only base_url, model id and key differ. ---
-    # An ORDERED PREFERENCE LIST. The first reachable leg answers; the rest are tried in
-    # order; a leg whose URL is empty is skipped, so the chain can name venues whose
-    # accounts do not exist yet.
+    # Serving venues. All of them speak the same OpenAI-compatible protocol, so one
+    # adapter covers every leg; only base_url, model id and key differ.
     #
-    # Each entry is `venue` or `venue-engine`:
-    #     local-vllm,local-sglang,openai,groq
-    # A bare GPU venue (`local`) uses SERVING_ENGINE as its engine, which is what keeps
-    # older chains working unchanged.
+    # Ordered preference list: the first reachable leg answers, and a leg with an empty URL
+    # is skipped, so the chain can name venues whose accounts do not exist yet. Entries are
+    # `venue` or `venue-engine`, e.g. local-vllm,local-sglang,openai,groq. A bare venue
+    # falls back to SERVING_ENGINE.
     #
-    # WHY A LIST AND NOT PRIORITY NUMBERS: numbers put identity and order in two places
-    # that can disagree, and inserting a leg means renumbering the rest. The list is the
-    # order, so there is nothing to keep in sync.
-    #
-    # WHAT THE ORDER SHOULD RESPECT: legs are only outage protection when they fail
-    # INDEPENDENTLY. local-vllm -> local-sglang covers an ENGINE fault (a crash, an OOM
-    # regression, a bad build) but not a dead GPU or a dead box — both legs share those.
-    # Independence starts at the hosted legs, so keep at least one of them last.
+    # Order matters: legs are only outage protection if they fail independently.
+    # local-vllm -> local-sglang covers an engine crash or an OOM regression, but both legs
+    # share a GPU and a box. Keep a hosted leg last.
     serving_chain: str = "groq,openai"
     # Default engine for a chain entry that does not name one.
     serving_engine: Literal["vllm", "sglang"] = "sglang"
@@ -73,21 +62,14 @@ class Settings(BaseSettings):
     vllm_aws_url: str = ""
     vllm_aws_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
 
-    # SGLang endpoints for the same three GPU venues.
+    # SGLang endpoints for the same three GPU venues. `serving_engine` was originally an
+    # either/or selector; the chain now takes `venue-engine` entries, which is what makes
+    # vLLM-then-SGLang engine failover expressible.
     #
-    # S13.7 made `serving_engine` an either/or SELECTOR: you could run vLLM or SGLang,
-    # never "vLLM, and if the engine faults, SGLang". D12 v2.1 had actually asked for the
-    # second thing — SGLang as ENGINE-LEVEL failover — so the chain now accepts
-    # `venue-engine` entries and `local-vllm,local-sglang` is expressible.
-    #
-    # The failure-domain caveat still holds and is why the ORDER matters: those two legs
-    # share a GPU and a box, so the pair survives an engine crash or an OOM regression and
-    # nothing else. It is not outage protection. Keep a hosted leg last for that.
-    #
-    # Local default tracks SGLANG_LOCAL_PORT in .env.example (5010), NOT the 1111 in
-    # docs/benchmarks/vllm-vs-sglang.md — the ports were renumbered after S14 (vLLM moved
-    # 1110 -> 5009 at the same time) and the benchmark doc still shows the old run.
-    # runpod/aws stay empty: an unconfigured venue is SKIPPED, never an error.
+    # Local default tracks SGLANG_LOCAL_PORT in .env.example (5010), not the 1111 in
+    # docs/benchmarks/vllm-vs-sglang.md. The ports were renumbered after that run (vLLM
+    # moved 1110 -> 5009 at the same time) and the doc still shows the old ones.
+    # runpod/aws stay empty; an unconfigured venue is skipped, not an error.
     sglang_local_url: str = "http://localhost:5010/v1"
     sglang_local_model: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
     sglang_runpod_url: str = ""
@@ -97,71 +79,75 @@ class Settings(BaseSettings):
 
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
-    # --- LLM providers (D4: self-host primary lands in S13; hosted is the outage leg) ---
+    # --- LLM providers. Self-hosted is primary; hosted legs are the outage cover. ---
     groq_api_key: SecretStr
-    # MODEL DEPRECATION (S19, 2026-08). Groq removed the entire Llama family from this
-    # account: llama-3.1-8b-instant and llama-3.3-70b-versatile both return 404
-    # ("does not exist or you do not have access"). They worked in S6.10.
+    # Groq dropped the whole Llama family from this account in 2026-08; both
+    # llama-3.1-8b-instant and llama-3.3-70b-versatile return 404 now. Pinning model ids
+    # makes that survivable but can't prevent it, which is part of why the self-hosted
+    # venue is worth having: those weights are a file we hold.
     #
-    # This is the failure mode that pinning model IDs makes MANAGEABLE but cannot
-    # prevent: with a hosted API the vendor can retire the pin underneath you. The
-    # self-hosted vLLM venue (D4b `local`) has no such exposure — its weights are a
-    # file we hold — which is a real argument for the multi-venue design beyond
-    # outage protection.
-    #
-    # Replacements chosen by measurement, not availability: qwen/qwen3.6-27b also
-    # works but emits <think> reasoning preambles that corrupt structured output.
+    # Replacements picked by measurement. qwen/qwen3.6-27b also works, but emits <think>
+    # preambles that corrupt structured output.
     groq_default_model: str = "openai/gpt-oss-20b"
     groq_escalation_model: str = "openai/gpt-oss-120b"
-    # OpenAI is a real chain venue, not just a spare key. Before this it was config that
-    # NOTHING read (the same dead-config shape as serving_engine in S13.7 and
-    # semantic_cache_enabled in S19.4): you could set OPENAI_API_KEY, see it in .env, and
-    # never have it serve a single token.
+    # OpenAI is a real chain venue. It used to be config nothing read: you could set
+    # OPENAI_API_KEY, see it sitting in .env, and never have it serve a token.
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_fallback_model: str = "gpt-4o-mini"
     groq_timeout: float = 10.0
 
-    # --- Embeddings (D5) ---
+    # --- Embeddings ---
     embedding_model_id: str = "BAAI/bge-large-en-v1.5"
     embedding_dim: Literal[1024] = EMBEDDING_DIM
     reranker_model_id: str = "BAAI/bge-reranker-base"
     rerank_timeout: float = 2.0
-    # Empty => run the models in-process (dev/tests). Set => call apps/ml-service over
-    # HTTP, so CPU work scales on its own deployment (D22). One config line switches it.
+    # Empty runs the models in-process (dev/tests); set calls apps/ml-service over HTTP,
+    # so CPU work scales on its own deployment.
     ml_service_url: str = ""
     embed_timeout: float = 5.0
-    # torch = reference implementation; onnx = ONNX Runtime (S5.9), required to meet the
-    # 250ms retrieval NFR — measured: candidate reduction alone cannot get there.
+    # torch is the reference implementation; onnx is what actually meets the 250ms
+    # retrieval budget. Trimming candidates alone doesn't get there.
     ml_backend: Literal["torch", "onnx"] = "torch"
+    # Rerank backend, separate from the embedding one; empty inherits ml_backend.
+    #
+    # Separable because the risk isn't symmetric. Swapping the embedding backend changes
+    # the vectors, which have to stay numerically compatible with everything already in
+    # the index, so that flip is an index migration. Reranking only has to preserve score
+    # order, so a faster runtime there costs nothing.
+    #
+    # Worth setting: rerank was ~1.5s of a ~2.3s TTFT on CPU, the largest single term.
+    ml_rerank_backend: Literal["", "torch", "onnx"] = ""
 
-    # --- Retrieval (D3) ---
+    # --- Retrieval ---
     retrieval_top_k: int = Field(default=20, ge=1, le=100)
     rerank_top_k: int = Field(default=4, ge=1, le=20)
-    # Threshold applies to the SIGMOID-normalized cross-encoder score (0..1) once reranking
-    # is on. Dense cosine and cross-encoder logits are different scales — the sigmoid in
-    # adapters/reranker.py is what makes one threshold meaningful for both.
+    # Applies to the sigmoid-normalized cross-encoder score (0..1) once reranking is on.
+    # Dense cosine and cross-encoder logits are different scales; the sigmoid in
+    # adapters/reranker.py is what lets one threshold cover both.
     no_answer_threshold: float = Field(default=0.30, ge=0.0, le=1.0)
-    # Budget for the follow-up rewrite. A standalone question is a SENTENCE, so this is
-    # a ceiling on a model that ignores the instruction and starts answering instead -
-    # not a target. Small on purpose: condense runs before retrieval, so every token
-    # here is added directly to time-to-first-token.
-    condense_max_tokens: int = Field(default=64, ge=16, le=256)
-    hybrid_search: bool = True  # dense + BM25 with server-side RRF fusion (D3)
+    # Budget for the follow-up rewrite. A standalone question is one sentence, so this is
+    # a ceiling for a model that ignores the instruction and starts answering, not a
+    # target. Condense runs before retrieval, so every token here lands on TTFT.
+    #
+    # 256 rather than 64 because a reasoning model spends this same budget on its
+    # reasoning and returns an empty string if the cap is small. 64 was fine for
+    # Qwen2.5-7B and quietly stopped being fine when the serving chain changed.
+    condense_max_tokens: int = Field(default=256, ge=16, le=512)
+    hybrid_search: bool = True  # dense + BM25, server-side RRF fusion
 
-    # --- Vector store (D2, D11) ---
+    # --- Vector store ---
     qdrant_url: str = "http://localhost:5002"
-    # The app queries an ALIAS, never a collection name. Ingestion builds a new collection
+    # The app queries an alias, never a collection name. Ingestion builds a new collection
     # and repoints the alias atomically, so readers never see a half-ingested corpus.
     #
-    # NAMING: the alias is `gale_live`; ingestion creates `gale_live_v1`, `gale_live_v2`...
-    # A distinct alias name is not cosmetic — Qdrant forbids an alias and a collection
-    # sharing a name, and `gale_live` reads unambiguously as "whatever is currently live".
+    # Alias is `gale_live`; ingestion creates `gale_live_v1`, `gale_live_v2`... The names
+    # have to differ anyway, since Qdrant won't let an alias and a collection share one.
     qdrant_collection: str = "gale_live"
     chunk_size: int = Field(default=500, ge=100, le=4000)
     chunk_overlap: int = Field(default=50, ge=0, le=1000)
 
-    # --- Ingestion queue (D11) ---
+    # --- Ingestion queue ---
     sqs_queue_url: str = ""
     aws_endpoint_url: str = ""  # set for LocalStack; empty = real AWS
     aws_region: str = "us-east-1"
@@ -169,162 +155,136 @@ class Settings(BaseSettings):
     worker_visibility_timeout: int = Field(default=900, ge=30)
     worker_max_receives: int = Field(default=3, ge=1)  # then -> DLQ
 
-    # --- Primary database (D1). Empty => history/session persistence disabled, the app
-    # still answers (D21 degradation: chat works, it just doesn't remember). ---
+    # --- Primary database. Empty disables history/session persistence; the app still
+    # answers, it just doesn't remember. ---
     database_url: str = ""
     db_pool_size: int = 10
     db_max_overflow: int = 20
-    history_retention_days: int = Field(default=30, ge=1, le=3650)  # GDPR (D18)
+    history_retention_days: int = Field(default=30, ge=1, le=3650)
     history_max_turns: int = Field(default=20, ge=1, le=100)
 
-    # --- Sessions (D9). The dev default keeps local runs and tests frictionless; the
-    # validator below makes it IMPOSSIBLE to ship to prod. demo/ used os.urandom(24),
-    # which invalidated every session on restart and on every added replica. ---
+    # --- Sessions. The dev default keeps local runs frictionless; the validator below
+    # refuses it outside `local`. A random per-process secret would invalidate every
+    # session on restart and give each replica its own. ---
     session_secret: SecretStr = SecretStr(DEV_SESSION_SECRET)
     secure_cookies: bool = False  # True everywhere TLS terminates (dev/staging/prod)
 
-    # --- Cache + quotas (D10, D20). Empty REDIS_URL => caching off, rate limiting falls
-    # back to per-replica in-process counters (weaker, but never absent). ---
+    # --- Cache + quotas. Empty REDIS_URL turns caching off and drops rate limiting back
+    # to per-replica in-process counters: weaker, but never absent. ---
     redis_url: str = ""
-    # Connection-pool shape (P5.2). The default pool errors immediately once every
-    # connection is checked out, which under burst turns a 2ms cache lookup into a storm of
-    # MaxConnectionsError — measured at 1500 RPS, where it took the process down. A BOUNDED
-    # pool with a WAIT is the correct shape: bounded so we cannot exhaust Redis's own
-    # client limit or our file descriptors, waiting so a burst becomes a few milliseconds
-    # of queueing instead of a failure. Sized well above steady-state concurrency because
-    # the pool should bind on pathology, not on normal traffic.
+    # Bounded pool that waits. The default pool raises as soon as every connection is
+    # checked out, which turns a 2ms cache lookup into a storm of MaxConnectionsError under
+    # burst; at 1500 RPS that took the process down. Bounded so we can't exhaust Redis's
+    # client limit or our own fds, waiting so a burst costs a few ms of queueing instead of
+    # a failure. Sized well above steady-state so it binds on pathology, not normal load.
     redis_max_connections: int = Field(default=128, ge=1)
     redis_pool_timeout: float = Field(default=2.0, gt=0)
-    # Without a socket timeout a wedged Redis holds every connection until TCP gives up
-    # (minutes), so the pool drains and the fail-open path never runs. This is what makes
-    # "Redis is slow" degrade into "the API is down".
+    # Without a socket timeout a wedged Redis holds every connection until TCP gives up,
+    # so the pool drains and the fail-open path never gets a chance to run. That is how
+    # "Redis is slow" turns into "the API is down".
     redis_socket_timeout: float = Field(default=2.0, gt=0)
-    # Circuit breaker (P5.3). Threshold is low because Redis failures are not transient in
-    # the way a network blip is — if it is down, it is down, and every additional attempt
-    # costs a full socket timeout on a request that is already late. Cooldown is short
-    # because the recovery measurement was ~5s and the cost of probing early is one slow
-    # request, while the cost of probing late is a needlessly cold cache.
+    # Low threshold: Redis failures aren't transient the way a network blip is, and each
+    # extra attempt costs a full socket timeout on a request that is already late. Short
+    # cooldown because recovery measured ~5s, and probing early costs one slow request
+    # while probing late costs a needlessly cold cache.
     redis_circuit_failure_threshold: int = Field(default=5, ge=1)
     redis_circuit_cooldown_seconds: float = Field(default=10.0, gt=0)
-    # Postgres gets a LOWER threshold than Redis, and the reason is the general rule for
-    # sizing a breaker: the threshold must be measured in REQUESTS, not in calls.
-    #
-    # A breaker's job is to stop the second slow request, so it should open after roughly
-    # one request's worth of failures. Redis is called ~10x per request, so 5 opens partway
-    # through the first one. Postgres is called TWICE (history load, history write), so the
-    # same 5 needs ~3 requests — measured in P5.5: requests 1-5 took ~9s and only the 6th
-    # and 7th dropped to the normal 5s. Copying Redis's number onto a dependency with a
-    # different call rate silently produced a breaker that barely engaged.
+    # Lower than Redis on purpose. A breaker should open after roughly one request's worth
+    # of failures, so the threshold has to be counted in requests, not calls. Redis is hit
+    # ~10x per request, so 5 opens partway through the first. Postgres is hit twice
+    # (history load, history write), so 5 would need ~3 requests: measured, requests 1-5
+    # took ~9s and only the 6th dropped back to 5s.
     postgres_circuit_failure_threshold: int = Field(default=2, ge=1)
     postgres_circuit_cooldown_seconds: float = Field(default=15.0, gt=0)
     cache_ttl_seconds: int = Field(default=86_400, ge=60)
     embedding_cache_ttl_seconds: int = Field(default=604_800, ge=60)
-    # D10 semantic cache: measured in S19.4 and DECLINED. These two knobs are the whole of
-    # it — there is no SemanticCache class, and nothing else reads them. Kept so the
-    # decision stays visible in config rather than silently vanishing.
+    # Semantic cache: measured and declined. These two knobs are all that is left of it,
+    # kept so the decision stays visible in config instead of vanishing. There is no
+    # SemanticCache class and nothing else reads them.
     #
-    # Measured (docs/SEMANTIC_CACHE.md): at 0.97 it is safe but inert — 0 false hits across
-    # 23,005 golden pairs and 15 adversarial pairs, but it catches only 1 paraphrase in 12,
-    # and exact-match caching already handles verbatim repeats. Reaching a useful catch
-    # rate needs ~0.92, which sits 0.007 above a KNOWN dangerous pair ("maximum daily dose"
-    # vs "minimum daily dose", 0.9133). The margin is thinner than the sampling error on
-    # the danger estimate. D10's premise was also wrong: "aspirin dose adult" vs "child"
-    # measures 0.8235, not "closer than 0.95".
+    # Numbers in docs/SEMANTIC_CACHE.md. At 0.97 it is safe but inert: 0 false hits over
+    # 23,005 golden pairs, but it catches 1 paraphrase in 12, and exact-match caching
+    # already covers verbatim repeats. A useful catch rate needs ~0.92, which sits 0.007
+    # above a known dangerous pair ("maximum daily dose" vs "minimum daily dose", 0.9133).
+    # That margin is thinner than the sampling error on the danger estimate.
     semantic_cache_enabled: bool = False
     semantic_cache_threshold: float = Field(default=0.97, ge=0.90, le=1.0)
     rate_limit_per_minute: int = Field(default=20, ge=1)
     rate_limit_per_day: int = Field(default=200, ge=1)
-    # Per-IP ceiling (D18). Session-only limiting is BYPASSABLE: the session id comes from a
-    # cookie the client chooses to send, so dropping it mints a fresh quota bucket on every
-    # request. Measured in P5.2 — 30 cookieless requests against a 20/min limit produced
-    # zero 429s. The IP bucket is the one an abuser cannot opt out of.
+    # Per-IP ceiling. Session-only limiting is bypassable: the session id comes from a
+    # cookie the client chooses to send, so dropping it mints a fresh bucket every request.
+    # Measured: 30 cookieless requests against a 20/min limit produced zero 429s.
     #
-    # It is deliberately MUCH higher than the session limit because carrier-grade NAT,
-    # universities, and corporate proxies put thousands of legitimate users behind one
-    # address; sized to throttle scripted abuse without cutting off a whole campus.
+    # Much higher than the session limit, because carrier-grade NAT, universities and
+    # corporate proxies put thousands of real users behind one address. Sized to throttle
+    # scripted abuse without cutting off a campus.
     rate_limit_ip_per_minute: int = Field(default=300, ge=1)
     rate_limit_ip_per_day: int = Field(default=20_000, ge=1)
-    # Number of reverse proxies WE operate in front of the API. 0 = direct exposure, and
-    # X-Forwarded-For is ignored entirely (it is client-supplied and spoofable). Behind an
-    # ALB set 1; ALB + CloudFront set 2. Getting this wrong in either direction is a real
-    # outage: too low collapses every user into the proxy's bucket, too high trusts a
-    # header the client wrote.
+    # How many reverse proxies we operate in front of the API. 0 means direct exposure and
+    # X-Forwarded-For is ignored entirely, since it is client-supplied. Behind an ALB set 1,
+    # ALB + CloudFront set 2. Wrong in either direction hurts: too low collapses every user
+    # into the proxy's bucket, too high trusts a header the client wrote.
     trusted_proxy_hops: int = Field(default=0, ge=0, le=4)
 
-    # --- Cost controls / kill switch (D20) ---
+    # --- Cost controls / kill switch ---
     llm_enabled: bool = True  # static floor for the kill switch; false can't be undone at runtime
     cache_only_mode: bool = False
-    # Daily ceiling. At the Phase-1 full-load target ($25k/mo) this is ~$830/day; the
-    # portfolio deployment runs at ~$2/day, so the default is a safety net sized for
-    # development, not production. 0 disables the breaker.
+    # Daily ceiling; 0 disables the breaker. The default is sized for development (this
+    # deployment runs ~$2/day), not for the full-load target.
     daily_spend_limit_usd: float = Field(default=5.0, ge=0.0)
     spend_soft_alert_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     admin_api_key: SecretStr | None = None  # required to flip the kill switch
 
-    # --- Accounts (D24, S20b). ALL OPTIONAL: with no JWKS URL, accounts are simply off and
-    # the anonymous product works exactly as before. That is the D24 sequencing promise —
-    # anonymous chat never waits on an identity provider being configured.
+    # --- Accounts, all optional. With no JWKS URL accounts are off and the anonymous
+    # product works as before, so anonymous chat never waits on an identity provider.
     clerk_jwks_url: str | None = None
-    # Checked when set: a validly-signed token from a DIFFERENT Clerk instance is still not
-    # a token for this application.
+    # Checked when set: a validly-signed token from another Clerk instance is still not a
+    # token for this application.
     clerk_issuer: str | None = None
     clerk_audience: str | None = None
     llm_max_input_tokens: int = 3000
     llm_max_output_tokens: int = 512
 
-    # --- Tracing (D13, S15.6). Distinct from the Prometheus metrics of S11: metrics
-    # answer "is the system healthy", traces answer "why was THIS request slow/bad".
+    # --- Tracing. Separate from the Prometheus metrics: metrics answer "is the system
+    # healthy", traces answer "why was this request slow".
     #
-    # PII asymmetry is deliberate and load-bearing: OTel spans carry NO query text (they
-    # fan out to collectors and vendors), while Langfuse is the ONE sanctioned store for
-    # prompt/completion content (D18) — access-controlled, 30-day retention. ---
+    # The PII asymmetry is load-bearing. OTel spans carry no query text, because they fan
+    # out to collectors and vendors. Langfuse is the only sanctioned store for prompt and
+    # completion content: access-controlled, 30-day retention. ---
     otel_enabled: bool = False
     otel_endpoint: str = ""  # e.g. http://otel-collector:4318
     otel_service_name: str = "medbot-api"
-    # HEAD sampling only. Keeping 100% of errors/slow requests is a TAIL decision and is
-    # made in the Collector (tail_sampling processor), not here — the SDK cannot do it.
-    # 4.5M queries/day at 100% would make tracing its own cost centre (D13).
+    # Head sampling only. Keeping 100% of errors and slow requests is a tail decision,
+    # made in the Collector's tail_sampling processor; the SDK can't do it. At full load
+    # 100% sampling would make tracing its own cost centre.
     otel_sample_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
 
     langfuse_public_key: str = ""
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "http://localhost:5015"
 
-    # --- DECISION GATE C (locked, D10): cache invalidation is version-key composition.
-    # Bump a version => old entries go cold. No code ever writes a manual purge. ---
+    # --- Cache invalidation is version-key composition: bump a version and old entries go
+    # cold. Nothing anywhere writes a manual purge. ---
     prompt_version: str = "v1"
     corpus_version: str = "v1"
     index_version: str = "v1"
 
     @property
     def cache_namespace(self) -> str:
-        """Composite key prefix. Every cached value is scoped by the exact configuration
-        that produced it, so a prompt or re-index bump can never serve a stale answer.
+        """Composite key prefix, so every cached value is scoped by the configuration that
+        produced it and a prompt or re-index bump can't serve a stale answer.
 
-        `qdrant_collection` is part of the key (P5.5). It was not, and the gap was found by
-        accident: pointing the service at a DIFFERENT, EMPTY collection still returned fully
-        cited answers, because the cache key never mentioned which index produced them.
+        Two things belong in here that are easy to leave out, both found the same way:
 
-        The composition relied on an operator remembering to bump `index_version` whenever
-        the collection changed. That is a convention, and the failure mode when it is
-        forgotten is silent and wrong — answers served from an index the service is no
-        longer using, with citations pointing into it. Including the collection name makes
-        the invalidation automatic: change where you read from, and the cache follows.
+        `qdrant_collection`, because without it, pointing the service at a different and
+        empty collection still returned fully cited answers. Relying on an operator to bump
+        `index_version` by hand is a convention, and forgetting it is silent.
 
-        S19.5: the model component was `groq_default_model` — ONE venue's model, named
-        unconditionally, even when Groq was last in the chain and never served a request.
-        Two consequences, both silent:
+        Every model that could serve, not just the default one. Naming a single venue's
+        model meant swapping VLLM_LOCAL_MODEL kept serving the previous model's answers
+        under the new model's name, and switching engines reused each other's cache.
 
-          * changing VLLM_LOCAL_MODEL or SGLANG_LOCAL_MODEL did NOT change the key, so a
-            model swap kept serving answers generated by the PREVIOUS model, with the new
-            model's name on the response;
-          * switching ENGINE=vllm <-> sglang reused each other's cached answers.
-
-        That is the identical defect this docstring already describes for
-        `qdrant_collection`, one line below the warning: the key did not mention what
-        actually produced the answer. Now every model that COULD serve is folded in, so
-        changing any of them invalidates automatically. Hashed because the full list is
-        long and keys are read by humans in redis-cli.
+        Hashed because the full list is long and these keys get read by hand in redis-cli.
         """
         candidates = "|".join((
             self.serving_chain,
@@ -343,14 +303,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_retired_serving_vars(self) -> Self:
-        """Fail on env vars that were renamed, instead of ignoring them (P6.4.3).
+        """Fail on renamed env vars instead of ignoring them.
 
-        `extra="ignore"` is right for the general case — the process should not care about
-        unrelated environment — but it makes a RENAMED setting fail silently, which is the
-        worst kind: SERVING_PRIMARY=local looks like it selects the GPU venue and does
-        nothing at all, so the symptom is "my vLLM box is idle", far from the cause.
-        Found when the in-cluster pod showed SERVING_PRIMARY unset while .env.example still
-        advertised it. Retired names get a loud error naming their replacement.
+        `extra="ignore"` is right in general, but it makes a renamed setting fail silently:
+        SERVING_PRIMARY=local looks like it selects the GPU venue and does nothing, so the
+        symptom ("my vLLM box is idle") shows up a long way from the cause.
         """
         retired = {
             "SERVING_PRIMARY": "SERVING_CHAIN",
@@ -367,8 +324,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_dev_secrets_outside_local(self) -> Self:
-        """A default secret that works everywhere is a default secret that reaches prod.
-        Local dev stays frictionless; any other environment must supply a real value."""
+        """Local dev stays frictionless; every other environment supplies real values."""
         if self.environment != "local":
             if self.session_secret.get_secret_value() == DEV_SESSION_SECRET:
                 raise ValueError(
@@ -379,26 +335,19 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"SECURE_COOKIES must be true in environment={self.environment!r}"
                 )
-            # Found in P5.2. An empty REDIS_URL is a legitimate local convenience, but it
-            # degrades SILENTLY: caching turns off and rate limiting falls back to
-            # per-replica in-process counters. With N replicas that means the effective
-            # quota is N x the configured one and the cache hit rate collapses to ~1/N —
-            # a capacity and abuse problem that shows up only under production traffic,
-            # which is exactly when nobody is reading startup logs.
+            # An empty REDIS_URL is fine locally but degrades silently: caching off, rate
+            # limiting back to per-replica counters. With N replicas the effective quota is
+            # N x the configured one and hit rate collapses to ~1/N, which only shows up
+            # under real traffic.
             if not self.redis_url:
                 raise ValueError(
                     f"REDIS_URL must be set in environment={self.environment!r} "
                     "(without it quotas are per-replica and caching is disabled)"
                 )
-            # Found in P5.4, and the same silent-degradation class as REDIS_URL above —
-            # which is the point: fixing one instance of a pattern and not auditing for
-            # the others leaves the bug in place under a different name.
-            #
-            # An empty DATABASE_URL disables history entirely and the service still answers
-            # perfectly, so nothing looks wrong. But Postgres is this system's only SYSTEM
-            # OF RECORD: without it there is no chat history, no audit trail, and no
-            # deletion capability for a GDPR request (D1, D9). For a medical assistant that
-            # is a compliance failure that presents as a working service.
+            # Same silent-degradation shape as REDIS_URL. An empty DATABASE_URL disables
+            # history and the service still answers, so nothing looks wrong, but Postgres
+            # is the only system of record here: no history, no audit trail, and no way to
+            # honour a deletion request.
             if not self.database_url:
                 raise ValueError(
                     f"DATABASE_URL must be set in environment={self.environment!r} "
@@ -413,6 +362,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Cached accessor. Call once at process start (FastAPI lifespan) so a bad config
-    fails the readiness probe rather than the first request."""
+    """Cached accessor. Called once at startup so a bad config fails the readiness probe
+    rather than the first user request."""
     return Settings()  # type: ignore[call-arg]  # values come from env/.env

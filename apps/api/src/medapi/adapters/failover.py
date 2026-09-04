@@ -1,19 +1,16 @@
-"""Circuit breaker + failover chain across serving venues (D4, D4b, D21).
+"""Circuit breaker and failover chain across serving venues.
 
-THE STREAMING RULE — the non-obvious part of this design:
+The important rule here: failover only applies before the first token.
 
-    Failover applies ONLY BEFORE THE FIRST TOKEN.
+Non-streaming calls retry transparently and the caller never learns a leg failed.
+Streaming can't do that. Once the first token is on the wire the client has rendered text,
+and a second venue produces a different continuation, so the answer would visibly change
+mid-sentence. A mid-stream failure is therefore terminal and surfaces as an in-band error
+event, while a failure before the first token falls through to the next leg invisibly.
 
-Non-streaming calls can be retried transparently; the caller never learns a leg failed.
-Streaming cannot. Once the first token is on the wire the client has already rendered
-text, and a second venue would produce a *different continuation* — the answer would
-visibly change mid-sentence. So a mid-stream failure is terminal and surfaces as an error
-event (S4's in-band error channel), while a failure before the first token falls through
-to the next leg invisibly.
-
-Why a circuit breaker at all: without one, every request pays the full timeout of a dead
-venue before moving on. At 350 RPS with a 30s timeout that is 10,500 requests piled up on
-a leg already known to be down. The breaker converts a slow failure into a fast one.
+The breaker is there because otherwise every request pays the full timeout of a dead venue
+before moving on. At 350 RPS with a 30s timeout that's 10,500 requests piled onto a leg
+already known to be down. It turns a slow failure into a fast one.
 """
 
 from __future__ import annotations
@@ -93,12 +90,11 @@ def _record_tokens(venue: str, usage: Usage) -> None:
 
 
 def _publish_states(legs: Sequence[VenueLeg]) -> None:
-    """Publish EVERY leg's breaker state after any transition.
+    """Publish every leg's breaker state after any transition.
 
-    All legs, not just the one that moved: `medbot_venue_circuit_state` is a Gauge, and a
-    gauge that is only written when a venue is touched leaves the untouched ones reporting
-    a stale value forever. The dashboard would then show a leg as closed long after it
-    stopped being tried.
+    All of them, not just the one that moved. `medbot_venue_circuit_state` is a gauge, and
+    writing it only for the venue that was touched leaves the others reporting a stale
+    value forever, so the dashboard shows a leg as closed long after it stopped being tried.
     """
     try:
         for leg in legs:
@@ -108,11 +104,11 @@ def _publish_states(legs: Sequence[VenueLeg]) -> None:
 
 
 class FailoverModel:
-    """ModelPort that walks an ordered chain of venues (D4b).
+    """ModelPort that walks an ordered chain of venues.
 
-    Legs are independent FAILURE DOMAINS by design — local GPU, third-party cloud, AWS,
-    hosted API. That is what makes this real outage protection, unlike two engines sharing
-    one GPU pool (the correction recorded in D12).
+    The legs are independent failure domains: local GPU, third-party cloud, AWS, hosted
+    API. That independence is what makes this real outage protection, as opposed to two
+    engines sharing a single GPU pool.
     """
 
     def __init__(self, legs: Sequence[VenueLeg]) -> None:
@@ -144,14 +140,16 @@ class FailoverModel:
                     messages=messages, max_tokens=max_tokens, temperature=temperature
                 )
                 leg.breaker.record_success()
-                # Token accounting belongs HERE, not in postflight: this is the only place
-                # that knows BOTH the usage and which venue produced it. Answer carries no
-                # venue, so a postflight recorder could only label them "unknown" — and a
-                # token count you cannot attribute to a venue cannot answer the question
-                # the metric exists for ("what is local serving vs what are we paying for").
+                # Token accounting goes here rather than in postflight, because this is
+                # the only place that knows both the usage and which venue produced it. A
+                # postflight recorder could only label them "unknown", and unattributed
+                # tokens can't answer what the metric is for: local serving vs paid.
                 _record_tokens(leg.name, result.usage)
                 _publish_states(self._legs)
-                return result
+                # Stamp the leg here. The sub-model knows its own venue, but only this
+                # loop knows which chain leg was taken, and the leg is the identity the
+                # chain is configured in.
+                return result.model_copy(update={"venue": leg.name})
             except ProviderError as e:
                 leg.breaker.record_failure()
                 _publish_states(self._legs)
@@ -167,23 +165,24 @@ class FailoverModel:
         max_tokens: int,
         temperature: float,
         on_venue: Callable[[str, str], None] | None = None,
+        on_usage: Callable[[Usage], None] | None = None,
     ) -> AsyncIterator[str]:
         """`on_venue(venue_name, model_id)` fires once, when a leg produces its first token.
 
-        S20.12: without it the streaming path had NO WAY to learn which leg served. The
-        pipeline fell back to `self._model.model_id`, and FailoverModel.model_id returns
-        `self._legs[0].model.model_id` - the FIRST CONFIGURED leg, whoever actually
-        answered. So with SGLang stopped, Groq served and every streamed answer still
-        reported Qwen: in the response body, in the stored transcript, and in Langfuse.
+        Without it the streaming path has no way to learn which leg served. The pipeline
+        falls back to `self._model.model_id`, and FailoverModel.model_id returns the first
+        configured leg regardless of who answered. With SGLang stopped, Groq served and
+        every streamed answer still reported Qwen: response body, stored transcript and
+        Langfuse alike.
 
-        That is worse than a cosmetic mislabel. The whole failover design is verified by
-        asking "which model_id came back?", and the browser uses the streaming path - so
-        the one path real users take was the one that could not answer that question, and
-        cost attribution silently credited a hosted answer to the free local engine.
+        That matters more than a cosmetic mislabel. Failover is verified by asking which
+        model_id came back, and the browser uses the streaming path, so the one path real
+        users take was the one that couldn't answer the question, with cost attribution
+        crediting a hosted answer to the free local engine.
 
-        A CALLBACK rather than a `last_venue` attribute: attributes are shared mutable
-        state and two concurrent streams would overwrite each other's answer. A closure
-        belongs to exactly one request.
+        A callback rather than a `last_venue` attribute, because an attribute is shared
+        mutable state and two concurrent streams would overwrite each other. A closure
+        belongs to one request.
         """
         errors: list[str] = []
         for leg in self._legs:
@@ -193,9 +192,16 @@ class FailoverModel:
             started = False
 
             def _usage(u: Usage, _leg: VenueLeg = leg) -> None:
-                # Attributed to the leg that STREAMED it, which is the whole point of the
-                # venue label: local tokens are free, hosted tokens are an invoice.
+                # Attributed to the leg that streamed it, which is the point of the venue
+                # label: local tokens are free, hosted tokens are an invoice.
                 _record_tokens(_leg.name, u)
+                # ...and hand it to the caller too. This used to stop at Prometheus, so a
+                # streamed answer had tokens in the metric and zeros everywhere else:
+                # DoneEvent.usage defaulted empty, so the stored turn and the Langfuse
+                # trace both recorded a free answer. Per-answer cost attribution was blank
+                # for exactly the requests real users make.
+                if on_usage is not None:
+                    on_usage(u)
 
             stream_kwargs: dict[str, object] = {}
             if "on_usage" in inspect.signature(leg.model.stream).parameters:
@@ -212,20 +218,20 @@ class FailoverModel:
                         leg.breaker.record_success()
                         _publish_states(self._legs)
                         if on_venue is not None:
-                            # First token = this leg committed to the answer. The
-                            # STREAMING RULE below makes it final: we can no longer fail
-                            # over, so this is the venue for the whole response.
+                            # First token means this leg has committed to the answer. We
+                            # can't fail over past this point, so it's the venue for the
+                            # whole response.
                             on_venue(leg.name, leg.model.model_id)
                     yield chunk
                 return
             except ProviderError as e:
                 if started:
-                    # THE STREAMING RULE: tokens are already rendered on the client.
-                    # Switching venues now would change the answer mid-sentence, so this
-                    # failure is terminal and becomes an in-band error event (S4).
+                    # Tokens are already rendered on the client. Switching venues now
+                    # would change the answer mid-sentence, so this failure is terminal
+                    # and becomes an in-band error event.
                     leg.breaker.record_failure()
                     _publish_states(self._legs)
-                    logger.error("venue %s failed MID-STREAM; cannot fail over", leg.name)
+                    logger.error("venue %s failed mid-stream; cannot fail over", leg.name)
                     raise
                 leg.breaker.record_failure()
                 _publish_states(self._legs)

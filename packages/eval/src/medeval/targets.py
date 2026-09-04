@@ -1,10 +1,9 @@
 """Target adapters: the pipelines under evaluation, behind one protocol.
 
-DemoTarget is a CHARACTERIZATION adapter: it rebuilds demo/'s chain from demo's own
-components, changing only `return_source_documents` so retrieved contexts become
-observable. demo/ source is never modified. demo/'s config uses CWD-relative paths
-(DB_FAISS_PATH), so calls are pinned to demo/ as working directory — the adapter
-absorbs the legacy trait instead of editing it away.
+DemoTarget is a characterization adapter. It rebuilds the demo chain out of demo's own
+components and changes only `return_source_documents`, so retrieved contexts become
+observable without touching demo/ source. Demo config uses CWD-relative paths, so calls
+are pinned to demo/ as the working directory rather than editing that trait away.
 """
 
 from __future__ import annotations
@@ -88,7 +87,7 @@ class DemoTarget:
                     latency_ms=(time.perf_counter() - t0) * 1000,
                     model_id=self._model_id,
                 )
-            except Exception as e:  # noqa: BLE001 — a baseline must record failures, not die
+            except Exception as e:  # noqa: BLE001 (a baseline records failures, not dies)
                 last_err = e
                 msg = str(e).lower()
                 if attempt < _MAX_ATTEMPTS - 1 and any(m in msg for m in _RETRYABLE_MARKERS):
@@ -125,11 +124,11 @@ class MockTarget:
 
 
 class PipelineTarget:
-    """The NEW stack (S6): hybrid retrieval -> rerank -> threshold -> cited generation.
+    """The current stack: hybrid retrieval -> rerank -> threshold -> cited generation.
 
-    Runs the real RagPipeline in-process, against the real Qdrant. This is what makes the
-    before/after delta measurable — evaluating the deployed HTTP surface instead would add
-    a server dependency to every eval run for no additional signal at this stage.
+    Runs the real RagPipeline in-process against the real Qdrant, which is what makes the
+    before/after delta measurable. Going through the deployed HTTP surface would add a
+    server dependency to every eval run for no extra signal.
     """
 
     name = "pipeline"
@@ -150,7 +149,7 @@ class PipelineTarget:
             ans, contexts = self._loop.run_until_complete(
                 self._services.pipeline.answer_verbose(question)
             )
-        except Exception as e:  # noqa: BLE001 — a baseline records failures, never dies
+        except Exception as e:  # noqa: BLE001 (a baseline records failures, not dies)
             return TargetAnswer(
                 answer="",
                 contexts=[],
@@ -159,7 +158,7 @@ class PipelineTarget:
             )
         return TargetAnswer(
             answer=ans.text,
-            contexts=contexts,  # FULL passage text — RAGAS scores against what the model saw
+            contexts=contexts,  # full passage text: RAGAS scores what the model saw
             latency_ms=ans.timings.total_ms or (time.perf_counter() - t0) * 1000,
             model_id=ans.model_id,
         )

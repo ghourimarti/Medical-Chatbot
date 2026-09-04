@@ -1,18 +1,14 @@
-"""Database schema (D1).
+"""Database schema.
 
-THE DESIGN DECISION: `messages` is RANGE-partitioned by day.
+`messages` is RANGE-partitioned by day. At 4.5M message-pairs/day, a 30-day retention
+policy written as `DELETE FROM messages WHERE created_at < now() - interval '30 days'`
+deletes ~135M rows per run: long locks, bloat, heavy autovacuum. Dropping a day's partition
+is near-instant, lock-light, and gives the disk back immediately, which turns retention
+into a cron one-liner.
 
-At the Phase-1 target of 4.5M message-pairs/day, a 30-day retention policy expressed as
-`DELETE FROM messages WHERE created_at < now() - interval '30 days'` would delete ~135M
-rows per run: long locks, table bloat, and heavy autovacuum pressure. Dropping a whole
-day's partition is near-instant, lock-light, and returns disk immediately.
-
-That turns GDPR retention from an operational burden into a cron one-liner — which is the
-entire reason D1 chose Postgres partitioning over a naive schema.
-
-⚠ POSTGRES CONSTRAINT: a partitioned table's PRIMARY KEY must contain the partition key.
-So `messages` is keyed on (id, created_at), not id alone. This is not stylistic — Postgres
-rejects the table otherwise.
+Note the Postgres constraint that follows from this: a partitioned table's primary key has
+to contain the partition key, so `messages` is keyed on (id, created_at) rather than id
+alone. Postgres rejects the table otherwise.
 """
 
 from __future__ import annotations
@@ -20,7 +16,17 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -34,7 +40,7 @@ class Base(DeclarativeBase):
 
 
 class ChatSession(Base):
-    """An anonymous session (D9). No account, no PII beyond a hashed client fingerprint —
+    """An anonymous session. No account, no PII beyond a hashed client fingerprint;
     the id exists so quotas can be enforced and a delete request can be honored."""
 
     __tablename__ = "sessions"
@@ -48,18 +54,18 @@ class ChatSession(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    # Hashed, never raw: an IP is personal data under GDPR (D18).
+    # Hashed, never raw: an IP is personal data.
     client_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (Index("ix_sessions_last_seen", "last_seen_at"),)
 
 
 class Message(Base):
-    """One chat turn. Partitioned by day — see module docstring.
+    """One chat turn. Partitioned by day, see the module docstring.
 
-    `content` holds health questions and answers, which are sensitive by nature. It lives
-    here because the feature requires it, is never written to application logs (D18), and
-    is bounded by the 30-day partition retention.
+    `content` holds health questions and answers, which are sensitive by nature. It's here
+    because the feature needs it, never goes to application logs, and is bounded by the
+    30-day partition retention.
     """
 
     __tablename__ = "messages"
@@ -77,31 +83,31 @@ class Message(Base):
     # Persisting it makes "how often do we abstain?" a SQL query rather than a log grep.
     kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    # S20. NULLABLE and un-keyed: rows written before conversations existed have none, and
-    # a FK here would reintroduce the cascade that DROP PARTITION cannot tolerate.
-    # session_id is KEPT alongside it — the two answer different questions ("this visitor's
-    # transcript" vs "this thread") and removing one is a later, separate migration.
+    # Nullable and un-keyed: rows written before conversations existed have none, and a FK
+    # would bring back the cascade that DROP PARTITION can't tolerate. session_id stays
+    # alongside it, since the two answer different questions ("this visitor's transcript"
+    # vs "this thread").
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
         Index("ix_messages_session_created", "session_id", "created_at"),
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),
-        # Partition key MUST be part of the PK on a partitioned table.
+        # Partition key has to be part of the PK on a partitioned table.
         {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
-    # NOTE: deliberately NO foreign key to sessions. ON DELETE CASCADE across partitions
-    # would defeat the DROP-PARTITION retention strategy (the whole point of D1's design).
-    # Referential integrity for history is enforced in the repository layer instead.
+    # No foreign key to sessions on purpose: ON DELETE CASCADE across partitions would
+    # defeat the DROP-PARTITION retention strategy. Referential integrity for history is
+    # enforced in the repository layer instead.
 
 
 class User(Base):
-    """A signed-in identity (S20/D24).
+    """A signed-in identity.
 
-    DELIBERATELY MINIMAL: the auth provider's subject and nothing else. No email, no name,
-    no avatar. Clerk already holds the profile; copying it here would create a PII store to
-    defend, a deletion obligation to honour, and a breach surface — in exchange for fields
-    this product never reads. The cheapest compliance control is not collecting the data.
+    The auth provider's subject and nothing else: no email, no name, no avatar. Clerk
+    already holds the profile, and copying it here would buy a PII store to defend, a
+    deletion obligation, and a breach surface, in exchange for fields this product never
+    reads.
     """
 
     __tablename__ = "users"
@@ -124,11 +130,11 @@ class Conversation(Base):
     """A named thread. Owned by a user when signed in, by a session when anonymous.
 
     Both owner columns exist at once on purpose. An anonymous conversation records the
-    session that created it; when that visitor signs in, their conversations are CLAIMED by
-    setting user_id. Without that seam, signing in would orphan everything asked
-    beforehand — and the conversation someone just had is usually the reason they signed up.
+    session that created it, and when that visitor signs in their conversations are claimed
+    by setting user_id. Without that seam, signing in orphans everything asked beforehand,
+    and the conversation someone just had is usually why they signed up.
 
-    The CHECK makes an ownerless conversation impossible rather than merely unlikely.
+    The CHECK makes an ownerless conversation impossible rather than just unlikely.
     """
 
     __tablename__ = "conversations"
@@ -136,13 +142,18 @@ class Conversation(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # CASCADE is safe here because conversations is NOT partitioned — unlike messages,
-    # where a cascade would defeat the DROP-PARTITION retention design.
+    # CASCADE is safe here because conversations isn't partitioned, unlike messages where
+    # a cascade would defeat the retention design.
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     session_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # server_default as well as default, so rows inserted by the raw DDL path or a future
+    # migration get FALSE from the database and not only from Python.
+    pinned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

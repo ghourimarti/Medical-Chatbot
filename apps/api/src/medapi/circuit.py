@@ -31,6 +31,18 @@ class Breaker:
         self._name = name
         self._failures = 0
         self._opened_at: float | None = None
+        # Publish CLOSED at construction, before anything has failed.
+        #
+        # A labelled Gauge does not exist in Prometheus until `.labels()` is first called,
+        # so publishing only on a state CHANGE meant a dependency that had never broken had
+        # no series at all - and "no series" renders identically to "this was never
+        # instrumented". The Grafana panel read `No data` whether Redis was perfectly
+        # healthy or the metric had been deleted, which makes it useless as a health signal
+        # in exactly the situation you would reach for it.
+        #
+        # The venue breakers never had this problem because FailoverModel republishes every
+        # leg on every request. This is the same guarantee, paid once at startup.
+        self._publish(is_open=False)
 
     def _publish(self, *, is_open: bool) -> None:
         # Imported lazily so `circuit.py` stays usable in tests without the metrics

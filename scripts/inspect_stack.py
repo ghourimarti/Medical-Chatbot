@@ -570,9 +570,49 @@ def inspect_serving() -> Section:
     return s
 
 
+# ── Performance budgets ──────────────────────────────────────────────────────────────
+# TWO budgets. Both are always printed; NFR_PROFILE decides which one GATES.
+#
+# "production" is the Phase-1 design target, written for the topology it assumes -
+#   embeddings and reranking served on GPU. It does not move. It is what the project is
+#   FOR, and relaxing it would delete the only record of the goal.
+#
+# "local" is a USER-TOLERANCE ceiling for the dev topology (embed + rerank on CPU). The
+#   numbers come from perceived-latency thresholds, NOT from what this machine measures.
+#   That distinction is the whole point: a threshold copied from current behaviour can
+#   only ever pass, which makes it a description rather than a budget. A budget has to be
+#   able to fail or it tells you nothing.
+#
+#   2.5s p50 - answers stream, so this is time-to-first-visible-text with an indicator
+#              already on screen; under ~3s the wait still reads as "working".
+#   3.5s p95 - past ~4s people re-read the page and start assuming it broke.
+#   6.0s request p95 - unchanged from production, because the measured value (4.33s)
+#              already meets it; relaxing a target that passes would be pure goalpost
+#              movement.
+NFR_PROFILES = {
+    "production": {"ttft_p50": 0.8, "ttft_p95": 2.0, "request_p95": 6.0},
+    "local": {"ttft_p50": 2.5, "ttft_p95": 3.5, "request_p95": 6.0},
+}
+
+# A percentile over a handful of samples snaps to histogram BUCKET EDGES rather than
+# describing the data. Measured on this stack: 4 samples reported "TTFT p50 3.00s" and
+# "p95 6.00s" while 20 samples put the same system at 1.90s / 2.65s. The four-sample
+# verdict was not merely imprecise, it was wrong in the direction that manufactures a
+# failure. Below this count the check reports NOT MEASURED instead of guessing.
+NFR_MIN_SAMPLES = 20
+
+
 def inspect_nfr() -> Section:
-    s = Section("nfr", "5. PERFORMANCE vs the Phase 1 NFRs")
+    profile = p("NFR_PROFILE", "production").lower()
+    budget = NFR_PROFILES.get(profile, NFR_PROFILES["production"])
+    prod = NFR_PROFILES["production"]
+    relaxed = budget is not prod
+    s = Section("nfr", f"5. PERFORMANCE vs the NFRs  [profile: {profile}]")
     hq = "histogram_quantile(%s, sum(rate(medbot_%s_bucket[30m])) by (le))"
+
+    def against(key: str) -> str:
+        """Never let a relaxed budget hide the real target."""
+        return "" if not relaxed else f"production target {prod[key]}s"
 
     # TTFT is STREAMING-ONLY by design: without a stream there is no "first token" to
     # time. This script asks non-streaming, so a zero count here is expected and is not a
@@ -582,17 +622,34 @@ def inspect_nfr() -> Section:
     if not streamed:
         s.add("TTFT sampled", "> 0 after a STREAMED request", "0 streamed requests", None,
               "ask a question in the web UI (it streams) - curl --no-buffer also works")
+    elif streamed < NFR_MIN_SAMPLES:
+        s.add("TTFT samples", f">= {NFR_MIN_SAMPLES} before judging a percentile",
+              f"{int(streamed)} streamed", None,
+              "too few to place a quantile: it snaps to bucket edges and reports a "
+              "failure the data does not support. THIS SCRIPT CANNOT FIX THAT ITSELF - "
+              "it asks non-streaming, and TTFT only exists on a stream. Ask in the web "
+              "UI, or: for i in $(seq 20); do curl -sN -X POST localhost:5007/api/v1/"
+              "query/stream -H 'content-type: application/json' -d '{\"question\":\"q"
+              "$i\"}' >/dev/null; done")
     else:
         p50 = scalar(hq % ("0.50", "ttft_seconds"))
         p95 = scalar(hq % ("0.95", "ttft_seconds"))
-        s.add("TTFT p50", "<= 0.8s", f"{p50:.2f}s" if p50 else "awaiting scrape",
-              p50 <= 0.8 if p50 else None)
-        s.add("TTFT p95", "<= 2.0s", f"{p95:.2f}s" if p95 else "awaiting scrape",
-              p95 <= 2.0 if p95 else None)
+        s.add("TTFT p50", f"<= {budget['ttft_p50']}s",
+              f"{p50:.2f}s" if p50 else "awaiting scrape",
+              p50 <= budget["ttft_p50"] if p50 else None, against("ttft_p50"))
+        s.add("TTFT p95", f"<= {budget['ttft_p95']}s",
+              f"{p95:.2f}s" if p95 else "awaiting scrape",
+              p95 <= budget["ttft_p95"] if p95 else None, against("ttft_p95"))
 
+    requests = metric_sum(api_metrics(), "medbot_request_duration_seconds_count")
     dur = scalar(hq % ("0.95", "request_duration_seconds"))
-    s.add("request p95", "<= 6s", f"{dur:.2f}s" if dur else "awaiting scrape",
-          dur <= 6.0 if dur else None)
+    if requests and requests < NFR_MIN_SAMPLES:
+        s.add("request samples", f">= {NFR_MIN_SAMPLES} before judging a percentile",
+              f"{int(requests)} requests", None, "same bucket-edge problem as TTFT")
+    else:
+        s.add("request p95", f"<= {budget['request_p95']}s",
+              f"{dur:.2f}s" if dur else "awaiting scrape",
+              dur <= budget["request_p95"] if dur else None, against("request_p95"))
 
     for stage in ("embed", "retrieve", "rerank", "generate"):
         q = (

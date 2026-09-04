@@ -45,6 +45,7 @@ from medcore.schema import (
     SourcesEvent,
     StageTimings,
     TokenEvent,
+    Usage,
 )
 
 logger = logging.getLogger("medapi.pipeline")
@@ -95,6 +96,70 @@ class PipelineState:
     answer: Answer | None = None
     timings: StageTimings = field(default_factory=StageTimings)
 
+
+
+_ANAPHORA_RE = re.compile(
+    r"\b(it|its|that|this|those|these|they|them|their|he|she|him|her|"
+    r"the (condition|disease|drug|treatment|illness|infection|one))\b",
+    re.IGNORECASE,
+)
+
+
+_PRONOUN_RE = re.compile(
+    r"\b(it|its|they|them|their|those|these|this|that|he|she|him|her)\b",
+    re.IGNORECASE,
+)
+
+_CONTINUATION_RE = re.compile(
+    r"^(and|or|but|also|what about|how about|then)\b",
+    re.IGNORECASE,
+)
+
+
+def is_followup(question: str) -> bool:
+    """Loose test, used to decide whether to ATTEMPT a condense rewrite.
+
+    Two signals, both cheap: the question REFERS to something (anaphora), or is too short
+    to name a subject at all ("why?"). Deliberately over-eager — a false positive costs one
+    small rewrite that returns the question unchanged.
+    """
+    if len(question.split()) <= 3:
+        return True
+    return bool(_ANAPHORA_RE.search(question))
+
+
+def is_context_dependent(question: str) -> bool:
+    """Strict test, used to decide whether the question is SAFE TO CACHE (D10/INFRA-5).
+
+    Deliberately NOT the same predicate as `is_followup`, and the difference is the point.
+    The two have opposite cost asymmetries:
+
+      condense — a false positive wastes one cheap rewrite. Over-eager is correct.
+      cache    — a false positive permanently disables caching for that question shape.
+
+    `is_followup` treats anything of three words or fewer as dependent, which is right for
+    condense and catastrophic here: "What is cirrhosis?" IS three words. Reusing it would
+    have switched off the response cache for the single most common question shape in the
+    product — a large, silent cost increase that no test would have flagged as a failure.
+    Caught by a test asserting the fast path SURVIVES, which is why that test exists.
+
+    So this asks the narrower question: does the text point at something outside itself?
+    Anaphora does. A one- or two-word fragment ("why?", "and then?") does too, having no
+    room to name a subject. "What is cirrhosis?" names its subject and is cacheable.
+    """
+    if len(question.split()) <= 2:
+        return True
+    # A CONTINUATION opener ("and the treatment?", "what about children?") carries the
+    # subject forward from the previous turn without using a pronoun, so the pronoun test
+    # alone misses it.
+    if _CONTINUATION_RE.match(question.strip()):
+        return True
+    # PRONOUNS ONLY — not the looser `the (condition|treatment|...)` alternation that
+    # `is_followup` uses. That alternation matches "Describe the treatment options for
+    # pneumonia", which names its own subject and is perfectly safe to cache; treating it
+    # as thread-bound would lose the hit on a very ordinary phrasing for no correctness
+    # gain. Anything that reaches here and still refers outward does so with a pronoun.
+    return bool(_PRONOUN_RE.search(question))
 
 class RagPipeline:
     def __init__(
@@ -220,10 +285,26 @@ class RagPipeline:
         parts: list[str] = []
         # Which leg actually produced the tokens. Defaults to the configured first leg so
         # a non-failover model (tests, a single venue) behaves exactly as before.
-        served: dict[str, str] = {"model_id": self._model.model_id}
+        served: dict[str, str | None] = {
+            "model_id": self._model.model_id,
+            # None rather than a guess: with no failover chain there is no leg to name,
+            # and inventing one would make the field unreliable exactly where it matters.
+            "venue": None,
+        }
 
-        def _record_venue(_venue: str, model_id: str) -> None:
+        def _record_venue(venue: str, model_id: str) -> None:
             served["model_id"] = model_id
+            served["venue"] = venue
+
+        # Providers report usage in the FINAL SSE frame, long after the first token, so it
+        # cannot be a return value - it arrives through a callback or not at all. Without
+        # capturing it here DoneEvent.usage stayed the empty default, and every streamed
+        # answer was recorded as costing nothing.
+        usage_seen = Usage()
+
+        def _record_usage(u: Usage) -> None:
+            nonlocal usage_seen
+            usage_seen = u
 
         ttft_ms: float | None = None
         # Hold the provider stream so we can close it DETERMINISTICALLY. Relying on GC
@@ -232,8 +313,11 @@ class RagPipeline:
         # on_venue exists only on FailoverModel; a plain ModelPort (tests, a single
         # configured venue) must keep working untouched, so it is passed conditionally.
         stream_kwargs: dict[str, Any] = {}
-        if "on_venue" in inspect.signature(self._model.stream).parameters:
+        stream_params = inspect.signature(self._model.stream).parameters
+        if "on_venue" in stream_params:
             stream_kwargs["on_venue"] = _record_venue
+        if "on_usage" in stream_params:
+            stream_kwargs["on_usage"] = _record_usage
         provider_stream = self._model.stream(
             messages=messages,
             max_tokens=self._s.llm_max_output_tokens,
@@ -277,6 +361,8 @@ class RagPipeline:
                 citations=[],
                 refusal_category=RefusalCategory.DOSAGE.value,
                 model_id=served["model_id"],
+                venue=served["venue"],
+                usage=usage_seen,
                 timings=timings_now,
             )
             return
@@ -292,6 +378,8 @@ class RagPipeline:
                 text=NO_ANSWER_TEXT,
                 citations=[],
                 model_id=served["model_id"],
+                venue=served["venue"],
+                usage=usage_seen,
                 timings=timings,
             )
             return
@@ -300,6 +388,8 @@ class RagPipeline:
             text=text,
             citations=state.citations,
             model_id=served["model_id"],
+            venue=served["venue"],
+            usage=usage_seen,
             timings=timings,
         )
 
@@ -337,17 +427,8 @@ class RagPipeline:
     )
 
     def _needs_condense(self, question: str) -> bool:
-        """True when the question cannot stand on its own.
-
-        Two signals, both cheap. A question is a follow-up if it REFERS to something
-        (anaphora) or is too short to name a subject at all ("why?", "and the
-        causes?"). Neither is perfect, and that is fine: a false positive costs one
-        small rewrite that returns the question unchanged, while a false negative just
-        restores the old behaviour of searching the literal text.
-        """
-        if len(question.split()) <= 3:
-            return True
-        return bool(self._ANAPHORA.search(question))
+        """True when the question cannot stand on its own. See `is_followup`."""
+        return is_followup(question)
 
     async def _condense(self, state: PipelineState) -> PipelineState:
         """Rewrite a follow-up into a standalone question, for RETRIEVAL ONLY.
@@ -383,7 +464,15 @@ class RagPipeline:
                 max_tokens=self._s.condense_max_tokens,
                 temperature=0.0,
             )
-            rewritten = completion.text.strip().strip('"').splitlines()[0].strip()
+            # `.splitlines()[0]` on an EMPTY string raises IndexError, and an empty
+            # completion is not hypothetical: a reasoning model given a small max_tokens
+            # spends the whole budget on reasoning and returns "". Measured on
+            # groq/openai/gpt-oss-20b - 64 tokens -> "", 256 tokens -> "What causes
+            # pneumonia?". The except below then swallowed the IndexError as though the
+            # model had failed, so every follow-up in every thread quietly fell back to
+            # searching the literal pronoun.
+            lines = completion.text.strip().strip('"').splitlines()
+            rewritten = lines[0].strip() if lines else ""
         except Exception:  # noqa: BLE001
             # Degrade to the literal question rather than failing the request: a
             # broken rewrite must cost CONTEXT, never the answer (D21).
@@ -525,8 +614,24 @@ class RagPipeline:
         # No-answer gate (D3): if nothing cleared the confidence floor, don't generate.
         best = max((c.effective_score for c in state.chunks), default=0.0)
         if best < self._s.no_answer_threshold:
+            # total_ms MUST be summed here too. This path returns before _generate, which
+            # is the only other place that computes it, so `state.timings.total_ms` was
+            # still its 0.0 default - and postflight feeds exactly that number into
+            # medbot_request_duration_seconds. Every free decline therefore observed ZERO
+            # seconds into the latency histogram while really costing ~1.3s of embed +
+            # retrieve + rerank, dragging p95 down and making the service look faster than
+            # it is. Same defect as the one the comment in _generate describes, arrived at
+            # from the other direction: there it under-counted, here it counted nothing.
+            gate_timings = state.timings.model_copy(
+                update={
+                    "total_ms": (state.timings.embed_ms or 0)
+                    + (state.timings.retrieve_ms or 0)
+                    + (state.timings.rerank_ms or 0)
+                    + (state.timings.condense_ms or 0)
+                }
+            )
             no_answer = Answer(
-                kind=AnswerKind.NO_ANSWER, text=NO_ANSWER_TEXT, timings=state.timings
+                kind=AnswerKind.NO_ANSWER, text=NO_ANSWER_TEXT, timings=gate_timings
             )
             return replace(state, answer=no_answer)
         context, citations = build_context(
@@ -572,6 +677,39 @@ class RagPipeline:
                     text=_MESSAGES[RefusalCategory.DOSAGE],
                     refusal_category=RefusalCategory.DOSAGE.value,
                     model_id=completion.model_id,
+                    venue=completion.venue,
+                    usage=completion.usage,
+                    timings=timings,
+                ),
+            )
+        # An EMPTY completion is an abstention too — and it must be caught BEFORE the
+        # grounded branch below (INFRA-5 #7).
+        #
+        # `Answer` refuses to construct a grounded answer with no text, and it is right to:
+        # an uncited, wordless "answer" is the one thing this schema exists to prevent. But
+        # the pipeline was handing it exactly that, so a legitimate model behaviour turned
+        # into a ValidationError and a 500 — the user saw a crash where they should have
+        # seen "I don't have reliable information on that".
+        #
+        # Not hypothetical, and not rare enough to ignore: a REASONING model emits its
+        # reasoning inside the token budget and can return "" when the budget runs out
+        # first. Observed on groq/openai/gpt-oss-20b for "Describe the treatment options
+        # for pneumonia." The same root cause as the condense fix above, one stage later.
+        #
+        # NO_ANSWER rather than DEGRADED: from the reader's side nothing is degraded — the
+        # system simply has nothing to say, which is precisely what no_answer means. It is
+        # also the honest label, and honest beats flattering when the subject is medical.
+        if not completion.text.strip():
+            logger.warning(
+                "empty completion from %s; relabelling as no_answer", completion.model_id
+            )
+            return replace(
+                state,
+                answer=Answer(
+                    kind=AnswerKind.NO_ANSWER,
+                    text=NO_ANSWER_TEXT,
+                    model_id=completion.model_id,
+                    venue=completion.venue,
                     usage=completion.usage,
                     timings=timings,
                 ),
@@ -584,6 +722,7 @@ class RagPipeline:
                     kind=AnswerKind.NO_ANSWER,
                     text=NO_ANSWER_TEXT,
                     model_id=completion.model_id,
+                    venue=completion.venue,
                     usage=completion.usage,
                     timings=timings,
                 ),
@@ -594,6 +733,7 @@ class RagPipeline:
             citations=state.citations,
             confidence=max((c.score for c in state.citations), default=0.0),
             model_id=completion.model_id,
+            venue=completion.venue,
             usage=completion.usage,
             timings=timings,
         )

@@ -1,28 +1,23 @@
-"""S19.4 — does a semantic cache clear D10's double guard? (go/no-go evidence)
+"""Go/no-go evidence for enabling the semantic cache.
 
-D10 says the semantic cache stays OFF until it demonstrates ZERO false hits on the golden
-set. This script produces that evidence, and deliberately runs THREE experiments, because
-"zero false hits" on its own is not a decision — a cache that never fires also never fires
-wrongly, and would pass D10's literal bar while being worthless:
+The cache stays off until it shows zero false hits on the golden set. That bar alone is not
+enough to decide on, though, since a cache that never fires also never fires wrongly. Hence
+three experiments:
 
-  A. GOLDEN-SET SCAN — every pair of the 215 golden questions, embedded exactly as
-     production embeds a query. Measures how often distinct questions collide above the
-     threshold. This is D10's stated bar, and the weakest of the three: the golden set is
-     deliberately DIVERSE, so it under-samples precisely the near-duplicate region a cache
-     lives in.
+  A. Golden-set scan. Every pair of the 215 golden questions, embedded the way production
+     embeds a query, counting collisions above the threshold. Weakest of the three: the
+     golden set is diverse, so it under-samples the near-duplicate region a cache lives in.
 
-  B. ADVERSARIAL MINIMAL PAIRS — hand-authored pairs differing by one clinically decisive
-     token (adult/child, start/stop, hyper/hypo, max/min). Establishes the CEILING on
-     dangerous similarity: the point above which a hit returns a confidently wrong medical
-     answer.
+  B. Adversarial minimal pairs, differing by one clinically decisive token (adult/child,
+     start/stop, hyper/hypo, max/min). Gives the ceiling on dangerous similarity, above
+     which a hit returns a confidently wrong medical answer.
 
-  C. PARAPHRASE PAIRS — same intent, same correct answer, different wording. Establishes
-     the FLOOR on useful similarity. Without it there is no way to tell a safe threshold
-     from an inert one.
+  C. Paraphrase pairs: same intent and answer, different wording. Gives the floor on useful
+     similarity, which is what separates a safe threshold from an inert one.
 
-The decision is whether (B)'s ceiling and (C)'s floor leave a usable gap between them.
+The decision is whether B's ceiling and C's floor leave a usable gap.
 
-Offline: bge-large-en-v1.5 from the local HF cache. No API spend, no Qdrant required.
+Runs offline against bge-large-en-v1.5 from the local HF cache. No API spend, no Qdrant.
 
     uv run python packages/eval/tools/semantic_cache_probe.py
 """
@@ -47,8 +42,8 @@ MODEL_ID = "BAAI/bge-large-en-v1.5"
 # neighbourhood, because "is 0.97 safe" is far less useful than "is ANY threshold safe".
 THRESHOLDS = (0.95, 0.97, 0.98, 0.99, 0.995)
 
-# Each pair differs by one clinically decisive token. A cache hit across any of these
-# returns a confidently wrong answer to a medical question — the failure mode D10 names.
+# Each pair differs by one clinically decisive token, so a cache hit across any of them
+# returns a confidently wrong answer to a medical question.
 ADVERSARIAL_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("What is the aspirin dose for an adult?",
      "What is the aspirin dose for a child?", "adult/child"),
@@ -83,12 +78,12 @@ ADVERSARIAL_PAIRS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-# Experiment C. Same intent, different wording, SAME correct answer — the traffic a
-# semantic cache exists to catch. Without this, a "zero false hits" result is meaningless:
-# a cache that never fires also never fires wrongly. Deliberately excludes pure
-# case/punctuation variants, which `normalize_question` already collapses for free in the
-# exact-match ResponseCache — those would flatter the semantic layer with hits it does not
-# earn. Topics are drawn from the A-D corpus the demo actually ingests.
+# Experiment C. Same intent, different wording, same correct answer: the traffic a
+# semantic cache exists to catch. Without it a "zero false hits" result means nothing.
+#
+# Excludes pure case/punctuation variants, since `normalize_question` already collapses
+# those in the exact-match cache and counting them would flatter the semantic layer with
+# hits it didn't earn. Topics come from the A-D corpus the demo ingests.
 PARAPHRASE_PAIRS: tuple[tuple[str, str], ...] = (
     ("What is an abscess?", "Can you explain what an abscess is?"),
     ("What causes chickenpox?", "What is the cause of chickenpox?"),

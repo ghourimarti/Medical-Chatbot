@@ -8,6 +8,7 @@ surfaces as a mediocre eval score with no error anywhere.
 
 from __future__ import annotations
 
+import os
 import time
 from functools import cached_property
 from typing import Protocol
@@ -37,6 +38,30 @@ class RerankBackend(Protocol):
     def score(self, query: str, passages: list[str]) -> list[float]: ...
 
 
+def _device() -> str:
+    """Where the encoders run. `ML_DEVICE=cpu|cuda|auto`, default cpu.
+
+    This was hardcoded to "cpu" in both backends, which made the single largest component
+    of TTFT untunable. Measured on the dev box: rerank p95 3.5s scoring 20 candidate pairs
+    on CPU, against a TTFT p50 NFR of 0.8s - so the pipeline spent multiples of its entire
+    latency budget before the model could emit a first token.
+
+    Default stays "cpu" deliberately. On a single-GPU host the card is already holding the
+    inference engine, and a cross-encoder that evicts KV cache trades one latency problem
+    for another. "auto" picks cuda only when torch reports it available, so the same image
+    runs on a CPU-only box unchanged.
+    """
+    choice = os.getenv("ML_DEVICE", "cpu").strip().lower()
+    if choice != "auto":
+        return choice
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:  # noqa: BLE001 - a probe must never stop the service booting
+        return "cpu"
+
+
 class TorchEmbeddingBackend:
     """sentence-transformers on CPU. The measured baseline (S3: ~140-225ms/query)."""
 
@@ -48,7 +73,7 @@ class TorchEmbeddingBackend:
     def _model(self) -> object:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer(self._model_id, device="cpu")
+        model = SentenceTransformer(self._model_id, device=_device())
         dim_fn = getattr(model, "get_embedding_dimension", None) or (
             model.get_sentence_embedding_dimension
         )
@@ -90,7 +115,7 @@ class TorchRerankBackend:
     def _model(self) -> object:
         from sentence_transformers import CrossEncoder
 
-        return CrossEncoder(self._model_id, device="cpu")
+        return CrossEncoder(self._model_id, device=_device())
 
     @property
     def model_id(self) -> str:

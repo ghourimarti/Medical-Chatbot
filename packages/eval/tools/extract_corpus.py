@@ -1,12 +1,12 @@
-"""One-off curation tool: extract topic excerpts from the Gale PDF so golden-set
-ground truths are written with eyes on the actual corpus (not from model memory).
+"""Extract topic excerpts from the Gale PDF, so golden-set ground truths get written
+against the actual corpus instead of from memory.
 
 Usage:
   uv run python packages/eval/tools/extract_corpus.py --build-cache
   uv run python packages/eval/tools/extract_corpus.py --topic "Asthma" [--pages 3]
 
-The page-text cache lives outside the repo (scratch dir) — it is a curation aid,
-not an artifact.
+The page-text cache lives in a scratch dir outside the repo. It's a curation aid, not an
+artifact.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def build_cache() -> None:
     for i, page in enumerate(reader.pages):
         try:
             pages.append(page.extract_text() or "")
-        except Exception as e:  # noqa: BLE001 — a bad page shouldn't kill the cache build
+        except Exception as e:  # noqa: BLE001 (one bad page shouldn't kill the build)
             pages.append("")
             print(f"page {i}: extract failed: {e}", file=sys.stderr)
         if (i + 1) % 250 == 0:

@@ -83,9 +83,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.embedder = build_embedding_backend(
         settings.ml_backend, settings.embedding_model_id, settings.embedding_dim
     )
-    app.state.reranker = build_rerank_backend(settings.ml_backend, settings.reranker_model_id)
+    rerank_backend = settings.ml_rerank_backend or settings.ml_backend
+    app.state.reranker = build_rerank_backend(rerank_backend, settings.reranker_model_id)
     app.state.warm = False
-    logger.info("warming models (backend=%s embed=%s rerank=%s)", settings.ml_backend,
+    logger.info("warming models (embed_backend=%s rerank_backend=%s embed=%s rerank=%s)",
+                settings.ml_backend, rerank_backend,
                 settings.embedding_model_id, settings.reranker_model_id)
     await asyncio.to_thread(app.state.embedder.warmup)
     await asyncio.to_thread(app.state.reranker.warmup)

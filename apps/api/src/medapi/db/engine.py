@@ -1,8 +1,8 @@
-"""Async engine + session factory (D1, D7).
+"""Async engine and session factory.
 
-Pool sizing is an NFR concern, not a default: at 350 RPS with ~2,100 concurrent SSE streams
-the API must NOT hold a DB connection for the life of a stream. Connections are acquired
-per-operation and released immediately — which is why the pool can stay small.
+Pool sizing matters here. At 350 RPS with ~2,100 concurrent SSE streams the API can't hold
+a connection for the life of a stream, so connections are acquired per-operation and
+released immediately. That's what keeps the pool small.
 """
 
 from __future__ import annotations

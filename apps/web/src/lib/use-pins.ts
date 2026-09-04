@@ -3,21 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 /**
- * Pinned conversations — PER-BROWSER, deliberately (F5.1).
+ * Pinned conversations — the LOCAL FALLBACK (S22).
  *
- * The honest version of this feature is a `pinned` column on the conversations table and a
- * field on the PATCH endpoint, so a pin follows the account to another device. That is
- * backend work, and this session is frontend-only. So pins live in localStorage.
+ * Pinning is now a `pinned` column and a PATCH field, so a pin follows the account to
+ * another device. This hook is what happens when that server support is NOT there: the
+ * sidebar tries the API first and falls back here when the call reports it is unsupported.
  *
- * WHAT THAT COSTS, stated rather than hidden: a pin does not follow you to another device,
- * and clearing site data drops it. Nothing else in the app depends on it — a pin only
- * reorders the sidebar — so the failure mode is cosmetic, which is what makes the trade
- * acceptable here and would NOT make it acceptable for, say, a refusal category.
+ * WHY KEEP IT AT ALL rather than deleting it now the real thing exists. It is what makes
+ * the backend half of S22 revertable on its own. Roll the API back and the sidebar keeps
+ * pinning — per-browser, degraded, but working — instead of presenting a control that
+ * silently does nothing. A feature that fails by getting smaller is a very different thing
+ * from one that fails by lying.
  *
- * THE SEAM: every consumer goes through `isPinned` / `togglePin` / `pinnedIds`. Swapping the
- * body of this hook for a call to `PATCH /api/v1/conversations/{id}` changes nothing above
- * it. The sidebar never touches localStorage directly, precisely so that swap stays a
- * one-file change.
+ * The cost, stated: a local pin does not follow you to another device and clearing site
+ * data drops it. Acceptable because a pin only reorders a list.
  */
 
 const KEY = "medbot.pinned";

@@ -80,7 +80,7 @@
 
   /* Shell geometry. Named because three components need to agree on them, and a
      magic `w-64` repeated in three files is how a sidebar and its offset drift apart. */
-  --sidebar-w: 17rem;
+  --sidebar-w: 18.5rem;
   --sidebar-collapsed-w: 3.5rem;
   --header-h: 3rem;
   --measure: 68ch;      /* prose line length  (.answer-prose) */
@@ -348,4 +348,183 @@ body {
   a[href]::after {
     content: "";
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MOTION (F7)
+
+   All of it is CSS. A spring library would be ~15kB against ~22kB of headroom
+   on `/`, and none of these need physics — they need to be SHORT and to move
+   in one direction.
+
+   Everything here is already neutralised by the prefers-reduced-motion block
+   further down, which sets animation-duration to 0.01ms globally. That block
+   is why this file can add motion freely: opting out is not per-animation
+   discipline, it is structural.
+
+   The rule these follow: motion explains a CHANGE OF STATE and nothing else.
+   A turn arriving is a change. A turn that is already on screen is not, so
+   nothing loops, nothing pulses for decoration, and nothing moves while a
+   person is trying to read a medical answer.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes medbot-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A turn entering the conversation. `both` holds the start frame before the
+   animation begins, so a turn cannot flash at full opacity for one frame first. */
+.turn-enter {
+  animation: medbot-rise var(--duration-slow) var(--ease-out) both;
+}
+
+@keyframes medbot-rise-opaque {
+  from {
+    transform: translateY(10px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* The live answer arrives a beat after the question it answers. 90ms is under the
+   ~100ms threshold where a delay stops reading as "sequence" and starts reading as "lag".
+
+   TRANSFORM ONLY — NO OPACITY, and this is a correctness rule rather than a taste one.
+   Fading the answer in makes it genuinely low-contrast for the ~300ms it takes, and the
+   answer that most needs to be legible on arrival is an EMERGENCY card telling someone to
+   call emergency services. Caught by axe, which measured mid-animation and reported the
+   emergency heading at a contrast ratio of 1.25 (#f1dbd9 on #faf9f7) — a real state a
+   real reader passes through, not a testing artefact.
+   Motion still reads: the card rises into place, it just never arrives dimmed. */
+.turn-enter-delayed {
+  animation: medbot-rise-opaque var(--duration-slow) var(--ease-out) 90ms both;
+}
+
+@keyframes medbot-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* Three dots, staggered. Chosen over a spinner deliberately: a spinner says
+   "blocked", three dots say "composing" — and the second is what is actually
+   happening while the model writes. */
+.thinking-dot {
+  animation: medbot-dot 1.4s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes medbot-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Skeleton shimmer for evidence that has not landed yet. Low contrast on
+   purpose: a placeholder that draws the eye competes with the answer it is
+   standing in for. */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-sunken) 25%,
+    var(--surface-raised) 50%,
+    var(--surface-sunken) 75%
+  );
+  background-size: 200% 100%;
+  animation: medbot-sweep 1.6s linear infinite;
+}
+
+/* Citation chips and row actions. Transitions, not animations: they respond to
+   the pointer rather than announcing themselves. */
+.lift {
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+.lift:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+
+/* ── Streaming text arrival (S24) ─────────────────────────────────────────────
+   Tokens land in CHUNKS, not one character at a time, so a per-character
+   typewriter would be a lie about what is happening. This fades in whatever
+   arrived since the last frame, which is the honest version: the text appears
+   at the rate the model actually produces it, just without the hard snap.
+
+   `will-change` is deliberately absent. The animated span is replaced on every
+   chunk, so promoting each one to its own layer would churn layers faster than
+   it saved paint work. */
+@keyframes medbot-token-in {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.token-in {
+  animation: medbot-token-in 260ms var(--ease-out) both;
+}
+
+/* ── Sidebar reveal (S24) ─────────────────────────────────────────────────────
+   The rail already animates its WIDTH. Its contents did not, so at the moment of
+   collapse the labels were still full-width inside a 3.5rem box for one frame,
+   which reads as a flicker rather than a fold. */
+.rail-content {
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
+}
+.rail-content[data-collapsed="true"] {
+  opacity: 0;
+  transform: translateX(-6px);
+  pointer-events: none;
+}
+
+/* ── Route transition (S24) ───────────────────────────────────────────────────
+   Applied to <main>, keyed on the pathname, so moving between the landing, the
+   app and the public pages is a settle rather than a jump-cut. Deliberately
+   shorter than a turn arriving: navigation should feel instant, and anything
+   over ~200ms starts to feel like waiting. */
+@keyframes medbot-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.page-in {
+  animation: medbot-page-in 180ms var(--ease-out) both;
 }

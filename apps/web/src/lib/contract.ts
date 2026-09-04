@@ -54,6 +54,10 @@ export interface Answer {
   timings: StageTimings;
   cache_hit: boolean;
   refusal_category: RefusalCategory | null;
+  /** Which chain leg served this (`local-sglang`, `groq`). NOT derivable from
+   *  model_id: every venue can serve the same model, and Groq serves one named
+   *  `openai/gpt-oss-20b`. Null when no failover chain is configured. */
+  venue: string | null;
 }
 
 /** SSE: exactly one `sources`, then zero or more `token`, then exactly one `done` — or an
@@ -72,6 +76,10 @@ export interface DoneEvent {
   usage: Usage;
   timings: StageTimings;
   refusal_category: RefusalCategory | null;
+  /** Which chain leg served this (`local-sglang`, `groq`). NOT derivable from
+   *  model_id: every venue can serve the same model, and Groq serves one named
+   *  `openai/gpt-oss-20b`. Null when no failover chain is configured. */
+  venue: string | null;
 }
 export interface ProblemDetail {
   type: string;
@@ -110,6 +118,9 @@ export interface Conversation {
   title: string | null;
   created_at: string;
   updated_at: string;
+  /** S22. Server-side pin. Optional so a client built against an older API still
+   *  type-checks — the sidebar treats a missing value as unpinned. */
+  pinned?: boolean;
   /** False while owned only by an anonymous session. The UI uses this to explain that
    *  signing in will keep the thread rather than silently discarding it. */
   claimed: boolean;

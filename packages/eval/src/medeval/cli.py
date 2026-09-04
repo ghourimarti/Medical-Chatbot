@@ -14,10 +14,10 @@ from medeval.paths import DATASETS_DIR, REPO_ROOT, REPORTS_DIR
 def _load_env() -> None:
     """Load .env once, at the entry point.
 
-    S6.12: credentials used to arrive as a SIDE EFFECT of constructing DemoTarget, so
-    `run --target demo` had a judge key and `rejudge` silently did not — 30 batches failed
-    on a missing key that was sitting in .env the whole time. Environment loading belongs
-    to the process, not to whichever object happens to be built first.
+    Credentials used to arrive as a side effect of constructing DemoTarget, so
+    `run --target demo` had a judge key and `rejudge` quietly didn't: 30 batches failed on
+    a key that was sitting in .env the whole time. Loading the environment belongs to the
+    process, not to whichever object happens to get built first.
     """
     from dotenv import load_dotenv
 
@@ -25,14 +25,13 @@ def _load_env() -> None:
 
 
 def _force_utf8_stdout() -> None:
-    """Make console output encoding-proof (S17.3).
+    """Make console output encoding-proof.
 
-    `medeval compare` renders → and ✅ in its delta table. On Windows the console defaults
-    to cp1252, so printing the table raised UnicodeEncodeError — and because the print came
-    BEFORE the gate check, the gate never evaluated at all: every run exited 1 from the
-    traceback whether quality had regressed or not. A gate that cannot pass is not a gate,
-    and an exit code meaning "rendering failed" is indistinguishable from one meaning
-    "quality regressed".
+    `medeval compare` renders → and ✅ in its delta table. Windows consoles default to
+    cp1252, so printing it raised UnicodeEncodeError, and since the print came before the
+    gate check the gate never ran: every invocation exited 1 from the traceback whether
+    quality had regressed or not. An exit code meaning "rendering failed" is
+    indistinguishable from one meaning "quality regressed".
 
     errors="replace" rather than a narrower charset: a display fallback must never again be
     able to take down a verdict.
@@ -70,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     p_cmp.add_argument("--reports", type=Path, default=REPORTS_DIR)
     p_cmp.add_argument("--out", type=Path, default=None, help="write markdown here")
     p_cmp.add_argument(
-        "--gate", action="store_true", help="exit 1 if the AFTER run fails a D19 threshold"
+        "--gate", action="store_true", help="exit 1 if the after run fails a threshold"
     )
 
     p_res = sub.add_parser("rescore", help="recompute deterministic metrics (no model calls)")
@@ -79,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     p_res.add_argument("--out", type=Path, default=REPORTS_DIR)
 
     p_rej = sub.add_parser(
-        "rejudge", help="recompute JUDGE metrics from a report's stored contexts (S6.12)"
+        "rejudge", help="recompute judge metrics from a report's stored contexts"
     )
     p_rej.add_argument("report", type=Path)
     p_rej.add_argument("--dataset", type=Path, default=DATASETS_DIR / "golden_core_v1.jsonl")
@@ -95,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         "--metrics", default="", help="comma-separated RAGAS metrics (default: all four)"
     )
 
-    p_cal = sub.add_parser("calibrate", help="judge calibration vs human labels (S19.2)")
+    p_cal = sub.add_parser("calibrate", help="judge calibration vs human labels")
     cal_sub = p_cal.add_subparsers(dest="cal_cmd", required=True)
 
     c_prep = cal_sub.add_parser("prepare", help="sample cases + freeze answers into a sheet")
@@ -111,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     c_plant = cal_sub.add_parser(
-        "plant", help="append deliberately-defective answers so kappa has negatives"
+        "plant", help="append known-defective answers so kappa has negatives"
     )
     c_plant.add_argument("--out", type=Path, default=Path("calibration/labels.jsonl"))
 
@@ -216,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         missing = [m for m in RAGAS_KEYS if cov.get(m, 0) < applicable.get(m, 0)]
         if missing:
             print("")
-            print(f"WARNING: partial judge coverage for {', '.join(missing)} — read with n.")
+            print(f"WARNING: partial judge coverage for {', '.join(missing)}; read with n.")
         return 0
 
     if args.cmd == "compare":
@@ -229,12 +228,9 @@ def main(argv: list[str] | None = None) -> int:
         before = load_report(_resolve(args.before))
         after = load_report(_resolve(args.after))
         table = compare(before, after)
-        # Decide and persist BEFORE displaying (S17.3). Rendering is the least important
-        # thing this command does and the only part that can fail on a terminal's encoding;
-        # it must not be able to suppress the verdict or lose the artifact. Previously the
-        # print came first, so on a cp1252 console the UnicodeEncodeError meant the gate
-        # never evaluated and delta.md was never written — every run exited 1 from the
-        # traceback, indistinguishable from a genuine quality regression.
+        # Decide and persist before displaying. Rendering is the least important thing
+        # this command does and the only part that can fail on a terminal's encoding, so
+        # it must not be able to suppress the verdict or lose the artifact.
         failures = gate_failures(after) if args.gate else []
         if args.out:
             args.out.parent.mkdir(parents=True, exist_ok=True)

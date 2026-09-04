@@ -134,18 +134,79 @@ grep '^SERVING_CHAIN=' .env
 docker logs medbot-api 2>&1 | grep -i 'serving chain'     # the resolved order at boot
 curl -s -X POST localhost:5007/api/v1/query \
   -H 'content-type: application/json' \
-  -d '{"question":"What is chickenpox?","stream":false}' | grep -o '"model_id":"[^"]*"'
+  -d '{"question":"What is chickenpox?","stream":false}' | grep -o '"venue":"[^"]*"'
 ```
+Read `venue`, not `model_id`. Every leg in this chain serves the SAME model id, and Groq's
+model is named `openai/gpt-oss-20b` — so a model name is not merely uninformative here, it
+points at the wrong provider. `venue` carries the chain leg (`local-sglang`, `groq`).
+`make which-engine` prints all of this, plus which engines are up, in one go.
 
 **Force a failover and watch it happen:**
 ```bash
 docker stop vllm
 curl -s -X POST localhost:5007/api/v1/query -H 'content-type: application/json' \
-  -d '{"question":"What is cirrhosis?","stream":false}' | grep -o '"model_id":"[^"]*"'
+  -d '{"question":"What is cirrhosis?","stream":false}' | grep -o '"venue":"[^"]*"'
 docker start vllm
 ```
 The answer should still arrive, from the next leg in `SERVING_CHAIN`. In Grafana,
 `medbot_venue_circuit_state` shows 0 closed · 1 half-open · 2 **open**.
+
+---
+
+### Which venue is meeting the NFRs (rows 1a-1d)
+
+Four rows, one per chain leg: **`1a - local-sglang`**, **`1b - local-vllm`**,
+**`1c - groq`**, **`1d - openai`**. Each carries its own TTFT p50/p95, request p95 and
+cost p95.
+
+Why it exists: a failover chain serves one endpoint from a local GPU and from a hosted API
+whose latency and price differ by an order of magnitude. Combined, "TTFT p95" is an average
+over whichever venues happened to answer — it moves when the **chain** shifts rather than
+when performance does, and it can never name the slow leg.
+
+The rows are explicit rather than repeated from a template variable, because Grafana gives a
+repeated row ONE title template: every repetition would share it, and the 1a/1b/1c/1d prefix
+could not vary. The cost of that choice is that adding a venue to `SERVING_CHAIN` means
+adding a row and four panels by hand.
+
+**"not served since restart"** means exactly that — this leg has served nothing since the API
+came up. For `1c` and `1d` it is the useful statement *your fallbacks are untested*; run
+`make chain-drill` and they fill in. Check which venues have data:
+
+```bash
+curl -s 'http://localhost:5013/api/v1/query?query=medbot_request_duration_seconds_count' | grep -o '"venue":"[^"]*"' | sort -u
+```
+
+These panels read the histogram **cumulatively, without `rate()`**, unlike row 1. `rate()` of
+a counter that has not moved is 0, and `histogram_quantile` over all-zero buckets is NaN — so
+a rate-based per-venue panel reads NaN whenever no request landed in the window, which on a
+bursty dev box is most of the time.
+
+`venue="none"` labels answers that generated nothing (refusals, degraded, retrieval-gate
+declines) and `venue="cache"` labels cache hits; both are excluded from these rows. Cache
+hits are deliberately not credited to the venue that originally produced the content — a
+sub-millisecond cache read would otherwise drag that engine's percentiles down and make it
+look faster than it serves.
+
+### Which latency budget the audit gates on
+
+`scripts/inspect_stack.py` reads `NFR_PROFILE`:
+
+| profile | TTFT p50 | TTFT p95 | request p95 | for |
+|---|---|---|---|---|
+| `production` | 0.8s | 2.0s | 6.0s | the design target — GPU-served embed + rerank |
+| `local` | 2.5s | 3.5s | 6.0s | this box — embed + rerank on CPU |
+
+The local numbers come from **perceived-latency thresholds, not from what the machine
+measures**. A threshold copied from current behaviour can only ever pass, which makes it a
+description rather than a budget — and a budget that cannot fail tells you nothing.
+`request p95` is deliberately identical in both, because the measured 4.33s already meets
+6s and relaxing a target that passes is goalpost movement.
+
+Both budgets always print, and a relaxed check shows the production target beside it, so
+the relaxation can never hide. Percentiles are reported as **not measured** below 20
+samples: `histogram_quantile` over a handful of points snaps to bucket edges, and 4 samples
+once reported "TTFT p50 3.00s" for a system measuring 1.90s.
 
 ---
 

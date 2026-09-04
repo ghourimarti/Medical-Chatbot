@@ -10,9 +10,17 @@ scrape_configs:
   - job_name: medbot-api
     metrics_path: /metrics
     static_configs:
-      # host.docker.internal: the API usually runs on the host during development while
-      # its dependencies run in compose.
-      - targets: ["host.docker.internal:5007", "api:8000"]
+      # ONE target only. This listed both `host.docker.internal:5007` and `api:8000` so the
+      # API could be scraped whether it ran on the host or in compose - but they are the
+      # SAME process reached two ways, and when both are up Prometheus scrapes it twice.
+      # Every counter then reads exactly 2x under sum()/rate(): the dashboard showed 30
+      # grounded answers against a real 15. Histogram quantiles were unaffected (doubling
+      # every bucket equally leaves the quantile identical), which is what made it survive
+      # so long - the latency panels looked right while every volume panel lied.
+      #
+      # To scrape a host-run API instead, override the target rather than adding to it:
+      #   docker compose ... -e MEDBOT_API_TARGET=host.docker.internal:5007
+      - targets: ["api:8000"]
     # Scraping is best-effort in dev; a target that is down must not stop the others.
     honor_labels: true
 

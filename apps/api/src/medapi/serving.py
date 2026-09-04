@@ -41,6 +41,7 @@ from medapi.observability import (
     record_answer,
     record_stage,
 )
+from medapi.pipeline.rag import is_context_dependent
 from medapi.pricing import cost_usd
 from medcore.errors import QuotaExceededError
 from medcore.prompts import load_prompt
@@ -146,6 +147,29 @@ async def short_circuit(question: str, svc: Services, pre: Preflight) -> Answer 
     DEGRADED, never an error (D20/D21): the kill switch and the daily spend breaker both
     arrive here.
     """
+    # A FOLLOW-UP IS NEVER SERVED FROM CACHE (D10/INFRA-5).
+    #
+    # The cache key is a hash of the question text, namespaced by prompt/corpus/index/model
+    # version — and by nothing about the conversation. So "What causes it?" produced ONE key
+    # for every thread on the system. Asked after pneumonia in one conversation and after
+    # cirrhosis in another, the second reader was served the first reader's answer, with
+    # confident citations to the wrong condition. Proven with `cache_hit: true` returning a
+    # coccydynia answer to a thread that had only ever discussed pneumonia.
+    #
+    # This module's own docstring states the stakes: a wrong cache hit is a patient-safety
+    # bug, not a stale page.
+    #
+    # WHY NOT CONDENSE FIRST AND KEY ON THE RESULT. That is the better long-term answer -
+    # "What causes pneumonia?" is genuinely shareable and would RAISE the hit rate. But it
+    # puts an LLM call ahead of every cache lookup, which is precisely the cost the cache
+    # exists to avoid, and it restructures the request path. Declining to cache the one
+    # category that is currently WRONG is smaller, safe, and loses almost nothing: a
+    # standalone question - the overwhelming majority - still takes the fast path
+    # untouched.
+    if is_context_dependent(question):
+        cache_events.labels(layer="response", result="skip").inc()
+        return None
+
     t0 = time.perf_counter()
     cached = await svc.cache.get(question)
     if cached is not None:
@@ -163,7 +187,13 @@ async def short_circuit(question: str, svc: Services, pre: Preflight) -> Answer 
         # produced, which is useful) - they simply must not be re-observed as if this
         # request had done the work.
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        record_answer(cached.kind.value, elapsed_ms)
+        # venue="cache", NOT the venue that originally generated this answer, and not the
+        # same "none" refusals use. Crediting the original venue would let sub-millisecond
+        # cache reads pull down that venue's latency percentiles and make it look faster
+        # than it serves. Reusing "none" would blend a cheap success into the bucket that
+        # means "nothing was generated". A cache hit is its own kind of answer, so it gets
+        # its own label, and per-venue latency stays a statement about venues.
+        record_answer(cached.kind.value, elapsed_ms, venue="cache")
         pre.log.info(
             "cache_hit", kind=cached.kind.value, elapsed_ms=round(elapsed_ms, 1)
         )
@@ -206,6 +236,12 @@ async def postflight(
     # are derived here rather than the pipeline importing Prometheus (D13).
     t = answer.timings
     for stage, ms in (
+        # condense FIRST because it runs first, and because it was MISSING: rag.py computes
+        # condense_ms and sums it into total_ms, but this loop never recorded it. Grafana's
+        # stage-latency panel renders `by (stage)`, so it silently omitted the slowest
+        # stage at p95 (Jaeger: 4254ms) and the visible stages summed to less than the
+        # total with no gap to explain it.
+        ("condense", t.condense_ms),
         ("embed", t.embed_ms),
         ("retrieve", t.retrieve_ms),
         ("rerank", t.rerank_ms),
@@ -230,6 +266,7 @@ async def postflight(
         t.ttft_ms,
         refusal_category=answer.refusal_category,
         no_answer_path=no_answer_path,
+        venue=answer.venue,
     )
     pre.log.info(
         "answered",
@@ -318,6 +355,41 @@ def _emit(answer: Answer, *, question: str, version: str, sha: str) -> None:
             "total_ms": answer.timings.total_ms,
         },
         cache_hit=answer.cache_hit,
+        # trace_answer has always accepted a venue and _emit never passed one, so every
+        # Langfuse trace recorded venue=None - the one field that separates self-hosted
+        # from paid spend, missing from the store whose job is per-answer cost attribution.
+        # Answer.venue only started carrying it once the chain leg reached the response
+        # contract; before that there was nothing here to pass.
+        venue=answer.venue,
+    )
+
+
+async def record_short_circuit(
+    answer: Answer, *, question: str, svc: Services, pre: Preflight
+) -> None:
+    """Persist a turn that never reached postflight (INFRA-5).
+
+    A cache hit returns from `short_circuit` BEFORE postflight runs, and postflight is the
+    only caller of `record_turn`. So every answer the cache served was invisible: absent
+    from the session transcript, and — because the conversation link is written with the
+    row — absent from the conversation it was asked in. A thread could be created, asked a
+    previously-seen question, and stay permanently empty. Reported as "the conversation
+    saves but will not reload", which is exactly what it looked like from outside.
+
+    Measured, not inferred: 634 rows before a cached ask, 634 after.
+
+    Only the history write is repeated here. `short_circuit` already records the answer
+    metric and the cache-hit counter, and re-recording spend would bill a request that
+    cost nothing — the bug this deliberately does not create while fixing the other one.
+    """
+    await svc.history.record_turn(
+        pre.session_id,
+        question=question,
+        answer_text=answer.text,
+        kind=answer.kind,
+        model_id=answer.model_id,
+        client_hash=pre.client_key,
+        conversation_id=pre.conversation_id,
     )
 
 
@@ -335,6 +407,10 @@ def answer_from_done(event: DoneEvent) -> Answer:
         usage=event.usage,
         timings=event.timings,
         refusal_category=event.refusal_category,
+        # Carry the venue across the conversion or the streaming path loses it here, one
+        # step before postflight - which would leave Langfuse recording venue=None for
+        # exactly the requests the browser makes, i.e. all the real ones.
+        venue=event.venue,
     )
 
 
@@ -354,4 +430,7 @@ def done_from_answer(answer: Answer) -> DoneEvent:
         usage=answer.usage,
         timings=answer.timings,
         refusal_category=answer.refusal_category,
+        # The reverse trip, so a cached or degraded answer reports the venue that
+        # originally produced it rather than an empty field.
+        venue=answer.venue,
     )

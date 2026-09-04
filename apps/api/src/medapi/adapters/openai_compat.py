@@ -1,14 +1,13 @@
-"""One adapter for every serving venue (D4b, D12).
+"""One adapter for every serving venue.
 
-vLLM, SGLang, RunPod, AWS-hosted vLLM, and Groq all expose the SAME OpenAI-compatible
-`/v1/chat/completions` API. So the multi-venue design does not need five adapters — it
-needs one adapter with a configurable `base_url`. That is the entire reason D4b is cheap
-to build: the protocol was already uniform, the seam (ModelPort, S2) was already there.
+vLLM, SGLang, RunPod, AWS-hosted vLLM and Groq all expose the same OpenAI-compatible
+`/v1/chat/completions` API, so the multi-venue design needs one adapter with a configurable
+`base_url` rather than five adapters. The protocol was already uniform and ModelPort was
+already there, which is what makes the whole multi-venue setup cheap.
 
-Uses raw httpx rather than the openai SDK deliberately: the SDK adds retry and timeout
-behaviour we must control ourselves, because retries here interact with the circuit
-breaker and the failover chain. Two layers of independent retry logic is how a provider
-outage turns into a thundering herd.
+Raw httpx rather than the openai SDK, because the SDK adds retry and timeout behaviour we
+need to own: retries here interact with the circuit breaker and the failover chain, and two
+layers of independent retry logic is how a provider outage becomes a thundering herd.
 """
 
 from __future__ import annotations
@@ -26,16 +25,15 @@ logger = logging.getLogger("medapi.venue")
 
 
 def _describe(e: Exception) -> str:
-    """Render an httpx exception so the log identifies the failure.
+    """Render an httpx exception so the log actually identifies the failure.
 
-    Found in P5.2: several httpx exceptions — ConnectError, ReadTimeout, RemoteProtocolError
-    — carry an EMPTY str(). `f"{venue}: {e}"` therefore logged "local: " on every failure,
-    which is indistinguishable between "nothing is listening", "the request timed out", and
-    "the server hung up". Hours of a real incident are lost to that.
+    Several httpx exceptions (ConnectError, ReadTimeout, RemoteProtocolError) carry an
+    empty str(), so `f"{venue}: {e}"` logged "local: " on every failure. That reads the
+    same whether nothing was listening, the request timed out, or the server hung up.
 
-    The exception TYPE is always informative, so lead with it; for HTTP status errors the
-    response body carries the provider's own explanation, which is the single most useful
-    line available (SGLang, for instance, reports exact token counts on a 400).
+    The exception type is always informative, so lead with it. For HTTP status errors the
+    response body carries the provider's own explanation, which is usually the most useful
+    line available (SGLang reports exact token counts on a 400, for instance).
     """
     detail = str(e).strip()
     if isinstance(e, httpx.HTTPStatusError):
@@ -61,8 +59,8 @@ class OpenAICompatModel:
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        # A User-Agent is not optional: providers behind Cloudflare (Groq among them)
-        # return 403 to requests without one — measured in S3b.
+        # Not optional: providers behind Cloudflare (Groq included) return 403 to
+        # requests with no User-Agent.
         headers["User-Agent"] = "medbot/0.1"
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"), headers=headers, timeout=timeout
@@ -100,6 +98,10 @@ class OpenAICompatModel:
         return Completion(
             text=choice["message"]["content"] or "",
             model_id=self._model_id,
+            # The adapter's own venue, so a single configured model with no failover
+            # chain still reports where its answer came from. FailoverModel overwrites
+            # this with the more specific chain leg (`local-sglang`, not `local`).
+            venue=self.venue,
             usage=Usage(
                 prompt_tokens=int(usage.get("prompt_tokens", 0)),
                 completion_tokens=int(usage.get("completion_tokens", 0)),
@@ -118,12 +120,12 @@ class OpenAICompatModel:
         """Yield content deltas; report token usage through `on_usage` when the server
         sends it.
 
-        S20.13: an OpenAI-compatible server reports usage on a stream ONLY if asked, via
+        An OpenAI-compatible server only reports usage on a stream if asked, via
         stream_options.include_usage. Nobody asked, so medbot_tokens_total and
-        medbot_request_cost_usd recorded NOTHING for streamed requests - and the browser
-        streams. Measured: a streamed query moved the counter by 0, the same question
-        non-streamed moved it by 1,188. Every "answered" log line read tokens=0, and the
-        Grafana cost panels described curl traffic only.
+        medbot_request_cost_usd recorded nothing for streamed requests, and the browser
+        streams. A streamed query moved the counter by 0 where the same question
+        non-streamed moved it by 1,188, so every "answered" log line read tokens=0 and the
+        cost panels described curl traffic only.
 
         Guarded with a try/except because not every OpenAI-compatible server implements
         stream_options; a server that ignores it simply never calls on_usage, which
@@ -145,7 +147,7 @@ class OpenAICompatModel:
                     except json.JSONDecodeError:
                         continue
 
-                    # The usage block arrives in a FINAL chunk that carries no choices.
+                    # The usage block arrives in a final chunk carrying no choices.
                     usage = chunk.get("usage")
                     if usage and on_usage is not None:
                         on_usage(

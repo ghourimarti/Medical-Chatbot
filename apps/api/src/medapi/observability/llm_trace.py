@@ -75,10 +75,38 @@ def trace_answer(
     if not _ENABLED or _CLIENT is None:
         return
     try:
-        _CLIENT.create_event(
+        # A GENERATION observation, not an EVENT (INFRA-5).
+        #
+        # An EVENT has no model, no usage and no cost fields, so Langfuse's entire
+        # LLM-specific surface — cost per model, tokens/sec, spend over time — read zero
+        # across 318 traces while the real numbers sat one level down in `metadata`,
+        # where none of those charts look. The data was captured and unusable.
+        #
+        # `model` and `usage_details` are the fields Langfuse actually aggregates, so they
+        # are promoted out of metadata here. The metadata copy stays: it costs nothing and
+        # keeps every value visible on the observation itself when reading one trace.
+        #
+        # `start_observation(as_type="generation")` — there is NO `create_generation` on the
+        # v4 client. Calling one silently stopped ALL tracing: the AttributeError went
+        # straight into the except below, which exists so a broken tracer cannot fail a
+        # medical answer. Correct behaviour, and it means a wrong method name looks exactly
+        # like a healthy system with nothing to trace. The trace count simply stopped
+        # moving. Verify this by COUNTING traces after a change, never by the absence of
+        # errors.
+        # The observation is ended immediately: this records a completed call, so there is
+        # no interval to leave open.
+        _CLIENT.start_observation(
+            as_type="generation",
             name="rag_answer",
+            model=model_id,
             input={"question": question, "n_contexts": len(contexts)},
             output={"answer": answer_text, "kind": kind},
+            usage_details={
+                "input": prompt_tokens,
+                "output": completion_tokens,
+                "total": prompt_tokens + completion_tokens,
+            },
+            cost_details={"total": round(cost_usd, 6)},
             metadata={
                 "prompt_version": prompt_version,
                 # The exact prompt revision that produced this answer. Without it, a
@@ -92,7 +120,7 @@ def trace_answer(
                 "cost_usd": round(cost_usd, 6),
                 **{k: v for k, v in timings.items() if v is not None},
             },
-        )
+        ).end()
     except Exception:  # noqa: BLE001 — see docstring
         return
 

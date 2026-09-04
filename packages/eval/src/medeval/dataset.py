@@ -39,8 +39,8 @@ def category_counts(cases: list[EvalCase]) -> dict[str, int]:
 
 
 def stratified_sample(cases: list[EvalCase], n: int) -> list[EvalCase]:
-    """Deterministic proportional sample keeping at least one case per present category.
-    Cases are taken in file order within each category — stable across runs by design."""
+    """Deterministic proportional sample, at least one case per category present. Cases
+    come in file order within a category, so the sample is stable across runs."""
     if n >= len(cases):
         return list(cases)
     by_cat: dict[str, list[EvalCase]] = {}

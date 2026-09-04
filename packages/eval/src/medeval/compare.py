@@ -1,11 +1,11 @@
-"""Compare two eval reports and emit a delta table (D19).
+"""Compare two eval reports and emit a delta table.
 
-Needed repeatedly, not once: the S6 before/after chart, the top-k quality/latency sweep,
-per-venue answer parity (D4b), and the CI regression gate (S17) are all "did metric X move
-between two runs, and by how much" — so it belongs in the harness, not in a notebook.
+The before/after chart, the top-k quality/latency sweep, per-venue answer parity and the
+CI regression gate are all the same question: did metric X move between two runs, and by
+how much. So it lives in the harness rather than a notebook.
 
-Direction matters: higher-is-better for quality metrics, lower-is-better for latency and
-error rate. Getting that backwards turns a regression into a celebration.
+Direction matters. Higher is better for quality metrics, lower is better for latency and
+error rate, and getting that backwards turns a regression into a celebration.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ METRIC_DIRECTION: dict[str, Direction] = {
     "latency_p95_ms": "lower",
 }
 
-# Phase-1 NFR / D19 thresholds, re-derived in S19.3 against MEASURED run-to-run noise.
-# Full derivation and the evidence behind every number: docs/THRESHOLDS.md.
+# Gate thresholds, derived against measured run-to-run noise rather than picked.
+# Full derivation and the evidence behind each number is in docs/THRESHOLDS.md.
 #
 # Two rules govern this table, and v1 broke both:
 #   1. A gate must sit far enough below the requirement to survive run-to-run noise, or it
@@ -55,7 +55,7 @@ GATE_THRESHOLDS: dict[str, float] = {
     "citation_presence": 0.99,  # 150 cases: 149/150 -- one miss absorbed, two fails
     "answered": 0.98,  # closes the over-refusal loophole v2's must-answer probes opened
     "answer_relevancy": 0.85,  # worst observed run (0.9028) minus the observed spread
-    "faithfulness": 0.85,  # UNVERIFIED -- no run has scored it since the judge re-pin (S6.12)
+    "faithfulness": 0.85,  # unverified: no run has scored it since the judge was re-pinned
     "error_rate": 0.01,  # LOWER is better
 }
 
@@ -116,10 +116,10 @@ def compare(before: EvalReport, after: EvalReport) -> str:
         f"- after:  `{after.run_id}` ({after.n_cases} cases, judge {after.judge})",
     ]
 
-    # S6.12: judge-derived deltas are only meaningful within ONE judge. Groq retired
-    # llama-3.3-70b-versatile mid-project, forcing judge_v1 -> judge_v2, which silently made
-    # every stored judge score incomparable to every new one. Printing both ids in the header
-    # left it to the reader to notice; a delta that cannot be interpreted must say so itself.
+    # Judge-derived deltas only mean something within a single judge. Groq retired
+    # llama-3.3-70b-versatile mid-project, forcing judge_v1 -> judge_v2, which made every
+    # stored judge score incomparable to every new one. Printing both ids in the header
+    # left it to the reader to spot, so the table now says it outright.
     if before.judge != after.judge:
         lines += [
             "",
@@ -188,11 +188,10 @@ def gate_failures(report: EvalReport) -> list[str]:
 def is_usable_baseline(path: Path) -> bool:
     """Can this report support a comparison at all?
 
-    S17.3: a run where every case errored is a record that the harness ran, not a
-    measurement of the system. One such report (a demo re-run against a model the vendor
-    had retired — all 90 cases 404) was newest on disk, so `latest_report` handed it to the
-    gate as the baseline. The delta then showed `error_rate 1 -> 0` and marked it **PASS**,
-    reading a totally-failed baseline as an improvement.
+    A run where every case errored records that the harness ran, not anything about the
+    system. One such report (a demo re-run against a retired model, all 90 cases 404) was
+    newest on disk, so it got handed to the gate as the baseline. The delta then showed
+    `error_rate 1 -> 0` and marked it PASS, reading a totally failed baseline as progress.
 
     A report with no completed cases is skipped for selection. It is not deleted: it is
     honest evidence that the run failed, and the failure is worth keeping.
@@ -203,11 +202,10 @@ def is_usable_baseline(path: Path) -> bool:
         return False
     if not isinstance(data, dict):
         return False
-    # Must actually BE a report. eval-reports/ also holds sidecars — rejudge writes
-    # `<run>.judge-partial.json` for resumability — and those match the same *.json glob.
-    # The first version of this guard defaulted `completed` to 1.0 when absent, so an empty
-    # `{}` checkpoint counted as usable and was handed to the gate as the AFTER report.
-    # A guard whose default is "fine" only guards inputs that were already fine.
+    # Must actually be a report. eval-reports/ also holds sidecars (rejudge writes
+    # `<run>.judge-partial.json` for resumability) and those match the same *.json glob.
+    # An earlier version defaulted `completed` to 1.0 when absent, so an empty `{}`
+    # checkpoint counted as usable and went to the gate as the after report.
     if not {"run_id", "aggregates", "target"} <= data.keys():
         return False
     agg = data.get("aggregates") or {}
@@ -216,15 +214,15 @@ def is_usable_baseline(path: Path) -> bool:
     return agg.get("completed", 1.0) != 0.0
 
 
-# A derived report exists to CORRECT the one it derives from, so it must outrank it.
-# Plain name-sort does the opposite: "-rescored" sorts before ".json" because '-' < '.',
-# so `pipeline-X-rescored.json` lost to `pipeline-X.json` — and the gate silently used the
-# metrics that a rescore had already been run to fix (refusal_correctness 0.45 vs 0.70).
+# A derived report corrects the one it derives from, so it has to outrank it. Plain
+# name-sort does the opposite, since "-rescored" sorts before ".json" ('-' < '.'), so
+# `pipeline-X-rescored.json` lost to `pipeline-X.json` and the gate used the very metrics
+# the rescore had been run to fix.
 _DERIVATION_RANK = {"": 0, "-rescored": 1, "-rejudged": 2, "-rescored-rejudged": 3}
 
 
 def _report_sort_key(path: Path) -> tuple[str, int]:
-    """(base run id, derivation rank) — newest run first, most-corrected variant within it."""
+    """(base run id, derivation rank): newest run first, most-corrected variant within."""
     stem = path.stem
     for suffix, rank in sorted(_DERIVATION_RANK.items(), key=lambda kv: -len(kv[0])):
         if suffix and stem.endswith(suffix):

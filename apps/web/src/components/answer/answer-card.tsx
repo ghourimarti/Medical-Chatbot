@@ -29,8 +29,15 @@ export function AnswerCard({ answer }: { answer: Answer }) {
       // silently rendering with the refusal treatment is not.
       data-answer-kind={treatment}
       className={cn(
-        "rounded-lg border bg-surface-raised p-5",
-        treatment === "grounded" ? "border-line" : meta.border,
+        // GROUNDED flows; every other kind is boxed. This makes the four kinds MORE
+        // distinct, not less. When all four wore the same card, the card carried no
+        // information — a refusal and an ordinary answer were the same object in a
+        // different colour, and the reader had to parse the label to tell them apart.
+        // The normal case should read as prose you can settle into; a refusal, an
+        // emergency or a degraded response should visibly interrupt that.
+        treatment === "grounded"
+          ? "py-1"
+          : cn("rounded-lg border bg-surface-raised p-5", meta.border),
       )}
       aria-labelledby={`answer-label-${treatment}`}
     >

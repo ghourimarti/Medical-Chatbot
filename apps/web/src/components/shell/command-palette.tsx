@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquare, MessageSquarePlus, Moon, Sun } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useConversationsContext } from "@/lib/conversations-context";
 import { matches } from "@/lib/conversation-groups";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ interface Item {
 
 export function CommandPalette() {
   const convos = useConversationsContext();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -60,7 +62,9 @@ export function CommandPalette() {
         id: "new",
         label: "New chat",
         icon: MessageSquarePlus,
-        run: () => void convos.create(),
+        run: () => {
+          void convos.create().then((c) => router.push(c ? `/chat/${c.id}` : "/chat"));
+        },
       },
       {
         id: "theme",
@@ -77,11 +81,14 @@ export function CommandPalette() {
         label: c.title ?? "Untitled conversation",
         hint: "conversation",
         icon: MessageSquare,
-        run: () => convos.setActiveId(c.id),
+        run: () => {
+          convos.setActiveId(c.id);
+          router.push(`/chat/${c.id}`);
+        },
       }));
     const q = query.trim().toLowerCase();
     return [...actions.filter((a) => !q || a.label.toLowerCase().includes(q)), ...threads];
-  }, [convos, query, toggleTheme, isDark]);
+  }, [convos, query, toggleTheme, isDark, router]);
 
   // Global shortcut, bound to the WINDOW so it works wherever focus is — including
   // inside the question box, which is deliberate and matches every product that has one:

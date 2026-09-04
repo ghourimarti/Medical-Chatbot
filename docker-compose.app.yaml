@@ -115,6 +115,11 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      # Passed at BUILD time, not runtime — see the long note in apps/web/Dockerfile.
+      # Next inlines NEXT_PUBLIC_* into the client bundle and prerenders `/`, so a key
+      # supplied only through env_file arrives after every decision that depends on it.
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
     image: medbot-web:0.1.0
     env_file: [.env]
     environment:

@@ -44,7 +44,7 @@ async function mockStream(page: Page, body: string, status = 200) {
 }
 
 async function ask(page: Page, question = "What is cirrhosis?") {
-  await page.goto("/");
+  await page.goto("/chat");
   await page.getByLabel("Your question").fill(question);
   await page.getByRole("button", { name: "Ask", exact: true }).click();
 }
@@ -219,7 +219,7 @@ test.describe("degraded mode", () => {
         }),
       }),
     );
-    await page.goto("/");
+    await page.goto("/chat");
     // A standing condition needs a standing signal — the user should know before typing.
     await expect(page.getByText("Limited service.")).toBeVisible();
   });
@@ -237,7 +237,7 @@ test.describe("degraded mode", () => {
         }),
       }),
     );
-    await page.goto("/");
+    await page.goto("/chat");
     await expect(page.getByText("Limited service.")).toHaveCount(0);
   });
 });

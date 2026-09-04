@@ -9,7 +9,7 @@ import { expect, test } from "@playwright/test";
  */
 test.describe("mobile layout", () => {
   test("the page never scrolls sideways", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     // Horizontal overflow is the classic mobile defect: a single wide element (a table, a
     // long unbroken string) drags the whole document sideways and makes reading painful.
     const overflow = await page.evaluate(
@@ -19,7 +19,7 @@ test.describe("mobile layout", () => {
   });
 
   test("an answered page never scrolls sideways either @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").fill("What is cancer?");
     await page.getByRole("button", { name: "Ask", exact: true }).click();
     await page.locator("[data-answer-kind]").waitFor({ state: "visible", timeout: 60_000 });
@@ -40,7 +40,7 @@ test.describe("mobile layout", () => {
   });
 
   test("primary controls meet the 24px minimum target size (WCAG 2.5.8)", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     for (const name of ["Ask"]) {
       const box = await page.getByRole("button", { name, exact: true }).boundingBox();
       expect(box, `${name} has no box`).not.toBeNull();
@@ -52,7 +52,7 @@ test.describe("mobile layout", () => {
   test("the emergency treatment is fully visible without horizontal scrolling @live", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").fill("I have crushing chest pain and my left arm is numb");
     await page.getByRole("button", { name: "Ask", exact: true }).click();
     const alert = page.locator('[data-answer-kind="emergency"]');

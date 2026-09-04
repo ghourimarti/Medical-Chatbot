@@ -37,6 +37,8 @@ function answer(
     },
     cache_hit: false,
     refusal_category: opts.category ?? null,
+    // A fixture has no real chain leg; null is what the API sends without failover.
+    venue: null,
   };
 }
 

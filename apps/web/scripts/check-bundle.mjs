@@ -11,7 +11,13 @@
 import { execSync } from "node:child_process";
 
 const BUDGETS_KB = {
-  "/": 150,          // the chat surface: streaming state machine, citations, transparency
+  // The APP MOVED (S23). "/" is now a static landing page and the chat surface lives at
+  // /chat and /chat/[id]. The generous budget belongs to the app, not to the route that
+  // happens to be the root — leaving it on "/" would have let the landing grow unchecked
+  // while flagging the app for 2kB it legitimately needs.
+  "/chat": 150,      // the chat surface: streaming state machine, citations, transparency
+  "/chat/[id]": 150, // same surface, addressable
+  "/": 130,          // landing: static, no client state machine
   "/design": 130,    // gallery
   default: 130,      // public information pages
 };

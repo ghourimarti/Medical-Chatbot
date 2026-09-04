@@ -12,7 +12,10 @@ import { expect, test, type Page } from "@playwright/test";
  * Treating a clean axe run as "accessible" is the most common way a product ships an
  * inaccessible interface with a passing test suite.
  */
-const ROUTES = ["/", "/design", "/how-it-works", "/safety", "/sources", "/status", "/privacy", "/terms"];
+// "/" is the landing; the app is at /chat. Both are scanned — the app surface is the
+// one people spend time on, and the landing is the one they arrive at.
+const ROUTES = ["/", "/chat", "/about", "/design", "/how-it-works", "/safety",
+  "/sources", "/status", "/privacy", "/terms"];
 
 async function scan(page: Page) {
   return new AxeBuilder({ page })
@@ -45,7 +48,7 @@ test.describe("axe — machine-checkable rules", () => {
 
   test("an answered page has no violations @live", async ({ page }) => {
     // The states that matter most are the ones only reachable by interacting.
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").fill("I have crushing chest pain and my left arm is numb");
     await page.getByRole("button", { name: "Ask", exact: true }).click();
     await page.locator("[data-answer-kind]").waitFor({ state: "visible", timeout: 60_000 });
@@ -71,7 +74,7 @@ test.describe("keyboard — what axe cannot check", () => {
     // Kept deliberately. The skip link exists to let a keyboard user bypass repeated
     // chrome and reach the content; here focus already STARTS in the content, so its
     // purpose is served more directly. It must still be reachable backwards.
-    await page.goto("/");
+    await page.goto("/chat");
     await expect(page.getByLabel("Your question")).toBeFocused();
 
     await page.keyboard.press("Shift+Tab");
@@ -80,7 +83,7 @@ test.describe("keyboard — what axe cannot check", () => {
   });
 
   test("a question can be asked entirely by keyboard @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").focus();
     await page.keyboard.type("How many mg of ibuprofen should I take for my back pain?");
     // Enter submits, Shift+Enter newlines — the convention every chat UI uses.
@@ -101,7 +104,7 @@ test.describe("keyboard — what axe cannot check", () => {
   });
 
   test("a visible focus indicator exists", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").focus();
     const outline = await page
       .getByLabel("Your question")
@@ -114,7 +117,7 @@ test.describe("keyboard — what axe cannot check", () => {
 
 test.describe("screen reader affordances", () => {
   test("streaming announces politely, once, not per token @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").fill("What is cancer?");
     await page.getByRole("button", { name: "Ask", exact: true }).click();
 

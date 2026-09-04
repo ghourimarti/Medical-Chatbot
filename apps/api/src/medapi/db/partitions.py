@@ -1,15 +1,12 @@
-"""Partition lifecycle for `messages` (D1).
+"""Partition lifecycle for `messages`.
 
-Two operations, and the first is the one that causes 3am outages when forgotten:
+  ensure_future_partitions()  creates tomorrow's partition before midnight. A partitioned
+                              table with no matching partition rejects the insert, so
+                              every write fails at 00:00:00 with "no partition of relation
+                              messages found for row". Idempotent and cheap; run hourly.
 
-  ensure_future_partitions()  — creates tomorrow's partition BEFORE midnight. A partitioned
-                                table with no matching partition REJECTS the insert. Every
-                                write fails at 00:00:00 with "no partition of relation
-                                messages found for row". Idempotent, cheap, run hourly.
-
-  drop_expired_partitions()   — GDPR retention. DROP TABLE on one day's partition instead
-                                of DELETE over ~135M rows: instant, lock-light, reclaims
-                                disk immediately.
+  drop_expired_partitions()   retention. DROP TABLE on one day's partition rather than a
+                              DELETE over ~135M rows: instant, lock-light, reclaims disk.
 """
 
 from __future__ import annotations
@@ -34,18 +31,17 @@ def partition_name(day: date) -> str:
 async def ensure_future_partitions(conn: AsyncConnection, *, days_ahead: int = 7) -> list[str]:
     """Create partitions for today..today+days_ahead. Idempotent.
 
-    days_ahead defaults to a week, not one day: a single failed cron run should never be
-    able to take writes down. Cheap insurance — an empty partition costs nothing.
+    days_ahead defaults to a week rather than a day, so one failed cron run can't take
+    writes down. An empty partition costs nothing.
     """
     created: list[str] = []
     today = datetime.now(UTC).date()
     for offset in range(days_ahead + 1):
         day = today + timedelta(days=offset)
         name = partition_name(day)
-        # DDL cannot take bind parameters in Postgres — `CREATE TABLE ... FOR VALUES
-        # FROM (:start)` fails with "the server expects 0 arguments". The bounds are
-        # therefore formatted in. Safe by construction: they are derived from `date`
-        # objects here, never from user input.
+        # Postgres DDL can't take bind params: `CREATE TABLE ... FOR VALUES FROM (:start)`
+        # fails with "the server expects 0 arguments". So the bounds are formatted in.
+        # Safe by construction, since they come from `date` objects, never user input.
         start = day.isoformat()
         end = (day + timedelta(days=1)).isoformat()
         await conn.execute(
@@ -72,11 +68,11 @@ async def list_partitions(conn: AsyncConnection) -> list[str]:
 
 
 async def drop_expired_partitions(conn: AsyncConnection, *, retention_days: int = 30) -> list[str]:
-    """GDPR retention (D18). Returns the partitions dropped.
+    """Retention. Returns the partitions dropped.
 
-    Deliberately parses names rather than trusting a caller-supplied cutoff string: the
-    table name is interpolated into DDL, so it must come from a source we control. The
-    regex is the validation boundary.
+    Parses names rather than trusting a caller-supplied cutoff string, because the table
+    name gets interpolated into DDL and has to come from a source we control. The regex is
+    the validation boundary.
     """
     cutoff = datetime.now(UTC).date() - timedelta(days=retention_days)
     dropped: list[str] = []

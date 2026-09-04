@@ -11,9 +11,23 @@ import { expect, test, type Page } from "@playwright/test";
  */
 
 async function ask(page: Page, question: string) {
-  await page.goto("/");
+  await page.goto("/chat");
+  await askAgain(page, question);
+}
+
+/**
+ * Ask WITHOUT reloading — the flow a real reader has.
+ *
+ * `ask` navigates first, and since a conversation id lives only in React state (there is
+ * no /chat/<id> route yet), a reload starts a fresh thread. Two `ask` calls therefore
+ * produce two SEPARATE conversations, and the transcript of the second is correctly empty.
+ * A test about accumulating history has to stay on the page.
+ */
+async function askAgain(page: Page, question: string) {
   await page.getByLabel("Your question").fill(question);
-  await page.getByRole("button", { name: "Ask", exact: true }).click();
+  const button = page.getByRole("button", { name: "Ask", exact: true });
+  await expect(button).toBeEnabled();
+  await button.click();
 }
 
 /**
@@ -56,7 +70,12 @@ function card(page: Page) {
 function armTranscript(page: Page) {
   return page.waitForResponse(
     async (r) => {
-      if (!r.url().includes("session/history") || r.status() !== 200) return false;
+      // EITHER transcript endpoint. Since the transcript became conversation-scoped, an
+      // answer inside a thread reloads /conversations/{id}/messages and never touches
+      // /session/history — so waiting only on the latter waits forever.
+      const isTranscript =
+        r.url().includes("session/history") || /\/conversations\/[^/]+\/messages/.test(r.url());
+      if (!isTranscript || r.status() !== 200) return false;
       try {
         return ((await r.json()) as { messages: unknown[] }).messages.length > 0;
       } catch {
@@ -152,7 +171,7 @@ test.describe("answer kinds", () => {
 
 test.describe("streaming contract", () => {
   test("evidence is painted before the answer text @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await page.getByLabel("Your question").fill("How is pain assessed?");
     await page.getByRole("button", { name: "Ask", exact: true }).click();
 
@@ -175,7 +194,7 @@ test.describe("streaming contract", () => {
   });
 
   test("Stop cancels an in-flight answer @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     // A UNIQUE question every run, deliberately. A cached answer returns in ~50ms, so the
     // Stop button never exists long enough to click and this test fails for a reason that
     // has nothing to do with cancellation. Cancelling requires something in flight.
@@ -200,7 +219,7 @@ test.describe("streaming contract", () => {
 
 test.describe("always-on safety surface", () => {
   test("the disclaimer is present and has no dismiss control @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     const disclaimer = page.getByText("General information, not medical advice.");
     await expect(disclaimer).toBeVisible();
 
@@ -249,16 +268,23 @@ test.describe("citations (S10.7)", () => {
 
 test.describe("session controls (S10.8)", () => {
   test("history restores and a past question can be re-asked @live", async ({ page }) => {
+    // TWO questions, because the transcript now shows only PRIOR turns. The turn being
+    // answered is rendered once, as the live answer — it used to appear in both places at
+    // once, the same question and answer stacked directly on top of themselves.
     const loaded = armTranscript(page);
     await ask(page, "How many mg of ibuprofen should I take for my back pain?");
     expect(await settled(page)).toBe("refused");
     await loaded;
 
+    await askAgain(page, "What is cirrhosis?");
+    await settled(page);
+
     const panel = transcriptPanel(page);
     await expect(panel).toBeVisible();
     await expect(panel.getByText(/How many mg of ibuprofen/)).toBeVisible();
 
-    // A past question is a control: clicking it asks it again.
+    // A past question is still a control — the name carries the question so a screen
+    // reader can tell which one it would re-ask.
     await panel.getByRole("button", { name: /How many mg of ibuprofen/ }).click();
     expect(await settled(page)).toBe("refused");
   });
@@ -282,7 +308,7 @@ test.describe("session controls (S10.8)", () => {
 
 test.describe("error states (S10.9)", () => {
   test("hitting the quota renders the designed state, not a raw error @live", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     // Burn the per-session minute quota through the SAME browser context, so the cookie
     // (and therefore the session bucket) is shared with the UI.
     const body = {

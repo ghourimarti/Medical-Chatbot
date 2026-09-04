@@ -1,7 +1,7 @@
-"""Data access. The ONLY module that emits SQL for application data (D1).
+"""Data access: the only module that emits SQL for application data.
 
-Keeping SQL behind repositories is what makes the D1 "Reversibility: Hard" honest — a move
-to Aurora or a history split touches these methods and nothing else.
+Keeping SQL behind repositories is what makes a move to Aurora, or splitting history out,
+a change to these methods and nothing else.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,9 +50,8 @@ class MessageRepository:
         model_id: str | None = None,
         conversation_id: uuid.UUID | None = None,
     ) -> Message:
-        # conversation_id is OPTIONAL, not required. The anonymous single-thread path
-        # predates conversations and must keep working unchanged (D24 sequencing: anonymous
-        # chat never gets a signup wall), so a message without a thread is legal.
+        # Optional, not required: the anonymous single-thread path predates conversations
+        # and has to keep working, so a message with no thread is legal.
         msg = Message(
             session_id=session_id,
             role=role,
@@ -84,10 +83,10 @@ class MessageRepository:
     ) -> list[ChatMessage]:
         """One thread, oldest-first for prompt construction.
 
-        Ownership is NOT checked here — the caller must have already resolved the
-        conversation through ConversationRepository.owned_by. Splitting it that way means
-        there is exactly one place that decides who may read a thread, rather than an
-        authorisation check duplicated into every query that touches messages.
+        Ownership isn't checked here. The caller must already have resolved the
+        conversation through ConversationRepository.owned_by, which keeps exactly one place
+        deciding who may read a thread instead of an authz check copied into every query
+        that touches messages.
         """
         stmt = (
             select(Message)
@@ -102,11 +101,10 @@ class MessageRepository:
         ]
 
     async def delete_session_messages(self, session_id: uuid.UUID) -> int:
-        """GDPR right-to-erasure (D18). Returns rows actually removed.
+        """Right-to-erasure. Returns the rows actually removed.
 
-        Returning the count is deliberate: a delete endpoint that reports success without
-        proving anything was removed is exactly the kind of compliance control that passes
-        review and fails an audit.
+        The count matters: a delete endpoint that reports success without proving anything
+        was removed passes review and fails an audit.
         """
         result = await self._s.execute(delete(Message).where(Message.session_id == session_id))
         # rowcount exists on CursorResult at runtime; the generic Result stub lacks it.
@@ -141,9 +139,9 @@ class UserRepository:
         return (await self._s.execute(stmt)).scalar_one()
 
     async def delete(self, user_id: uuid.UUID) -> int:
-        """Account deletion. Conversations cascade; MESSAGES DO NOT — they have no foreign
-        key, deliberately (a cascade across partitions would defeat DROP PARTITION). The
-        caller must delete messages first; ConversationRepository.delete_for_user does."""
+        """Account deletion. Conversations cascade, messages don't: they have no foreign
+        key, because a cascade across partitions would defeat DROP PARTITION. The caller
+        deletes messages first, which ConversationRepository.delete_for_user does."""
         result = await self._s.execute(delete(User).where(User.id == user_id))
         return int(getattr(result, "rowcount", 0) or 0)
 
@@ -160,8 +158,8 @@ class ConversationRepository:
         title: str | None = None,
     ) -> Conversation:
         if user_id is None and session_id is None:
-            # The database CHECK would catch this, but failing here names the caller rather
-            # than surfacing an IntegrityError three frames away.
+            # The database CHECK catches this too, but failing here names the caller
+            # instead of surfacing an IntegrityError three frames away.
             raise ValueError("a conversation needs an owner: user_id or session_id")
         convo = Conversation(user_id=user_id, session_id=session_id, title=title)
         self._s.add(convo)
@@ -202,13 +200,11 @@ class ConversationRepository:
         indistinguishable to the caller, which is also what stops the endpoint leaking
         whether someone else's conversation id exists.
         """
-        # The ownership predicate is IN the query, not applied to a fetched row.
+        # The ownership predicate lives in the query, not applied to a fetched row.
         #
-        # The first version fetched by id and compared attributes in Python, which the
-        # docstring above already claimed it did not — and the difference was not cosmetic:
-        # after a claim expired the identity-map copy, reading convo.user_id triggered a
-        # lazy refresh and raised MissingGreenlet. Filtering in SQL cannot go stale, cannot
-        # lazy-load, and is the only version that actually matches the security claim.
+        # An earlier version fetched by id and compared attributes in Python. After a claim
+        # expired the identity-map copy, reading convo.user_id triggered a lazy refresh and
+        # raised MissingGreenlet. Filtering in SQL can't go stale or lazy-load.
         stmt = select(Conversation).where(Conversation.id == conversation_id)
         if user_id is not None:
             stmt = stmt.where(Conversation.user_id == user_id)
@@ -226,6 +222,72 @@ class ConversationRepository:
         await self._s.flush()
         return convo
 
+    async def set_pinned(self, convo: Conversation, pinned: bool) -> Conversation:
+        """Pin or unpin.
+
+        Doesn't touch updated_at. Pinning is a filing action, not activity, and bumping the
+        timestamp would jump the thread into "Today" as well as the pinned group, rewriting
+        when a week-old conversation was last discussed.
+        """
+        convo.pinned = pinned
+        await self._s.flush()
+        return convo
+
+    async def search_owned(
+        self,
+        query: str,
+        *,
+        user_id: uuid.UUID | None,
+        session_id: uuid.UUID | None,
+        limit: int = 20,
+    ) -> Sequence[Conversation]:
+        """Conversations whose title or message text matches.
+
+        This is what makes the sidebar box a search rather than a title filter. Titles are
+        user-set and usually absent, and what people remember is what they asked.
+
+        ILIKE rather than full-text search. `to_tsvector` with a GIN index is the right
+        answer at 10M MAU, but it needs an index build, a language configuration and a
+        migration, so it's premature here; a trailing-wildcard ILIKE is fast enough at this
+        size and the upgrade path is one index and a changed predicate.
+
+        Ownership is in the query, same as `owned_by` and for the same reason: filtering
+        after the fetch would read other people's health questions into memory first.
+        """
+        term = query.strip()
+        if not term:
+            return []
+        # Escape the LIKE metacharacters so a user searching for "100%" or "a_b" gets a
+        # literal match instead of a wildcard that silently returns everything.
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+
+        matching_ids = select(Message.conversation_id).where(
+            Message.conversation_id.is_not(None),
+            Message.content.ilike(pattern, escape="\\"),
+        )
+
+        stmt = (
+            select(Conversation)
+            .where(
+                or_(
+                    Conversation.title.ilike(pattern, escape="\\"),
+                    Conversation.id.in_(matching_ids),
+                )
+            )
+            .order_by(Conversation.updated_at.desc())
+            .limit(limit)
+        )
+        if user_id is not None:
+            stmt = stmt.where(Conversation.user_id == user_id)
+        elif session_id is not None:
+            stmt = stmt.where(
+                Conversation.session_id == session_id, Conversation.user_id.is_(None)
+            )
+        else:
+            return []
+        return (await self._s.execute(stmt)).scalars().all()
+
     async def touch(self, conversation_id: uuid.UUID) -> None:
         """Bump updated_at so the sidebar orders by real activity, not creation time."""
         await self._s.execute(
@@ -235,15 +297,14 @@ class ConversationRepository:
         )
 
     async def claim_for_user(self, *, session_id: uuid.UUID, user_id: uuid.UUID) -> int:
-        """THE SIGN-IN SEAM (D25). Transfer this session's anonymous conversations to a user.
+        """The sign-in seam: transfer this session's anonymous conversations to a user.
 
-        `user_id IS NULL` in the predicate is load-bearing: without it, signing in would
-        re-assign conversations that had ALREADY been claimed by a different account which
-        happened to share this browser — a real scenario on a shared device, and a
-        cross-account data leak rather than a merge.
+        `user_id IS NULL` in the predicate is load-bearing. Without it, signing in would
+        re-assign conversations already claimed by a different account that happened to
+        share the browser, which on a shared device is a cross-account leak, not a merge.
 
         The session id comes from the request cookie and is never a parameter, so a caller
-        cannot claim a session they do not hold.
+        can't claim a session they don't hold.
         """
         result = await self._s.execute(
             update(Conversation)
@@ -270,9 +331,9 @@ class ConversationRepository:
     async def delete_for_user(self, user_id: uuid.UUID) -> int:
         """Account erasure: every message in every conversation the user owns.
 
-        Runs BEFORE the user row is deleted. Once the cascade removes the conversations,
-        their messages become unreachable orphans that only the 30-day partition drop would
-        eventually clear — which is far too slow to call a deletion.
+        Runs before the user row is deleted. Once the cascade removes the conversations,
+        their messages are unreachable orphans that only the 30-day partition drop would
+        clear, which is far too slow to call a deletion.
         """
         ids = (
             (await self._s.execute(select(Conversation.id).where(Conversation.user_id == user_id)))

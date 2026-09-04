@@ -23,9 +23,24 @@ RUN corepack enable
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/web/ ./
-# No NEXT_PUBLIC_* variables exist by design, so nothing environment-specific is inlined
-# at build time: ONE image runs in every environment, configured at runtime. The API
-# address is server-only (src/lib/env.ts) and never reaches the browser bundle (D23).
+
+# The API address is server-only (src/lib/env.ts) and never reaches the browser bundle
+# (D23), so it stays a runtime setting and one image still serves every environment for
+# everything except the line below.
+#
+# CLERK IS THE ONE EXCEPTION, and it is not a choice we get to make. Next INLINES
+# NEXT_PUBLIC_* into the client bundle at build time, and `/` is statically prerendered —
+# so the server component that decides whether to mount ClerkProvider also runs here, at
+# build. Supplying the key at runtime through `env_file` therefore does NOTHING: the HTML
+# is already generated and the bundle already holds an empty string. It fails SILENTLY,
+# which is what makes it worth this much comment — the container starts, the page renders,
+# and the sign-in button is simply absent with nothing in any log to say why.
+#
+# The publishable key is public by design (it ships to every browser), so baking it costs
+# no secrecy. What it costs is portability: an image built with one Clerk instance's key
+# serves that instance only. That is the actual trade, and it is Clerk's to impose.
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=""
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 RUN pnpm build
 
 # ---- runtime -------------------------------------------------------------------------

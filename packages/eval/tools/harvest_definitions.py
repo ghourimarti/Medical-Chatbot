@@ -1,9 +1,8 @@
-"""Harvest grounded Definition blocks from the Gale corpus for golden-set curation (S19.1).
+"""Harvest Definition blocks from the Gale corpus for golden-set curation.
 
-WHY THIS EXISTS. S1 established the rule that makes the money chart trustworthy: every
-`qa` ground truth must come from text extracted from the corpus, never written from model
-memory. Synthetic ground truth inherits the model's own blind spots, so a system evaluated
-against it can look perfect while being wrong in exactly the ways the model is wrong.
+Every `qa` ground truth has to come from extracted corpus text, not model memory. Synthetic
+ground truth inherits the model's own blind spots, so a system evaluated against it scores
+well while being wrong in the same ways the model is wrong.
 
 Gale articles follow a stable shape:
 
@@ -13,8 +12,8 @@ Gale articles follow a stable shape:
     Description | Causes and symptoms | Treatment | ...
 
 This walks the flattened page text, finds every `Definition` marker, and captures the
-heading that precedes it plus the prose that follows. Output is JSON for curation — a human
-still writes the question and trims the answer. The tool supplies EVIDENCE, not cases.
+heading before it plus the prose after. Output is JSON for curation; a human still writes
+the question and trims the answer.
 
     uv run python packages/eval/tools/harvest_definitions.py \
         --min-len 80 --out .cache/definitions.json
@@ -30,8 +29,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CACHE = REPO_ROOT / ".cache" / "gale_pages.json"
 
-# A heading is a short line in Title Case with no terminal punctuation. Gale sets article
-# titles on their own line, so this is a reliable-enough filter to then verify by eye.
+# Headings are short Title Case lines with no terminal punctuation, set on their own line.
+# Good enough to filter on, then verify by eye.
 _HEADING = re.compile(r"^(?!.*[.:;,])([A-Z][A-Za-z'\-]*(?:\s+[a-zA-Z'\-]+){0,4})\s*$")
 _SECTION_END = re.compile(
     r"\n\s*(Description|Causes and symptoms|Causes|Symptoms|Diagnosis|Treatment|"
@@ -51,9 +50,8 @@ def load_pages() -> list[str]:
 
 
 def clean(text: str) -> str:
-    # The PDF extractor emits U+FFFD for curly quotes it cannot map, plus assorted
-    # typographic characters. Normalising here (rather than in the golden set) keeps the
-    # dataset ASCII-clean and diffable.
+    # pypdf emits U+FFFD for curly quotes it can't map. Normalising here keeps the dataset
+    # ASCII-clean and diffable.
     for bad, good in (
         ("�", "'"), ("’", "'"), ("‘", "'"),
         ("“", '"'), ("”", '"'),
@@ -82,10 +80,9 @@ def harvest(pages: list[str], min_len: int, max_len: int) -> list[dict[str, obje
             )
             if not topic or topic.lower() in seen:
                 continue
-            # Reject cross-reference stubs ("X see Y") and page furniture. These carry a
-            # heading-shaped line but the prose below belongs to a DIFFERENT article, so
-            # accepting them would attach a real definition to the wrong topic — a silently
-            # wrong ground truth, which is the one defect a golden set must never contain.
+            # Reject cross-reference stubs ("X see Y") and page furniture: heading-shaped,
+            # but the prose below belongs to another article, so we'd pair a real definition
+            # with the wrong topic.
             if " see " in topic or topic.isupper() or len(topic) < 4:
                 continue
             tail = raw[m.end() : m.end() + 1400]
@@ -93,9 +90,8 @@ def harvest(pages: list[str], min_len: int, max_len: int) -> list[dict[str, obje
             body = clean(tail[: stop.start()] if stop else tail)
             if not (min_len <= len(body) <= max_len) or _NOISE.search(body):
                 continue
-            # SELF-CONSISTENCY GATE: the topic's first significant word must appear in its
-            # own definition. Gale definitions restate their subject ("Cirrhosis is a..."),
-            # so a mismatch means the heading and body were mis-paired by the page walk.
+            # Gale definitions restate their subject ("Cirrhosis is a..."), so if the topic's
+            # first word is missing from the body, the page walk mis-paired them.
             head_word = topic.split()[0].lower().rstrip("s")
             if len(head_word) > 3 and head_word not in body.lower():
                 continue

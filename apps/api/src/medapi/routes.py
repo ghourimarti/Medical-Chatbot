@@ -29,6 +29,7 @@ from medapi.serving import (
     done_from_answer,
     postflight,
     preflight,
+    record_short_circuit,
     short_circuit,
 )
 from medcore.errors import MedbotError, ProblemDetail, QuotaExceededError
@@ -228,6 +229,9 @@ async def query(req: QueryRequest, request: Request, response: Response) -> Answ
 
     short = await short_circuit(req.question, svc, pre)
     if short is not None:
+        # A cached answer is still a TURN that happened. Skipping this is what made
+        # conversations look broken - see record_short_circuit.
+        await record_short_circuit(short, question=req.question, svc=svc, pre=pre)
         return short
 
     # Prior turns, so a follow-up like "what causes it?" can be condensed into a
@@ -369,6 +373,10 @@ async def query_stream(req: QueryRequest, request: Request) -> StreamingResponse
     svc = _services(request)
     pre = await preflight(req.question, request, svc, req.conversation_id)
     short = await short_circuit(req.question, svc, pre)
+    if short is not None:
+        # Same on the streaming path. The two endpoints share serving.py precisely so a
+        # fix like this cannot land on one and be forgotten on the other.
+        await record_short_circuit(short, question=req.question, svc=svc, pre=pre)
     # Loaded here rather than inside event_source(): a database read must not happen
     # after the response has started streaming, where a failure could no longer be
     # turned into a clean HTTP status. Skipped entirely on a cache hit.

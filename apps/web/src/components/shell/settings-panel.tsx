@@ -113,6 +113,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             </h3>
             <ul className="grid grid-cols-2 gap-1 text-sm">
               {([
+                ["/about", "About"],
                 ["/how-it-works", "How it works"],
                 ["/safety", "Safety & limitations"],
                 ["/sources", "Sources"],

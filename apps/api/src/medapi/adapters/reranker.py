@@ -1,17 +1,18 @@
-"""In-process cross-encoder reranker (D3). Implements RerankerPort.
+"""In-process cross-encoder reranker, implementing RerankerPort.
 
-Mirrors BgeEmbedder: used when ML_SERVICE_URL is unset (tests, single-process dev), so the
-pipeline ALWAYS has a reranker. Without this, test runs would silently measure a
-non-reranked pipeline — i.e. measure the thing we are trying to improve, unimproved.
+Mirrors BgeEmbedder and is used when ML_SERVICE_URL is unset (tests, single-process dev),
+so the pipeline always has a reranker. Without it, test runs would quietly measure a
+non-reranked pipeline.
 
-SCORE SCALE (the subtle part): a cross-encoder emits raw logits (~-10..+10), while dense
-retrieval emits cosine similarity (0..1). The no-answer threshold compares one number, so
-logits are squashed through a sigmoid to a comparable 0..1 probability. Skipping this makes
-the threshold silently meaningless after reranking.
+Watch the score scale. A cross-encoder emits raw logits (~-10..+10) while dense retrieval
+emits cosine similarity (0..1), and the no-answer threshold compares a single number, so
+the logits go through a sigmoid to land on a comparable 0..1. Skip that and the threshold
+means nothing once reranking is on.
 """
 
 from __future__ import annotations
 
+import os
 import asyncio
 import math
 from collections.abc import Sequence
@@ -28,6 +29,24 @@ def sigmoid(x: float) -> float:
     return e / (1.0 + e)
 
 
+def _device() -> str:
+    """Where this encoder runs. `ML_DEVICE=cpu|cuda|auto`, default cpu.
+
+    Mirrors medml.backends._device so the in-process fallback and the ml-service path
+    cannot drift: a dev run that silently used a different device than production would
+    make every latency number measured here meaningless.
+    """
+    choice = os.getenv("ML_DEVICE", "cpu").strip().lower()
+    if choice != "auto":
+        return choice
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:  # noqa: BLE001 - a probe must never stop startup
+        return "cpu"
+
+
 class BgeReranker:
     """RerankerPort backed by a local sentence-transformers CrossEncoder."""
 
@@ -38,7 +57,7 @@ class BgeReranker:
     def _model(self) -> object:
         from sentence_transformers import CrossEncoder
 
-        return CrossEncoder(self._model_id, device="cpu")
+        return CrossEncoder(self._model_id, device=_device())
 
     @property
     def model_id(self) -> str:
@@ -57,7 +76,7 @@ class BgeReranker:
         items = list(chunks)
         if not items:
             return []
-        # CPU-bound: never on the event loop (D7).
+        # CPU-bound, so never on the event loop.
         raw = await asyncio.to_thread(self._score, query, [c.text for c in items])
         scored = [
             c.model_copy(update={"rerank_score": sigmoid(s)})

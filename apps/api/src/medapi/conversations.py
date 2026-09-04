@@ -128,6 +128,54 @@ class ConversationService:
                 raise ConversationNotFound(f"conversation {conversation_id} not owned by caller")
             return _serialize(await repo.rename(convo, title))
 
+    async def get(self, caller: Caller, conversation_id: uuid.UUID) -> dict[str, Any]:
+        """Fetch one conversation the caller owns. Read-only."""
+        if self._factory is None:
+            raise ConversationNotFound("history disabled")
+        async with session_scope(self._factory) as s:
+            convo = await ConversationRepository(s).owned_by(
+                conversation_id, user_id=caller.user_id, session_id=caller.session_id
+            )
+            if convo is None:
+                raise ConversationNotFound(f"conversation {conversation_id} not owned by caller")
+            return _serialize(convo)
+
+    async def set_pinned(
+        self, caller: Caller, conversation_id: uuid.UUID, pinned: bool
+    ) -> dict[str, Any]:
+        """Pin or unpin. S22.
+
+        Ownership-checked through the same `owned_by` gate as rename and delete. A pin is a
+        trivial change, which is exactly why it would be tempting to skip the check — and a
+        write is a write: an unchecked one lets a caller discover which conversation ids
+        exist by watching which requests succeed.
+        """
+        if self._factory is None:
+            raise ConversationNotFound("history disabled")
+        async with session_scope(self._factory) as s:
+            repo = ConversationRepository(s)
+            convo = await repo.owned_by(
+                conversation_id, user_id=caller.user_id, session_id=caller.session_id
+            )
+            if convo is None:
+                raise ConversationNotFound(f"conversation {conversation_id} not owned by caller")
+            return _serialize(await repo.set_pinned(convo, pinned))
+
+    async def search(self, caller: Caller, query: str) -> list[dict[str, Any]]:
+        """Search this caller's conversations by title AND message text. S22.
+
+        Returns [] rather than raising when history is disabled, because a search box that
+        finds nothing is a usable degraded state while a 500 is not — and the same reason
+        applies when the query is empty.
+        """
+        if self._factory is None:
+            return []
+        async with session_scope(self._factory) as s:
+            rows = await ConversationRepository(s).search_owned(
+                query, user_id=caller.user_id, session_id=caller.session_id
+            )
+            return [_serialize(c) for c in rows]
+
     async def delete(self, caller: Caller, conversation_id: uuid.UUID) -> int:
         if self._factory is None:
             raise ConversationNotFound("history disabled")
@@ -190,6 +238,9 @@ def _serialize(convo: Any) -> dict[str, Any]:
         "title": convo.title,
         "created_at": convo.created_at.isoformat(),
         "updated_at": convo.updated_at.isoformat(),
+        # S22. `getattr` with a default so a client talking to an API whose database has
+        # not yet applied the ALTER still gets a valid object rather than a 500.
+        "pinned": bool(getattr(convo, "pinned", False)),
         # Whether it is bound to an account yet. The UI uses this to show that an anonymous
         # thread will be kept if the visitor signs in.
         "claimed": convo.user_id is not None,
@@ -213,6 +264,17 @@ async def _caller(request: Request, response: Response) -> Caller:
 
 class CreateBody(BaseModel):
     title: str | None = Field(default=None, max_length=200)
+
+
+class UpdateBody(BaseModel):
+    """PATCH payload. Both fields optional — a caller may set either or both.
+
+    Separate from RenameBody so the existing title-only contract keeps working unchanged;
+    widening that model would have made `title` optional for every current caller.
+    """
+
+    title: str | None = None
+    pinned: bool | None = None
 
 
 class RenameBody(BaseModel):
@@ -249,12 +311,46 @@ async def conversation_messages(
     }
 
 
-@router.patch("/api/v1/conversations/{conversation_id}")
-async def rename_conversation(
-    conversation_id: uuid.UUID, body: RenameBody, request: Request, response: Response
+@router.get("/api/v1/conversations/search")
+async def search_conversations(
+    request: Request, response: Response, q: str = ""
 ) -> dict[str, Any]:
+    """Search this caller's conversations by title and message text. S22.
+
+    DECLARED BEFORE the `/{conversation_id}` routes below. FastAPI matches in definition
+    order, so a literal path registered after a UUID-typed parameter route would be
+    shadowed by it — the request would be parsed as a conversation id, fail UUID
+    validation, and return 422 for a perfectly valid search.
+    """
     caller = await _caller(request, response)
-    return await _services(request).conversations.rename(caller, conversation_id, body.title)
+    results = await _services(request).conversations.search(caller, q)
+    return {"query": q, "conversations": results}
+
+
+@router.patch("/api/v1/conversations/{conversation_id}")
+async def update_conversation(
+    conversation_id: uuid.UUID, body: UpdateBody, request: Request, response: Response
+) -> dict[str, Any]:
+    """Rename and/or pin. S22 widened this from rename-only.
+
+    Applied in order and both optional, so `{"pinned": true}` does not require resending a
+    title the caller may not have.
+    """
+    caller = await _caller(request, response)
+    svc = _services(request).conversations
+    result: dict[str, Any] | None = None
+    if body.title is not None:
+        result = await svc.rename(caller, conversation_id, body.title)
+    if body.pinned is not None:
+        result = await svc.set_pinned(caller, conversation_id, body.pinned)
+    if result is None:
+        # Neither field supplied: return the row UNCHANGED.
+        #
+        # The first version called rename(..., "") here, which would have silently WIPED
+        # the title of any conversation PATCHed with an empty body — a destructive answer
+        # to a request that asked for nothing. A read is the only correct response.
+        result = await svc.get(caller, conversation_id)
+    return result
 
 
 @router.delete("/api/v1/conversations/{conversation_id}")

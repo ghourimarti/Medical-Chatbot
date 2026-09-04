@@ -1,13 +1,12 @@
-"""Recompute DETERMINISTIC metrics on a saved report — no model calls (D19).
+"""Recompute the deterministic metrics on a saved report. No model calls.
 
 Two reasons this exists:
-  1. Metric definitions evolve. When a classifier is fixed (as in S6, where the abstention
-     regex was coupled to one phrasing), every historical report must be re-scored or
-     before/after comparisons silently mix metric versions.
-  2. Judge calls cost money and quota. The S6 run exhausted Groq's 100k tokens/day tier;
-     re-running 90 cases to fix a regex would be absurd when every answer is already saved.
+  1. Metric definitions change. When a classifier gets fixed, historical reports have to
+     be re-scored or before/after comparisons quietly mix metric versions.
+  2. Judge calls cost quota. One run exhausted Groq's daily tier; re-running 90 cases to
+     fix a regex is absurd when every answer is already saved.
 
-RAGAS scores are carried through untouched — they cannot be recomputed without the judge.
+RAGAS scores carry through untouched, since they can't be recomputed without the judge.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ def rescore(report: EvalReport, dataset_path: Path) -> EvalReport:
     results: list[CaseResult] = []
     for row in report.per_case:
         case = by_id.get(row.case_id)
-        if case is None:  # dataset changed since the run — keep the row untouched
+        if case is None:  # dataset changed since the run, so leave the row alone
             results.append(row)
             continue
         answer = TargetAnswer(
@@ -37,7 +36,7 @@ def rescore(report: EvalReport, dataset_path: Path) -> EvalReport:
             error=row.error,
         )
         merged: dict[str, float | None] = dict(deterministic_scores(case, answer))
-        # RAGAS values are judge-derived and cannot be recomputed offline — carry them.
+        # RAGAS values are judge-derived, so they can't be recomputed offline.
         merged.update({k: v for k, v in row.scores.items() if k in _RAGAS_KEYS})
         results.append(row.model_copy(update={"scores": merged}))
 

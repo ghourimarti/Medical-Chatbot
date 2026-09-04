@@ -32,6 +32,12 @@ const ROUTES: { pattern: string; methods: ReadonlySet<string> }[] = [
   { pattern: "v1/session/clear", methods: new Set(["POST"]) },
   // S21 — conversations.
   { pattern: "v1/conversations", methods: new Set(["GET", "POST"]) },
+  // S22 — search. A LITERAL segment, listed before the :uuid pattern below for the
+  // same reason the API declares its route first: "search" must not be matched as a
+  // conversation id. Without this entry the proxy returned 404 and the sidebar fell
+  // back to filtering titles — correct degradation, and exactly how the omission was
+  // found, since the fallback says out loud that search was unavailable.
+  { pattern: "v1/conversations/search", methods: new Set(["GET"]) },
   { pattern: "v1/conversations/:uuid", methods: new Set(["PATCH", "DELETE"]) },
   { pattern: "v1/conversations/:uuid/messages", methods: new Set(["GET"]) },
   { pattern: "v1/auth/claim", methods: new Set(["POST"]) },
@@ -109,7 +115,16 @@ export async function forward(request: Request, path: string): Promise<Response>
   const method = request.method;
   const body = method === "POST" || method === "PATCH" ? await request.text() : undefined;
 
-  const upstream = await fetch(`${API_BASE_URL}/api/${path}`, {
+  // FORWARD THE QUERY STRING. `path` comes from the catch-all route segments, which carry
+  // no search params, so building the upstream URL from it alone silently DROPPED them.
+  // Nothing noticed until S22 added the first endpoint that takes one: search reached the
+  // API with an empty `q`, dutifully returned zero results, and the sidebar reported
+  // "nothing matches" for a query it had never actually run.
+  //
+  // Rebuilt from the incoming URL rather than concatenated, so an encoded value survives
+  // exactly as sent — a question containing "&" or "#" must not become two parameters.
+  const search = new URL(request.url).search;
+  const upstream = await fetch(`${API_BASE_URL}/api/${path}${search}`, {
     method,
     headers,
     body,

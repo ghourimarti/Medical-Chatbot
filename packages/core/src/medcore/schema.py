@@ -1,9 +1,8 @@
 """Domain contracts.
 
-DECISION GATE A (locked): an Answer is not a string. `kind` makes "grounded",
-"no answer", "refused", and "degraded" *typed, distinguishable states* — because the
-degradation ladder (D21), the eval harness (D19), and the cache (D10, which must never
-store a refusal) all have to branch on them. A str cannot be branched on safely.
+An Answer is not a string. `kind` makes "grounded", "no answer", "refused" and "degraded"
+distinguishable states, because the degradation ladder, the eval harness and the cache
+(which must never store a refusal) all branch on them.
 """
 
 from __future__ import annotations
@@ -32,8 +31,8 @@ class Message(BaseModel):
 
 
 class RetrievedChunk(BaseModel):
-    """A corpus chunk returned by retrieval. Carries per-stage scores so hybrid fusion
-    (D3) and reranking are observable rather than collapsed into one opaque number."""
+    """A corpus chunk from retrieval. Keeps per-stage scores so fusion and reranking stay
+    observable instead of collapsing into one opaque number."""
 
     id: str
     text: str
@@ -73,8 +72,7 @@ class Usage(BaseModel):
 
 
 class StageTimings(BaseModel):
-    """Per-stage latency. Exists because D6 chose owned control flow specifically so every
-    stage is measurable against the Phase-1 budget (retrieval p95 250ms, TTFT p95 2.0s)."""
+    """Per-stage latency, so each stage can be measured against its own budget."""
 
     condense_ms: float | None = None
     embed_ms: float | None = None
@@ -92,12 +90,17 @@ class Completion(BaseModel):
     model_id: str
     usage: Usage = Field(default_factory=Usage)
     finish_reason: str | None = None
+    # WHICH chain leg produced this (`local-sglang`, `groq`, ...). model_id cannot answer
+    # that question: every venue in this chain can serve the SAME model id, and Groq's
+    # model is literally named `openai/gpt-oss-20b`, so reading the venue off the model
+    # name is wrong in both directions. Stamped by FailoverModel, which is the only layer
+    # that knows the leg. None for a single non-failover model, where there is no chain.
+    venue: str | None = None
 
 
 class Answer(BaseModel):
-    """The API's response contract. Invariant: a GROUNDED answer must cite its sources
-    (D18: output-must-cite). Enforcing it here means an uncited medical claim cannot be
-    constructed at all — the type system carries the safety rule, not a code review."""
+    """The API's response contract. A grounded answer must cite its sources, and enforcing
+    that here means an uncited medical claim can't be constructed in the first place."""
 
     kind: AnswerKind
     text: str
@@ -107,12 +110,13 @@ class Answer(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     timings: StageTimings = Field(default_factory=StageTimings)
     cache_hit: bool = False
-    # WHICH safety rule fired (D18/S10.2). The guardrail already classifies EMERGENCY /
-    # SELF_HARM / DOSAGE / DIAGNOSIS / INJECTION and has distinct copy for each, but the
-    # category was logged and then DISCARDED — so every client had to re-derive it by
-    # pattern-matching refusal prose. That is two sources of truth for a safety rule, and
-    # the copy-side one drifts the first time someone rewords a message. "Contact
-    # emergency services now" and "ask your pharmacist" must never render identically.
+    # Mirrors Completion.venue onto the response contract. Without it "which engine
+    # answered?" is only answerable by reading logs, which is not verification.
+    venue: str | None = None
+    # Which safety rule fired. The guardrail already classifies emergency / self-harm /
+    # dosage / diagnosis / injection, but the category used to be logged and dropped, so
+    # clients had to re-derive it by pattern-matching the refusal prose. That gives a
+    # safety rule two sources of truth, and the prose one drifts on the first reword.
     refusal_category: str | None = None
 
     @model_validator(mode="after")
@@ -134,34 +138,30 @@ class Answer(BaseModel):
 
     @property
     def is_cacheable(self) -> bool:
-        """D10: never cache refusals, no-answers, or degraded responses."""
+        """Never cache refusals, no-answers, or degraded responses."""
         return self.kind is AnswerKind.GROUNDED and not self.cache_hit
 
 
 class QueryRequest(BaseModel):
-    """Request-size caps are a security control (D18), not a nicety."""
+    """Request-size caps are a security control."""
 
     question: str = Field(min_length=1, max_length=2000)
     session_id: str | None = Field(default=None, max_length=128)
     stream: bool = True
-    # Which saved thread this turn belongs to (S20b). Optional: the anonymous single-thread
-    # path predates conversations and must keep working with no thread at all (D24).
+    # Which saved thread this turn belongs to. Optional, because the anonymous
+    # single-thread path has to keep working with no thread at all.
     #
-    # CALLER-SUPPLIED AND THEREFORE UNTRUSTED. Ownership is verified in serving.preflight
-    # before anything is written; passing it straight to the writer would let anyone append
-    # turns to a stranger's thread, and since a thread is prompt context, that is a write
-    # into someone else's conversation rather than merely a read of it.
+    # Caller-supplied, so untrusted: ownership is verified in serving.preflight before
+    # anything is written. A thread is prompt context, so passing this straight to the
+    # writer would let anyone append turns to a stranger's conversation.
     conversation_id: uuid.UUID | None = None
 
 
-# ---------------------------------------------------------------------------
-# Streaming contract (D7). FROZEN: the frontend (S10) builds against these names.
+# Streaming contract. The frontend builds against these names, so treat them as frozen.
 #
-# Ordering matters and is a deliberate UX decision: in RAG, retrieval completes
-# *before* generation starts, so citations are known up front. Emitting `sources`
-# first lets a client paint the source panel while the answer is still being
-# written — better perceived latency at zero cost.
-# ---------------------------------------------------------------------------
+# Order matters: retrieval finishes before generation starts, so citations are known up
+# front. Emitting `sources` first lets a client paint the source panel while the answer is
+# still being written.
 
 
 class StreamEventType(StrEnum):
@@ -192,12 +192,15 @@ class DoneEvent(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     timings: StageTimings = Field(default_factory=StageTimings)
     # Mirrors Answer.refusal_category so the streaming and non-streaming paths stay
-    # observably equivalent — the property the DoneEvent docstring already promises.
+    # observably equivalent, which is what the DoneEvent docstring promises.
     refusal_category: str | None = None
+    # Streaming and non-streaming must remain observably equivalent (this class's own
+    # docstring promises it), so the venue appears on both or the promise is false.
+    venue: str | None = None
 
 
 class ErrorEvent(BaseModel):
-    """Terminal event on failure. Once bytes are on the wire an HTTP status can no
-    longer be changed, so errors must be in-band — this carries the RFC 7807 body."""
+    """Terminal event on failure. Once bytes are on the wire the HTTP status can't change,
+    so errors have to travel in-band; this carries the RFC 7807 body."""
 
     problem: dict[str, Any]

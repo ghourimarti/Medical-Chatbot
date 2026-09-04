@@ -1,7 +1,7 @@
 """Find Gale 'Definition' blocks for topics so ground truths are corpus-grounded.
 
 Gale articles follow: <Topic heading> / 'Definition' / <1-3 sentence definition> / 'Description'.
-We locate the Definition→Description span across the flattened page cache.
+This locates the Definition-to-Description span in the flattened page cache.
 
 Usage: uv run python packages/eval/tools/find_definitions.py Asthma Appendicitis Botulism
 """
@@ -22,7 +22,7 @@ def main() -> None:
     full = "\n".join(pages)
     full = full.replace("’", "'").replace("�", "'")
     for topic in sys.argv[1:]:
-        # Definition block: 'Definition' then text up to 'Description'
+        # Definition block: the marker, then text up to 'Description'
         pat = re.compile(
             rf"{re.escape(topic)}\s*\n\s*Definition\s*(.+?)\s*Description",
             re.IGNORECASE | re.DOTALL,

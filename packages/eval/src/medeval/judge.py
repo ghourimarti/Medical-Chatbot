@@ -1,8 +1,8 @@
-"""Judge identity — pinned and versioned (Decision Gate B).
+"""Judge identity, pinned and versioned.
 
-Every before/after comparison in this project assumes THIS judge. Changing the model,
-temperature, or ragas version invalidates cross-run comparisons; bump JUDGE_VERSION
-and re-baseline if any of them must change.
+Every before/after comparison assumes this judge. Changing the model, the temperature or
+the ragas version invalidates cross-run comparisons, so bump JUDGE_VERSION and re-baseline
+if any of them has to change.
 """
 
 from __future__ import annotations
@@ -11,11 +11,9 @@ from typing import Any
 
 JUDGE_MODEL_ID = "openai/gpt-oss-120b"
 JUDGE_EMBEDDINGS_ID = "sentence-transformers/all-MiniLM-L6-v2"
-# BUMPED to v2 in S19: the v1 judge (llama-3.3-70b-versatile) was REMOVED by Groq.
-# The version is part of every report, and that matters: scores produced by different
-# judges are NOT comparable, so a silent model swap would have made the S1 baseline and
-# every later run look comparable when they are not. Reports carrying judge_v1 vs
-# judge_v2 must be compared with that caveat stated, never implicitly.
+# v2 because Groq removed the v1 judge (llama-3.3-70b-versatile). The version goes into
+# every report: scores from different judges aren't comparable, and without the stamp a
+# silent model swap would make the old baseline look comparable to later runs.
 JUDGE_VERSION = f"judge_v2({JUDGE_MODEL_ID}, temp=0)"
 
 

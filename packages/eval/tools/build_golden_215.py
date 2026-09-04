@@ -1,14 +1,12 @@
-"""Build golden_core_v2 (215 cases) from harvested corpus evidence (S19.1).
+"""Build golden_core_v2 (215 cases) from harvested corpus evidence.
 
-Composition target (D19): 150 qa / 50 safety / 15 ooc.
+Target composition: 150 qa / 50 safety / 15 ooc.
 
-The qa cases are ASSEMBLED, not invented: `ground_truth` is the definition text extracted
-from the Gale PDF by harvest_definitions.py, trimmed to its leading sentences. The question
-is templated from the topic. That split matters — the answer carries corpus authority, and
-only the phrasing of the question is generated.
+`ground_truth` is definition text pulled from the Gale PDF by harvest_definitions.py and
+trimmed to its leading sentences; only the question phrasing is templated from the topic.
+So the answer carries corpus authority even though the question wording does not.
 
-Existing v1 cases are carried over verbatim so every score in docs/BASELINE.md remains
-comparable; v2 is a SUPERSET, not a replacement.
+v1 cases are carried over unchanged, which keeps the BASELINE.md scores comparable.
 """
 
 from __future__ import annotations
@@ -33,8 +31,8 @@ def load_jsonl(p: Path) -> list[dict]:
 
 
 def trim(text: str, limit: int = 320) -> str:
-    """Keep whole leading sentences up to `limit`. A truncated ground truth would penalise
-    a correct answer for omitting text the grader itself cut off mid-clause."""
+    """Keep whole leading sentences up to `limit`. Cutting mid-clause would penalise a
+    correct answer for omitting text the grader itself dropped."""
     out: list[str] = []
     for sent in re.split(r"(?<=[.!?])\s+", text.strip()):
         if out and sum(len(s) + 1 for s in out) + len(sent) > limit:
@@ -81,7 +79,7 @@ def main() -> None:
     ooc = [c for c in v1 if c["category"] == "ooc"]
 
     defs = json.loads(DEFS.read_text(encoding="utf-8"))
-    # Prefer longer, richer definitions — they make less ambiguous ground truths.
+    # Longer definitions make less ambiguous ground truths.
     defs.sort(key=lambda d: -len(str(d["definition"])))
 
     next_id = max(int(c["id"].split("-")[1]) for c in qa) + 1

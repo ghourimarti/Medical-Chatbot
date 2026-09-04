@@ -128,7 +128,16 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
             r"|\bend(?:ing)?\s+(my|his|her)\s+life\b"
             r"|\bsuicid|\bself[- ]harm(?:ing)?\b|\bwant to die\b"
             # added in S19.3 — real phrasings the v1 list missed outright
-            r"|\b(don'?t|do not|no longer)\s+want\s+to\s+(be alive|live|wake up)\b"
+            # R5 — "be here" / "be around" / "go on" are ordinary indirect phrasings of
+            # ideation and were absent from this alternation. MEASURED: "I do not want to
+            # be here anymore" returned no_answer with the reference-material shrug — the
+            # SAME failure the S19.4 comment above describes, recurring through a different
+            # phrasing. The enumeration IS the rule: anything not listed falls through to
+            # retrieval and comes back as a shrug at the worst possible moment.
+            r"|\b(don'?t|do not|no longer)\s+want\s+to\s+"
+            r"(be alive|live|wake up|be here|be around|go on|carry on)\b"
+            r"|\bno\s+reason\s+to\s+(live|go on|carry on)\b"
+            r"|\bbetter\s+off\s+without\s+me\b"
             r"|\bwant to be dead\b|\btak(?:e|ing)\s+my own life\b"
             r"|\bend(?:ing)?\s+it\s+all\b"
             r"|\bnot\s+(to\s+)?wake up\b|\bnot be alive\b"
@@ -183,7 +192,13 @@ _RULES: tuple[tuple[RefusalCategory, re.Pattern[str], bool], ...] = (
         # is not. v1 refused all three encyclopedia poisoning questions.
         RefusalCategory.EMERGENCY,
         re.compile(
-            r"\bchest pain\b|\bdifficulty breathing\b|\bcan'?t breathe\b|\bsevere bleeding\b"
+            # R5 — "chest pain" alone missed how people actually describe it. MEASURED:
+            # "my chest hurts and my left arm is numb" — a textbook MI presentation — was
+            # answered with the reference-material shrug, AFTER spending 979 prompt tokens
+            # to produce it. Arm and jaw numbness were absent from the list entirely.
+            r"\bchest\s+(pain|hurts?|hurting|tightness|tight|pressure|heaviness)\b"
+            r"|\b(arm|jaw)\s+(is\s+)?numb\b|\bnumbness\s+in\s+(my\s+)?(left\s+|right\s+)?(arm|jaw)\b"
+            r"|\bdifficulty breathing\b|\bcan'?t breathe\b|\bsevere bleeding\b"
             r"|\bunconscious\b|\bstroke symptoms\b|\bheart attack\b"
             r"|\bswallowed\b.{0,40}\b(pills?|tablets?|medicine)"
             r"|\btook too much\b|\boverdos\w*\b|\bpoison(ing|ed)?\b"

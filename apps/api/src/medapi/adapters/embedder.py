@@ -1,13 +1,13 @@
-"""bge-large embedder (D5). Implements EmbedderPort.
+"""bge-large embedder, implementing EmbedderPort.
 
-The model is CPU-bound and synchronous. Every call runs in a worker thread via
-asyncio.to_thread so the async event loop is never blocked (D7) — the discipline that
-lets one API pod hold thousands of concurrent requests. In S5 this moves behind an HTTP
-ml-service; the port keeps that a config change, not a rewrite.
+The model is CPU-bound and synchronous, so every call goes through asyncio.to_thread and
+the event loop stays free. That is what lets one API pod hold thousands of concurrent
+requests. Moving this behind the HTTP ml-service is a config change, not a rewrite.
 """
 
 from __future__ import annotations
 
+import os
 import asyncio
 from collections.abc import Sequence
 from functools import cached_property
@@ -16,6 +16,24 @@ from sentence_transformers import SentenceTransformer
 
 # bge models recommend a query-side instruction prefix for retrieval; documents get none.
 _QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+
+def _device() -> str:
+    """Where this encoder runs. `ML_DEVICE=cpu|cuda|auto`, default cpu.
+
+    Mirrors medml.backends._device so the in-process fallback and the ml-service path
+    cannot drift: a dev run that silently used a different device than production would
+    make every latency number measured here meaningless.
+    """
+    choice = os.getenv("ML_DEVICE", "cpu").strip().lower()
+    if choice != "auto":
+        return choice
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:  # noqa: BLE001 - a probe must never stop startup
+        return "cpu"
 
 
 class BgeEmbedder:
@@ -27,7 +45,7 @@ class BgeEmbedder:
 
     @cached_property
     def _model(self) -> SentenceTransformer:
-        model = SentenceTransformer(self._model_id, device="cpu")
+        model = SentenceTransformer(self._model_id, device=_device())
         # method renamed across sentence-transformers versions; support both.
         dim_fn = getattr(model, "get_embedding_dimension", None) or (
             model.get_sentence_embedding_dimension
@@ -36,7 +54,7 @@ class BgeEmbedder:
         if got != self._dimension:
             raise ValueError(
                 f"{self._model_id} produces {got}-dim vectors but config expects "
-                f"{self._dimension}. The Qdrant collection dimension is frozen — fix config."
+                f"{self._dimension}. The Qdrant collection dimension is frozen; fix config."
             )
         return model
 

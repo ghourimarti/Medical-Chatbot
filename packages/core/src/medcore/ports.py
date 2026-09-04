@@ -1,11 +1,11 @@
-"""Port protocols — the reversibility layer.
+"""Port protocols: the layer that keeps vendor choices reversible.
 
-Every "Reversibility: Easy" claim in the Decision Log is cashed here. D2 (Qdrant ->
-pgvector flip-down), D4/D12 (vLLM <-> SGLang <-> hosted), D5 (embedding swap) are all
-config flips *because* the pipeline depends on these protocols, never on an SDK type.
+Swapping Qdrant for pgvector, vLLM for SGLang or a hosted leg, or one embedding model for
+another stays a config change because the pipeline depends on these protocols and never on
+an SDK type.
 
-Structural (Protocol), not nominal (ABC): an adapter satisfies a port by shape, so no
-vendor class ever has to inherit from our code.
+Structural (Protocol) rather than nominal (ABC), so an adapter satisfies a port by shape
+and no vendor class has to inherit from our code.
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ class EmbedderPort(Protocol):
 
 @runtime_checkable
 class VectorStorePort(Protocol):
-    """`search` takes BOTH a vector and the raw text: hybrid dense+sparse retrieval (D3)
-    must be expressible without ever changing this signature. A vector-only port would
-    force an interface change on the very slice it exists to protect."""
+    """`search` takes both a vector and the raw text, so hybrid dense+sparse retrieval is
+    expressible without changing this signature. A vector-only port would force an
+    interface change on the slice it exists to protect."""
 
     async def search(
         self,
@@ -58,8 +58,7 @@ class RerankerPort(Protocol):
 
 @runtime_checkable
 class ModelPort(Protocol):
-    """The seam behind which vLLM (primary), SGLang (engine failover), and the hosted
-    outage leg are interchangeable (D4, D12)."""
+    """The seam that makes vLLM, SGLang and the hosted legs interchangeable."""
 
     @property
     def model_id(self) -> str: ...

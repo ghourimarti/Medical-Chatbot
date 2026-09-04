@@ -19,7 +19,7 @@
 
 .PHONY: api app audit audit-chaos audit-fresh backup-drill baseline bench-groq \
         bench-local bench-sglang cache-clear cache-flush cache-ls chaos chart-lint check \
-        clean-all clean-images clean-models db down downv engine-guide eval-delta \
+        chain-drill clean-all clean-images clean-models db down downv engine-guide eval-delta \
         eval-gate eval-mock eval-pipeline gpu gpu-down help images kill-off kill-on \
         kill-status kind-down kind-install kind-load kind-smoke kind-start kind-status \
         kind-stop kind-sync kind-up langfuse lint load-cache load-full load-guard logs \
@@ -64,12 +64,26 @@ ENGINE ?= sglang
 ALL_ENGINE_PROFILES := --profile gpu --profile gpu-sglang --profile webui
 GPU_PROFILE := $(ENGINE_PROFILE)
 ENGINE_HINT = @echo ""; echo "  Test it:"; echo ""
+# How long `make up` waits for the engine to reach SERVING. Generous because a cold
+# weight download happens inside this window; raise with `make up ENGINE_WAIT=3600`.
+ENGINE_WAIT ?= 1800
+# Set to 1 to start an engine even when the memory preflight says it will be OOM-killed.
+SKIP_MEM_CHECK ?= 0
+WEIGHTS_VOL := $(shell $(DC_GPU) config --format json 2>/dev/null | python -c "import sys,json;print(json.load(sys.stdin)['name'])" 2>/dev/null)_vllm-hf-cache
 KIND ?= 1
 KIND_CLUSTER := medbot
 KIND_NODES   := $(KIND_CLUSTER)-control-plane $(KIND_CLUSTER)-worker $(KIND_CLUSTER)-worker2
-DATA_VOLS  := pg_data qdrant_data localstack_data hf_models prom_data grafana_data \
+DATA_VOLS  := pg_data qdrant_data localstack_data prom_data grafana_data \
               redisinsight_data langfuse_clickhouse langfuse_minio
-KEEP_VOLS  := vllm-hf-cache
+# hf_models joins vllm-hf-cache here, and for the same reason: these hold MODEL
+# WEIGHTS, not application state. hf_models is ~2.4GB of bge-large and
+# bge-reranker-base - immutable published artifacts, pinned by ID in config, with
+# no stale-state risk at all. Wiping them on `make downv` bought nothing and cost a
+# 2.4GB download on every rebuild: MEASURED, ml-service sat at "health: starting"
+# for over ten minutes while `up-app --wait` blocked on it, which made `make upv`
+# look like it had hung.
+# `make clean-models` removes both when you actually mean to.
+KEEP_VOLS  := vllm-hf-cache hf_models
 PROJECT_CMD = $(DC_DATA) config --format json | python -c "import sys,json;print(json.load(sys.stdin)['name'])"
 NS = docker exec $(API_CTR) python -c "from medcore.config import get_settings;print(get_settings().cache_namespace)"
 API_CTR := p5-medical-chatbot-api-1
@@ -121,7 +135,26 @@ ifeq ($(GPU),1)
     # serving traffic happily for a while - a crash that only arrives when someone opens
     # another browser tab. 0.70 leaves ~3.5 GB of desktop headroom and still gives the
     # 7B AWQ weights (~5.5 GB) room for an 8k KV cache. Raise it only on a headless box.
-    ENGINE_SGLANG_FRAC := 0.70
+    #
+    # LOWERED 0.70 -> 0.50 for TTFT. At 0.70 SGLang logged, every boot:
+    #   "Disabling auto-selected prefill CUDA graph: only 1.76 GiB is free after
+    #    model/KV/eager-buffer allocation; at least 4.00 GiB is required for capture"
+    # so PREFILL ran eager - and prefill IS time-to-first-token. The measured TTFT p50 was
+    # 3.31s against an 0.8s NFR while the fix sat in a log line nobody read.
+    #
+    # The arithmetic, on this 12288 MiB card: each 0.01 of fraction is ~123 MiB, so buying
+    # the missing ~2.24 GiB of capture headroom costs ~0.18 of fraction. 0.70 - 0.18 = 0.52,
+    # and 0.50 leaves a margin: ~4.16 GiB free, just over the 4.00 GiB threshold.
+    #
+    # What it costs: the static pool drops to ~6.0 GB, leaving ~512 MiB of KV cache after
+    # the 5.5 GB of weights. That sounds alarming against an 8192 context until you price a
+    # REAL request - this pipeline's prompts measure ~980 tokens, and Qwen2.5-7B's GQA KV is
+    # ~56 KiB/token, so a live turn holds ~55 MiB. 512 MiB is roughly nine concurrent turns,
+    # far past what one desktop GPU serves anyway. The 8k figure only binds if someone sends
+    # a genuinely 8k-token prompt, which this corpus and prompt template never produce.
+    #
+    # Revert with `make up ENGINE_SGLANG_FRAC=0.70` if you would rather have KV than TTFT.
+    ENGINE_SGLANG_FRAC := 0.50
     ENGINE_CTX     := 8192
     ENGINE_STOP    := vllm
   else ifeq ($(ENGINE),both)
@@ -169,9 +202,23 @@ endif
 #  orphans the partial download.
 # ------------------------------------------------------------------------------------------
 
-vllm-up:	## Start vLLM alone, then print how to test it
+vllm-up:	## vLLM alone: weights -> start -> WAIT until it actually serves
+	@# The same five stages `make up` runs, for one engine:
+	@#   image (already pulled) -> weights on disk -> container -> load -> SERVE
+	@# Waits for SERVING, not for the container to exist: a container that is up
+	@# and still loading weights answers nothing.
 	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
-	$(DC_GPU) --profile gpu up -d vllm
+	@# Called directly, NOT through $$(MAKE): GNU make executes $$(MAKE) lines even
+	@# under `-n`, so a DRY RUN of this target would start a real 5GB download.
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 bash scripts/ensure_weights.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" "$(WEIGHTS_VOL)"
+	@[ "$(SKIP_MEM_CHECK)" = "1" ] || { set -a; . ./.env 2>/dev/null || true; set +a; bash scripts/engine_preflight.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" "$(WEIGHTS_VOL)" vllm; }
+	@echo "  starting vllm; waiting for it to SERVE..."
+	@VLLM_GPU_MEMORY_UTILIZATION=$(ENGINE_VLLM_FRAC) $(DC_GPU) --profile gpu up -d --wait --wait-timeout $(ENGINE_WAIT) vllm || { \
+	  bash scripts/engine_failed.sh vllm $(ENGINE_WAIT); \
+	  exit 1; \
+	}
+	@echo "  vllm SERVING on port $${VLLM_LOCAL_PORT:-5009}"
 	@$(MAKE) --no-print-directory vllm-test
 
 vllm-down:	## Stop vLLM (weights kept)
@@ -191,7 +238,7 @@ vllm-downv:	## Stop vLLM AND delete the shared ~5GB weight cache
 	@echo "  vLLM removed and weight cache deleted."
 
 vllm-test:	## How to verify vLLM is really generating (UI + CLI)
-	@$(MAKE) --no-print-directory engine-guide ENGINE=vLLM PORT=$${VLLM_LOCAL_PORT:-5009} MODEL=$${VLLM_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+	@$(MAKE) --no-print-directory engine-guide ENGINE_LABEL=vLLM PORT=$${VLLM_LOCAL_PORT:-5009} MODEL=$${VLLM_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
 
 
 # ==========================================================================================
@@ -206,9 +253,23 @@ vllm-test:	## How to verify vLLM is really generating (UI + CLI)
 #  serving happily for hours.
 # ------------------------------------------------------------------------------------------
 
-sglang-up:	## Start SGLang alone, then print how to test it
+sglang-up:	## SGLang alone: weights -> start -> WAIT until it actually serves
+	@# The same five stages `make up` runs, for one engine:
+	@#   image (already pulled) -> weights on disk -> container -> load -> SERVE
+	@# Waits for SERVING, not for the container to exist: a container that is up
+	@# and still loading weights answers nothing.
 	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
-	$(DC_GPU) --profile gpu-sglang up -d sglang
+	@# Called directly, NOT through $$(MAKE): GNU make executes $$(MAKE) lines even
+	@# under `-n`, so a DRY RUN of this target would start a real 5GB download.
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 bash scripts/ensure_weights.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" "$(WEIGHTS_VOL)"
+	@[ "$(SKIP_MEM_CHECK)" = "1" ] || { set -a; . ./.env 2>/dev/null || true; set +a; bash scripts/engine_preflight.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" "$(WEIGHTS_VOL)" sglang; }
+	@echo "  starting sglang; waiting for it to SERVE..."
+	@SGLANG_MEM_FRACTION=$(ENGINE_SGLANG_FRAC) $(DC_GPU) --profile gpu-sglang up -d --wait --wait-timeout $(ENGINE_WAIT) sglang || { \
+	  bash scripts/engine_failed.sh sglang $(ENGINE_WAIT); \
+	  exit 1; \
+	}
+	@echo "  sglang SERVING on port $${SGLANG_LOCAL_PORT:-5010}"
 	@$(MAKE) --no-print-directory sglang-test
 
 sglang-down:	## Stop SGLang (weights kept)
@@ -228,17 +289,20 @@ sglang-downv:	## Stop SGLang AND delete the shared ~5GB weight cache
 	@echo "  SGLang removed and weight cache deleted."
 
 sglang-test:	## How to verify SGLang is really generating (UI + CLI)
-	@$(MAKE) --no-print-directory engine-guide ENGINE=SGLang PORT=$${SGLANG_LOCAL_PORT:-5010} MODEL=$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+	@$(MAKE) --no-print-directory engine-guide ENGINE_LABEL=SGLang PORT=$${SGLANG_LOCAL_PORT:-5010} MODEL=$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
 
+# ENGINE_LABEL is a DISPLAY name ('vLLM', 'SGLang'), deliberately NOT the ENGINE
+# variable: that one is validated against vllm|sglang|both|none, so passing a
+# capitalised label through it tripped the guard and broke `make sglang-test`.
 engine-guide:
 	@echo ""
 	@echo "  ============================================================"
-	@echo "   $(ENGINE) on http://localhost:$(PORT)"
+	@echo "   $(ENGINE_LABEL) on http://localhost:$(PORT)"
 	@echo "  ============================================================"
 	@echo ""
 	@echo "  FIRST BOOT downloads ~5GB and can take 10-20 min. Do NOT interrupt it:"
 	@echo "  huggingface_hub does not resume, so a broken pull restarts from zero."
-	@echo "    watch it:   docker logs -f $$(echo $(ENGINE) | tr A-Z a-z)"
+	@echo "    watch it:   docker logs -f $$(echo $(ENGINE_LABEL) | tr A-Z a-z)"
 	@echo ""
 	@echo "  -- 1. is it up? (liveness, NOT capacity) -------------------"
 	@echo "    curl -s localhost:$(PORT)/health"
@@ -303,8 +367,14 @@ gpu-down:	## Stop vLLM + SGLang (KEEPS the weight cache)
 up-data:	## DATA only: Postgres, Qdrant, Redis, LocalStack
 	$(DC_DATA) up -d --wait
 
-down-data:	## Stop the data tier (volumes kept)
-	$(DC_DATA) down
+# Every down-* target STOPS its services and nothing more. Removing containers or the
+# shared network is the composite `down`'s job alone, because a tier target that
+# deletes infrastructure another tier still holds produces this on the NEXT start:
+#     failed to set up container networking: network 1d7119... not found
+# - stopped containers keep a reference to the network ID that was removed underneath
+# them, and no amount of restarting fixes it without recreating them.
+down-data:	## Stop the data tier (containers and volumes kept)
+	$(DC_DATA) stop
 
 db: up-data	## Alias kept for older docs and muscle memory
 
@@ -339,15 +409,47 @@ worker:	## Start the ingestion worker (profile-gated: it needs an SQS queue to e
 # ------------------------------------------------------------------------------------------
 
 up-app:	## APP only: ml-service, api, web - NEVER a database
-	@# The data compose file is passed so `depends_on` and the shared network
-	@# resolve, but the SERVICES are named explicitly. That is what keeps this
-	@# target from starting Postgres behind your back.
-	$(DC_APP) up --build -d --wait ml-service api web
+	@# PREFLIGHT. The API refuses to boot without the `gale_live` alias and exits 3,
+	@# which docker surfaces as "dependency failed to start" - a message that says
+	@# nothing whatsoever about the cause. Checking here turns a cryptic container
+	@# exit into a sentence that names the fix.
+	@if ! curl -sf --max-time 5 http://localhost:$${QDRANT_HTTP_PORT:-5002}/aliases 2>/dev/null \
+	     | grep -q gale_live; then \
+	  echo ""; \
+	  echo "  REFUSING TO START THE APP TIER: the corpus is not indexed."; \
+	  echo ""; \
+	  echo "  The API will not boot without the 'gale_live' alias. It exits 3"; \
+	  echo "  rather than creating the name that ingestion owns, so a missing"; \
+	  echo "  corpus can never silently become an empty one (P6.3.5)."; \
+	  echo ""; \
+	  echo "  Fix with either:"; \
+	  echo "      make seed    ingest into the running data tier (~20 min)"; \
+	  echo "      make upv     wipe and rebuild in the correct order"; \
+	  echo ""; \
+	  exit 1; \
+	fi
+	@# PREFLIGHT 2. A malformed SERVING_CHAIN also exits 3, behind the same useless
+	@# "dependency failed to start". `sglang,groq,openai` is the easy mistake: sglang is
+	@# an ENGINE, so it only exists as `local-sglang`. Validating with the REAL parser
+	@# means this check can never disagree with what the app enforces.
+	@python -c "import sys; sys.path.insert(0,'apps/api/src'); 	from medapi.venues import parse_chain; parse_chain('$(ENGINE_CHAIN)')" 2>/dev/null || { 	  echo ""; 	  echo "  REFUSING TO START THE APP TIER: SERVING_CHAIN is not valid."; 	  echo ""; 	  echo "      chain: $(ENGINE_CHAIN)"; 	  echo ""; 	  python -c "import sys; sys.path.insert(0,'apps/api/src'); 	  from medapi.venues import parse_chain; parse_chain('$(ENGINE_CHAIN)')" 2>&1 	    | tail -1 | sed 's/^/      /'; 	  echo ""; 	  echo "  Entries are 'venue' or 'venue-engine'. sglang and vllm are ENGINES, so they"; 	  echo "  are only valid as local-sglang / local-vllm, never on their own."; 	  echo ""; 	  exit 1; 	}
+	@# The data compose file is passed so `depends_on` and the shared network resolve,
+	@# but the SERVICES are named explicitly - that is what keeps this target from
+	@# starting Postgres behind your back.
+	@# SERVING_CHAIN is EXPORTED, not left to .env. docker-compose.app.yaml interpolates
+	@# ${SERVING_CHAIN}, and the shell environment beats .env for that - which is the only
+	@# thing that makes ENGINE= authoritative. Without this the target PRINTS one chain and
+	@# the container RUNS another: `make up ENGINE=vllm` announced local-vllm,groq,openai
+	@# while the API booted on whatever .env happened to say. A knob that reports a value
+	@# it does not apply is worse than no knob, because it is believed.
+	SERVING_CHAIN=$(ENGINE_CHAIN) $(DC_APP) up --build -d --wait ml-service api web
 
 down-app:	## Stop only the app services
 	$(DC_APP) stop ml-service api web
 
 app: up-app	## Alias kept for older docs and muscle memory
+
+
 
 # ── Native dev (run the API on the host against the containerized data tier) ────────────
 api:  ## Run the query service on $$API_PORT (default 5007)
@@ -379,10 +481,35 @@ smoke:  ## Query the running API (shell-quoting-proof; needs `make api` in anoth
 up-obs:	## OBSERVABILITY only: OTel, Prometheus, Grafana, Langfuse, Jaeger
 	@# Needs the data tier: Langfuse keeps its org/project/keys in that Postgres.
 	$(DC_OBS) up -d
-	@$(DC_OBS) --profile seed up -d redisinsight-seed >/dev/null 2>&1 || true
+	@# prometheus.yml is BIND-MOUNTED, so `compose up` sees no container change and
+	@# leaves the old config loaded. Editing the scrape config and running `make up`
+	@# was therefore a silent no-op - which is how a duplicate scrape target survived
+	@# long enough to make every counter panel read 2x. --web.enable-lifecycle is
+	@# already set, so ask it to re-read rather than hoping a restart happens.
+	@curl -fsS -X POST http://localhost:$${PROMETHEUS_PORT:-5013}/-/reload >/dev/null 2>&1 && echo "  prometheus: scrape config reloaded" || echo "  prometheus: reload skipped (not reachable)"
+	@$(MAKE) --no-print-directory redisinsight-register
+
+# `run --rm`, NOT `up -d`. A one-shot container that already exists in an exited state
+# is a NO-OP for `up -d` - compose sees unchanged config and leaves it alone - so the
+# seeder ran exactly once, ever. When a downv wiped redisinsight_data the registration
+# went with it and nothing restored it: /api/databases returned 0 while the seeder sat
+# at "Exited (128) an hour ago". `run --rm` always executes and leaves no container to
+# be reported as an orphan later.
+redisinsight-register:	## Register the app's Redis DBs in RedisInsight (idempotent)
+	@$(DC_OBS) --profile seed run --rm redisinsight-seed >/dev/null 2>&1 || true
+	@# VERIFIED, not assumed. The seeder is a GUI convenience and must never fail
+	@# `make up`, but a fallback that hides its own failure is exactly how this went
+	@# unnoticed - so the outcome is checked and reported either way.
+	@N=$$(curl -s --max-time 8 http://localhost:$${REDISINSIGHT_PORT:-5022}/api/databases 2>/dev/null | python -c "import sys,json;print(len(json.load(sys.stdin)))" 2>/dev/null); \
+	  if [ "$${N:-0}" -gt 0 ]; then \
+	    echo "  RedisInsight: $$N database(s) registered"; \
+	  else \
+	    echo "  RedisInsight: NO databases registered - the GUI will be empty."; \
+	    echo "    retry with: make redisinsight-register"; \
+	  fi
 
 down-obs:	## Stop the observability tier
-	$(DC_OBS) down
+	$(DC_OBS) stop
 
 obs: up-obs	## Alias kept for older docs and muscle memory
 
@@ -494,19 +621,26 @@ kind-up: kind-start	## Alias for kind-start (kept: older docs and scripts call i
 #      upv    wipe + rebuild + seed     downv  stop everything, DATA DESTROYED
 # ------------------------------------------------------------------------------------------
 
-up-engine:	## Start the local engine named by ENGINE= (nothing when GPU=0)
-	@if [ -z "$(ENGINE_PROFILE)" ]; then \
-	  echo "  no local engine (GPU=0 or ENGINE=none) - chain is hosted-only"; \
-	else \
-	  if [ -n "$(ENGINE_STOP)" ]; then \
-	    $(DC_GPU) $(ALL_ENGINE_PROFILES) rm -sf $(ENGINE_STOP) >/dev/null 2>&1 || true; \
-	  fi; \
-	  $(DC_GPU) $(ENGINE_PROFILE) up -d; \
-	  echo "  engine started: ENGINE=$(ENGINE)"; \
-	fi
+weights-status:	## What model weights are on disk, and are they complete?
+	@bash scripts/ensure_weights.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" 	  "$(WEIGHTS_VOL)" 2>/dev/null | head -3 || true
+
+weights-ensure:	## Make the engine weights present and complete - salvage, else download
+	@set -a; . ./.env 2>/dev/null || true; set +a; 	 bash scripts/ensure_weights.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" 	   "$(WEIGHTS_VOL)"
+
+up-engine:	## Start the local engine named by ENGINE= and WAIT until it actually serves
+	@# WHY THIS WAITS. Every other tier uses `up -d --wait`; this one used a bare `up -d`
+	@# and printed "engine started" the instant the CONTAINER was created - while the
+	@# engine was still downloading and loading ~5.5GB of weights, minutes from answering
+	@# anything. `make upv` therefore "succeeded" with the engine leg dead, the chain fell
+	@# through to the hosted venue, and the whole point of self-hosting was silently lost.
+	@#
+	@# A container that exists is not an engine that serves. Starting a process and
+	@# reporting success is the same class of error as a readiness probe that only proves
+	@# a binary can execute (P6.4.1).
+	@if [ -z "$(ENGINE_PROFILE)" ]; then 	  echo "  no local engine (GPU=0 or ENGINE=none) - chain is hosted-only"; 	else 	  if [ -n "$(ENGINE_STOP)" ]; then 	    $(DC_GPU) $(ALL_ENGINE_PROFILES) rm -sf $(ENGINE_STOP) >/dev/null 2>&1 || true; 	  fi; 	  bash scripts/ensure_weights.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" "$(WEIGHTS_VOL)" $(ENGINE); 	  [ "$(SKIP_MEM_CHECK)" = "1" ] || bash scripts/engine_preflight.sh "$${SGLANG_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}" "$(WEIGHTS_VOL)" || exit 1; 	  echo "  starting $(ENGINE) and waiting for it to SERVE (not just start)..."; 	  SGLANG_MEM_FRACTION=$(ENGINE_SGLANG_FRAC) 	  VLLM_GPU_MEMORY_UTILIZATION=$(ENGINE_VLLM_FRAC) 	  SGLANG_MAX_MODEL_LEN=$(ENGINE_CTX) VLLM_MAX_MODEL_LEN=$(ENGINE_CTX) 	  $(DC_GPU) $(ENGINE_PROFILE) up -d --wait --wait-timeout $(ENGINE_WAIT) || { 	    echo ""; 	    bash scripts/engine_failed.sh "$(ENGINE)" $(ENGINE_WAIT); 	    exit 1; 	  }; 	  echo "  engine SERVING: ENGINE=$(ENGINE)"; 	fi
 
 down-engine:	## Stop EVERY engine, whichever one is currently selected
-	@$(DC_GPU) $(ALL_ENGINE_PROFILES) down >/dev/null 2>&1 || true
+	@$(DC_GPU) $(ALL_ENGINE_PROFILES) stop >/dev/null 2>&1 || true
 	@echo "  engines stopped"
 
 up:		## EVERYTHING - composed from the tier targets above
@@ -520,27 +654,45 @@ up:		## EVERYTHING - composed from the tier targets above
 	@$(MAKE) --no-print-directory urls
 	@echo "  Which engine actually answered:  make which-engine"
 
-upv:		## FROM SCRATCH: wipe volumes, rebuild, start every tier, migrate, ingest.
+# THE ORDER HERE IS A DEPENDENCY CHAIN, NOT A PREFERENCE. Each step is impossible
+# before the one above it:
+#
+#   up-data   nothing else can do anything without Postgres/Qdrant/Redis.
+#   seed      runs on the HOST (`medworker-ingest --direct`), so it needs only the
+#             data tier - and it is what CREATES the `gale_live` alias.
+#   up-app    the API refuses to boot without that alias. verify_collection() raises
+#             "'gale_live' does not exist in Qdrant. The API does not create it" and
+#             the container exits 3. That refusal is deliberate (P6.3.5): the API
+#             must never create the name that ingestion owns, or a missing corpus
+#             silently becomes an empty one.
+#   migrate   runs `exec -T api`, so it needs that container to EXIST.
+#
+# An earlier ordering put migrate second and it failed with "service api is not
+# running"; moving seed after up-app fails the other way, with the API exiting 3.
+# Only this sequence satisfies both constraints.
+upv:		## FROM SCRATCH: wipe volumes, rebuild, seed the corpus, start every tier.
 	@echo "  make upv - clean rebuild from scratch (DESTROYS local data volumes)."
+	@echo "  The corpus ingest is CPU-bound and takes ~20 minutes. Do not interrupt it."
 	@$(MAKE) --no-print-directory downv
 	@$(MAKE) --no-print-directory up-data
-	@$(MAKE) --no-print-directory migrate
-	@# Seed BEFORE the app tier: the API's readiness probe requires a NON-EMPTY vector
-	@# index, so an app started against an unseeded Qdrant never becomes ready.
 	@$(MAKE) --no-print-directory seed
 	@$(MAKE) --no-print-directory up-app
+	@$(MAKE) --no-print-directory migrate
 	@$(MAKE) --no-print-directory up-obs
 	@$(MAKE) --no-print-directory up-engine
 	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@echo ""
-	@echo "  Up from scratch - every tier running, schema created, corpus ingested."
+	@echo "  Up from scratch - every tier running, corpus ingested, schema created."
 	@$(MAKE) --no-print-directory urls
 
-down:		## Stop every tier. DATA VOLUMES ARE KEPT.
+down:		## Stop every tier and remove containers. DATA VOLUMES ARE KEPT.
 	@$(MAKE) --no-print-directory down-engine
 	@$(MAKE) --no-print-directory down-obs
 	@$(MAKE) --no-print-directory down-app
 	@$(MAKE) --no-print-directory down-data
+	@# ONE place removes containers and the network, after every tier has stopped.
+	@# Splitting this across the tier targets is what left stale network references.
+	$(DC_FULL) $(ALL_ENGINE_PROFILES) down --remove-orphans
 	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-stop; fi
 	@echo "  stopped. data volumes kept - 'make downv' destroys them."
 
@@ -572,13 +724,24 @@ up-sglang:	## Whole app served by SGLang      (SERVING_CHAIN=local-sglang,groq)
 up-vllm-sglang:	## Whole app, BOTH engines        (SERVING_CHAIN=local-vllm,local-sglang,groq)
 	@$(MAKE) --no-print-directory up ENGINE=both
 
+chain-drill:	## Break each venue in turn and prove the next takes over (D4b)
+	@# Runs against the LIVE chain, breaks legs by blackholing their hostnames inside the
+	@# API container, and ALWAYS restores /etc/hosts - including on Ctrl-C. It leaves
+	@# evidence behind on purpose: after a run, Grafana row 1b finally has data for every
+	@# leg instead of 'not served since restart'.
+	@MSYS_NO_PATHCONV=1 uv run python scripts/chain_drill.py
+
 which-engine:	## Prove which venue served the last answer (guessing is not verification)
 	@echo "  configured : $$(docker exec p5-medical-chatbot-api-1 printenv SERVING_CHAIN 2>/dev/null || grep ^SERVING_CHAIN= .env | cut -d= -f2)"
 	@echo "  resolved   : $$(docker logs p5-medical-chatbot-api-1 2>&1 | grep -i 'serving chain' | tail -1 | sed 's/.*serving chain: //')"
-	@printf "  engine has : "
-	@curl -s --max-time 5 http://localhost:$${VLLM_LOCAL_PORT:-5009}/v1/models 2>/dev/null 	  | python -c "import sys,json;print(','.join(m['id'] for m in json.load(sys.stdin)['data']))" 2>/dev/null 	  || curl -s --max-time 5 http://localhost:$${SGLANG_LOCAL_PORT:-5010}/v1/models 2>/dev/null 	  | python -c "import sys,json;print(','.join(m['id'] for m in json.load(sys.stdin)['data']))" 2>/dev/null 	  || echo "(no local engine reachable)"
+	@# Ask each engine SEPARATELY. The previous version probed vLLM, fell back to SGLang,
+	@# and printed a bare model id - but BOTH engines serve the same model id, so its
+	@# output could not distinguish the two, which is the one thing it existed to do.
+	@for e in vllm:$${VLLM_LOCAL_PORT:-5009} sglang:$${SGLANG_LOCAL_PORT:-5010}; do name=$${e%%:*}; port=$${e##*:}; m=$$(curl -s --max-time 5 http://localhost:$$port/v1/models 2>/dev/null | python -c "import sys,json;print(','.join(x['id'] for x in json.load(sys.stdin)['data']))" 2>/dev/null); if [ -n "$$m" ]; then printf "  %-10s : UP    %s\n" "$$name" "$$m"; else printf "  %-10s : down\n" "$$name"; fi; done
 	@printf "  answering  : "
-	@curl -s -X POST localhost:$${API_PORT:-5007}/api/v1/query -H 'content-type: application/json' 	  -d '{"question":"What is asthma?","stream":false}' --max-time 180 	  | python -c "import sys,json;print(json.load(sys.stdin).get('model_id','(no answer)'))" 2>/dev/null || echo "(query failed)"
+	@# venue, not model_id: Groq serves a model called `openai/gpt-oss-20b`, so a model
+	@# name is actively misleading about who answered. The API now reports the chain leg.
+	@curl -s -X POST localhost:$${API_PORT:-5007}/api/v1/query -H 'content-type: application/json' -d '{"question":"What is asthma?","stream":false}' --max-time 180 | python -c "import sys,json;d=json.load(sys.stdin);print(str(d.get('venue') or '(venue not reported)') + '   model=' + str(d.get('model_id')))" 2>/dev/null || echo "(query failed)"
 
 
 # ==========================================================================================
@@ -756,12 +919,18 @@ clean-images:	## DESTRUCTIVE: remove this project's images (app + vLLM + SGLang)
 	-docker rmi vllm/vllm-openai:latest lmsysorg/sglang:latest 2>/dev/null
 	@echo "  Model WEIGHTS were kept. 'make clean-models' removes those."
 
-clean-models:	## DESTRUCTIVE: delete the ~5GB LLM weight cache shared by vLLM and SGLang
-	@echo "  Deleting vllm-hf-cache (~5GB of weights)."
+clean-models:	## DESTRUCTIVE: delete ALL weight caches (LLM ~5GB + embeddings ~2.4GB)
+	@echo "  Deleting vllm-hf-cache (~5GB LLM weights) and hf_models (~2.4GB embedding"
+	@echo "  + reranker weights). Both survive 'make downv' deliberately - they are"
+	@echo "  immutable artifacts, not state - so this is the ONLY thing that removes them."
 	@echo "  Re-downloading needs ONE uninterrupted run: huggingface_hub does not resume"
 	@echo "  across process restarts (S3b blocker #3), so a broken pull starts from zero."
-	-docker volume rm vllm-hf-cache 2>/dev/null || docker volume rm $$($(PROJECT_CMD))_vllm-hf-cache 2>/dev/null
-	@echo "  Weight cache removed."
+	@P=$$($(PROJECT_CMD)); \
+	  for v in vllm-hf-cache hf_models; do \
+	    docker volume rm $$v >/dev/null 2>&1 \
+	      || docker volume rm $${P}_$$v >/dev/null 2>&1 || true; \
+	  done
+	@echo "  Weight caches removed."
 
 clean-all: clean-images clean-models	## DESTRUCTIVE: images AND weights. The full reset.
 	@echo "  Everything removed. Next 'make upv' is a cold build: expect 30-60 min."

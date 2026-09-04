@@ -75,7 +75,87 @@ That single sentence resolves most confusion. Asking one question in the browser
 So "I sent one query and Jaeger shows four traces" is correct behaviour. Only one has a deep
 tree. Sort by duration and open the longest.
 
-## 1.2 The anatomy of a healthy query trace
+## 1.2 How to READ the waterfall (the axes, the bars, the numbers)
+
+Before the span meanings, the mechanics — because the picture is not a bar chart and the two
+axes mean completely different things.
+
+```
+  |<---------------------------- 2115.1 ms ---------------------------->|
+  POST /api/v1/query        [=====================================]
+    http receive            [ ]                                          0.0 ms
+    guard                   [ ]                                          0.1 ms
+    condense                [ ]                                          0.0 ms
+    embed                    [==]                                      141.0 ms
+    retrieve                    [ ]                                     22.3 ms
+    rerank                       [==================]                 1169.8 ms
+    build_context                                  [ ]                   0.1 ms
+    generate                                       [===========]       745.7 ms
+    rag_answer                                                 [ ]       0.2 ms
+    http send                                                  [ ]       0.1 ms
+```
+
+**The HORIZONTAL axis is time.** The whole width is the root span. A bar starts where that
+operation started, relative to the root, and its width is how long it took. So the *position*
+tells you when, and the *length* tells you how long. `rerank` is the widest bar because it is
+the slowest step, and it sits in the middle because it runs after retrieve and before
+generate.
+
+**The VERTICAL axis is not time. It is nesting.** Indentation means "this happened inside
+that" — a parent/child relationship, i.e. causality. Two spans at the same indent level are
+siblings; they are ordered top-to-bottom by start time, but the vertical distance between
+them means nothing. A common mistake is reading a tall trace as a slow one. Tall means
+*many operations*; wide means *slow*.
+
+**Sequential vs concurrent, read from the bars.** Bars that sit end-to-end never overlap in
+time, so the work is sequential — which is exactly what this pipeline is: embed, then
+retrieve, then rerank, then generate. If two bars *overlap horizontally*, those operations
+ran concurrently. In this app they never should, so overlap would be a finding.
+
+**The children do not add up to the parent, and that is normal.**
+
+```
+embed 141.0 + retrieve 22.3 + rerank 1169.8 + generate 745.7 = 2078.8 ms
+root                                                         = 2115.1 ms
+unaccounted                                                  =   36.3 ms
+```
+
+That ~36ms gap is framework overhead: request parsing, dependency injection, response
+serialisation, and anything the code does not explicitly wrap in a span. A **small** gap is
+healthy. A **large** gap is the interesting case — it means real time is being spent
+somewhere nobody instrumented, and the trace is telling you where to add a span rather than
+where the bug is.
+
+**The times themselves.** Jaeger stores microseconds and the UI shows whichever unit fits
+(`us`, `ms`, `s`). Each span shows a *duration*; hovering also gives a *start offset* from
+the root. Absolute wall-clock time is almost never what you want — the offsets are, because
+they tell you the sequence. When comparing two traces, compare shapes and relative widths,
+not clock times.
+
+## 1.3 Why a STREAMING trace looks completely different
+
+Ask through the UI instead of curl and the same question produces a trace with **52 spans**
+instead of 12, almost all of them named `http send`:
+
+```
+POST /api/v1/query/stream                4476.2 ms
+  guard                                     0.2 ms
+  embed                                  1606.7 ms
+  retrieve                                 55.9 ms
+  rerank                                 1565.2 ms
+  build_context                             0.3 ms
+  POST /api/v1/query/stream http send       0.1 ms     <-- one per SSE frame
+  POST /api/v1/query/stream http send       0.1 ms     <-- ...times forty
+  ... (many more)
+  rag_answer                                1.5 ms
+```
+
+Those are not pipeline steps. **ASGI instrumentation emits one span per response chunk**, and
+a streamed answer is many chunks. Read past them: the pipeline spans are the same handful as
+before. The useful signal in a streaming trace is *when the first `http send` appears* —
+that is time-to-first-token made visible.
+
+## 1.4 The anatomy of a healthy query trace
 
 ```
 POST /api/v1/query                                    2,980ms   ← ROOT (ASGI middleware)
@@ -120,7 +200,7 @@ with string handling, not the model.
 **`generate`** — the LLM call. On a streamed request this span stays open for the whole
 generation, so it is long by design.
 
-## 1.3 The three span-tree shapes, and what each proves
+## 1.5 The three span-tree shapes, and what each proves
 
 ```
 REFUSED                    NO_ANSWER (gate)           GROUNDED
@@ -140,7 +220,7 @@ never attached and the stage spans became parentless orphans. That reads like a 
 artefact, which is exactly why it survived undetected for so long: *a partial trace is worse
 than no trace, because it looks like data.*
 
-## 1.4 Span attributes worth opening
+## 1.6 Span attributes worth opening
 
 Click a span, open **Tags**:
 
@@ -152,7 +232,7 @@ Click a span, open **Tags**:
 | `answer_kind` | the stage that decided | grounded / no_answer / refused / degraded |
 | `question_fp` | every stage | a **fingerprint**, never the question. Jaeger deliberately carries no PII (D18) — that is Langfuse's job |
 
-## 1.5 Why a fast request may be missing
+## 1.7 Why a fast request may be missing
 
 Sampling is **tail-based**, decided in the OTel Collector *after* the request finishes:
 
@@ -166,6 +246,129 @@ the Collector decide. Head-sampling below 1.0 drops *individual spans*, which or
 fragments and silently disables the whole tail policy.
 
 ---
+
+---
+
+# Part 1B — Langfuse, properly
+
+Jaeger answers *where did the time go*. Langfuse answers a completely different question:
+**what did the model actually SEE, and what did it SAY?** Neither can answer the other's
+question, which is why both exist.
+
+## 1B.1 What Langfuse is, in one paragraph
+
+Every time this app calls an LLM it records one **generation** — the question, how many
+retrieved passages were put in front of the model, the answer that came back, the token
+counts, the cost, and which venue served it. Prometheus can tell you that p95 latency rose
+and that 12 answers were `no_answer`. It cannot tell you *why that particular answer was
+wrong*, because a counter has no memory of content. Langfuse keeps the content.
+
+> **A slow answer is a Jaeger problem. A bad answer is a Langfuse problem.**
+
+## 1B.2 Trace vs observation — the bit that confuses everyone
+
+Langfuse has two nested concepts and the UI shows both:
+
+| | what it is | in this app |
+|---|---|---|
+| **trace** | one end-to-end unit of work | one question |
+| **observation** | one step inside it, typed `GENERATION`, `SPAN` or `EVENT` | the `rag_answer` model call |
+
+This app currently emits **one observation per trace**, named `rag_answer`. So a trace here
+is effectively a single model call. That is why the trace list looks sparse compared with
+Jaeger's 12-to-52 spans: Langfuse is deliberately not tracing plumbing, only the LLM call.
+
+**Known gap, so you are not confused by it:** the trace-level `name` and `input` are empty,
+because the code creates an *observation* without first opening a named trace. The
+observation carries everything; the trace row above it is a bare container. Cosmetic, but it
+makes traces hard to pick out of a list by eye.
+
+## 1B.3 Every field on a `rag_answer` generation
+
+Real data, taken from this stack:
+
+```
+observation : rag_answer            type: GENERATION
+model       : Qwen/Qwen2.5-7B-Instruct-AWQ
+input       : {"question": "What is tuberculosis?", "n_contexts": 4}
+output      : {"answer": "Tuberculosis is an infectious disease that usually...", "kind": "grounded"}
+tokens      : 982 / 39
+metadata    : prompt_version  v1
+              prompt_sha      4c9773a3aba2
+              model_id        Qwen/Qwen2.5-7B-Instruct-AWQ
+              venue           local-sglang
+              cache_hit       False
+              prompt_tokens   982
+              completion_tokens 39
+              cost_usd        0
+              embed_ms        1607.45
+              retrieve_ms     55.83
+              rerank_ms       1565.14
+              total_ms        4422.74
+```
+
+| field | what it means | what a bad value tells you |
+|---|---|---|
+| `model` | the model id that produced this answer | `None` means **nothing generated** — a refusal or a retrieval-gate decline. Correct, not broken |
+| `input.question` | **what the user typed**, never the condensed rewrite | if this ever shows the rewrite, the transcript has been corrupted — we would be putting our words in the user's mouth |
+| `input.n_contexts` | how many retrieved passages were in the prompt | `0` on a grounded answer would be a serious bug: an ungrounded medical claim |
+| `output.answer` | the answer text as delivered | compare against `n_contexts` — this is the faithfulness check |
+| `output.kind` | grounded / no_answer / refused / degraded | |
+| `prompt_tokens` | size of what the model read | ~980 here. A decline that still shows ~1000 means you **paid to say "I don't know"** |
+| `completion_tokens` | size of what it wrote | |
+| `cost_usd` | attributed spend | `0` is CORRECT for a self-hosted venue — local costs GPU-hours, not tokens |
+| `venue` | which chain leg served it | the field that separates free from billed. `None` on older traces predates the fix |
+| `cache_hit` | whether the response cache served it | |
+| `prompt_version` / `prompt_sha` | exact prompt revision | without this a quality regression cannot be attributed to a prompt change |
+| `embed_ms` / `retrieve_ms` / `rerank_ms` / `total_ms` | stage timings, mirrored from the pipeline | lets you diagnose latency without leaving Langfuse |
+
+## 1B.4 The three shapes, and what each proves
+
+**Grounded** — model present, contexts > 0, tokens spent:
+```
+model: Qwen/...   n_contexts: 4   tokens: 982/39   kind: grounded
+```
+
+**Refused** — the guardrail fired *before* the model:
+```
+model: None   n_contexts: 0   tokens: 0/0   kind: refused
+input : {"question": "How much ibuprofen can I take for a headache?", "n_contexts": 0}
+output: {"answer": "I can't provide dosage information..."}
+```
+`model: None` with `tokens: 0/0` is the **proof that no spend occurred**. If a refusal ever
+showed tokens, the guardrail would be running *after* the model — too late to save you money
+or liability.
+
+**Cache hit** — **no trace at all.** Langfuse records model calls; a cache hit is the absence
+of one. If a cached answer produced a trace, your cost accounting would double-count.
+
+## 1B.5 What to do with it when an answer is bad
+
+This is the workflow the tool exists for, and it is the one thing Prometheus can never do:
+
+1. Open the trace for the bad answer.
+2. Read `input.n_contexts`. Zero on a grounded answer means the guardrail or citation
+   invariant failed.
+3. Read the retrieved passages. **Are they about the right thing?**
+   - Passages are wrong or irrelevant -> **retrieval** is at fault. Fix embedding, chunking,
+     or the reranker. The model did the best it could with what it was handed.
+   - Passages are correct but the answer is not -> **the model** is at fault. Fix the prompt,
+     or the model choice.
+4. Only after that step do you know which half of a RAG system to change. Guessing without
+   it is how teams spend a week tuning a prompt when retrieval was returning the wrong
+   article all along.
+
+## 1B.6 Getting at it without the UI
+
+```bash
+PK=$(grep '^LANGFUSE_PUBLIC_KEY=' .env | cut -d= -f2)
+SK=$(grep '^LANGFUSE_SECRET_KEY=' .env | cut -d= -f2)
+curl -s -u "$PK:$SK" "http://localhost:5015/api/public/observations?limit=5&type=GENERATION"
+```
+
+Counting traces is **not** a health check. Langfuse can be up, authenticating, and recording
+nothing — that exact failure (I4.2/I4.3) is why `inspect_stack.py` asserts a non-zero trace
+count rather than an HTTP 200.
 
 # Part 2 — The metric catalogue
 
@@ -235,7 +438,7 @@ the normal path.*
 
 ## 2.2 Latency
 
-### `medbot_ttft_seconds`
+### `medbot_ttft_seconds{venue}`
 Histogram. Time to **first streamed token** — the perceived-latency SLI. **NFR: p50 ≤ 0.8s,
 p95 ≤ 2.0s.**
 
@@ -245,6 +448,13 @@ histogram_quantile(0.95, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))
 medbot_ttft_seconds_count        # how many samples exist at all
 ```
 
+**Carries a `venue` label** (added with the per-venue rows). `venue="none"` is used for
+answers that generated nothing — refusals, degraded, retrieval-gate declines — and
+`venue="cache"` for cache hits, which are deliberately NOT credited to the venue that
+originally produced the content: a sub-millisecond cache read would otherwise drag that
+engine's latency percentiles down and make it look faster than it serves.
+
+
 **Streaming only.** Every `curl` in these docs is non-streaming, so they leave this empty.
 Empty means "nobody streamed", not "fast" — check `_count` before believing a quantile.
 
@@ -253,13 +463,20 @@ generation starts, so TTFT cannot go below ~4s here. The NFR and the architectur
 incompatible until the reranker moves to GPU. Do not "fix" this by tightening timeouts —
 that is what broke the reranker.
 
-### `medbot_request_duration_seconds{outcome}`
+### `medbot_request_duration_seconds{outcome,venue}`
 Histogram. Full end-to-end time, labelled by what the request produced.
 
 ```promql
 histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le))
 histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le, outcome))
 ```
+
+**Carries a `venue` label** (added with the per-venue rows). `venue="none"` is used for
+answers that generated nothing — refusals, degraded, retrieval-gate declines — and
+`venue="cache"` for cache hits, which are deliberately NOT credited to the venue that
+originally produced the content: a sub-millisecond cache read would otherwise drag that
+engine's latency percentiles down and make it look faster than it serves.
+
 
 `refused` should be the **fastest** outcome by far. If refusals cost as much as grounded
 answers, the guardrail is running too late to save money or liability.
@@ -295,12 +512,19 @@ sum(rate(medbot_tokens_total[5m])) by (venue)
 If local goes flat while `groq` climbs, your engine died and failover is quietly paying for
 it — which is exactly what happened while SGLang was down.
 
-### `medbot_request_cost_usd`
+### `medbot_request_cost_usd{venue}`
 Histogram. **NFR: p95 ≤ $0.001.**
 
 ```promql
 histogram_quantile(0.95, sum(rate(medbot_request_cost_usd_bucket[5m])) by (le))
 ```
+
+**Carries a `venue` label** (added with the per-venue rows). `venue="none"` is used for
+answers that generated nothing — refusals, degraded, retrieval-gate declines — and
+`venue="cache"` for cache hits, which are deliberately NOT credited to the venue that
+originally produced the content: a sub-millisecond cache read would otherwise drag that
+engine's latency percentiles down and make it look faster than it serves.
+
 
 **$0.000000 is the correct reading when self-hosted.** Zero is always *observed* now, never
 skipped — absent and zero are different answers on a spend dashboard.
@@ -356,6 +580,125 @@ that no longer exist anywhere.
 Counter. 429s by which limit tripped. Should be flat zero during manual testing.
 
 ---
+
+---
+
+# Part 2B — Grafana, panel by panel
+
+Part 2 catalogues the **metrics**. This part catalogues the **panels** — what each one on the
+`Medbot - service overview` dashboard is asking, and how to read a bad value.
+
+## 2B.1 Four concepts you need before any panel makes sense
+
+**1. `stat` vs `timeseries`.** A `stat` panel reduces a query to one number (this dashboard
+uses `lastNotNull` — the most recent non-empty value). A `timeseries` panel plots it over
+time. Rows 1 and 1a-1d are stats; rows 2-4 are timeseries.
+
+**2. Thresholds are the colour.** Each stat declares green/orange/red boundaries. `TTFT p50`
+turns orange at 0.8s and red at 2.0s because those are the NFR values. **The colour is the
+verdict** — you are not meant to read the number and remember the target.
+
+**3. `rate(...[5m])` means "per second, averaged over the last 5 minutes".** Counters only
+ever increase, so a raw counter is a meaningless staircase; `rate()` turns it into a speed.
+Two consequences that bite:
+
+- `rate()` of a counter that has not moved is **0**.
+- `histogram_quantile` over all-zero buckets is **NaN**, not zero.
+
+So on a quiet dev box, rate-based panels go blank. That is not a fault, it is arithmetic.
+
+**4. `histogram_quantile(0.95, ...)` is an estimate, not a measurement.** A histogram stores
+counts per bucket, never individual values, so the quantile is interpolated *inside* whichever
+bucket the 95th percentile falls into. Its precision is bounded by the bucket edges, and with
+few samples it snaps to them: four samples once reported "TTFT p50 3.00s" for a system
+measuring 1.90s. Treat any percentile built on under ~20 samples as noise.
+
+## 2B.2 Row 1 — Is the product meeting its promises?
+
+Six stats, all `rate()[5m]`, so they answer **how are we doing right now**.
+
+| panel | query | reads | bad value means |
+|---|---|---|---|
+| **TTFT p50** (<= 0.8s) | `histogram_quantile(0.50, sum(rate(medbot_ttft_seconds_bucket[5m])) by (le))` | median time to first token | the app *feels* slow. STREAMING ONLY — every curl in these docs is non-streaming, so this is often legitimately empty |
+| **TTFT p95** (<= 2.0s) | same, with `0.95` | the slowest 5% of first tokens | p95 far above p50 means a queue or a cold path, not uniform slowness |
+| **Request p95** (<= 6s) | `histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le))` | full end-to-end time, all outcomes mixed | includes refusals (fast) and cache hits (very fast), so it flatters itself whenever refusals are common |
+| **Cost / request p95** (<= $0.001) | `histogram_quantile(0.95, sum(rate(medbot_request_cost_usd_bucket[5m])) by (le))` | spend at the 95th percentile | **$0.000000 is CORRECT when self-hosted.** Above zero means a hosted leg served — either you chose that, or your local engine failed over without you noticing |
+| **Requests / sec** | `sum(rate(medbot_answers_total[5m]))` | throughput | |
+| **5xx error rate** | `sum(rate(medbot_errors_total{status=~"5.."}[5m])) / clamp_min(sum(rate(medbot_answers_total[5m])), 0.001) or vector(0)` | server faults as a fraction of traffic | `clamp_min` prevents divide-by-zero at idle; `or vector(0)` makes a healthy system render **0** instead of "No data" |
+
+Note the `status=~"5.."` filter: **4xx is deliberately excluded**. A 429 is quota enforcement
+working correctly, and counting it against availability would let abusive traffic page you for
+a system behaving exactly as designed.
+
+## 2B.3 Rows 1a / 1b / 1c / 1d — which VENUE is meeting them
+
+One row per chain leg: `1a local-sglang`, `1b local-vllm`, `1c groq`, `1d openai`. Each row has
+the same four stats, filtered to that venue.
+
+**Why this exists.** A failover chain serves one endpoint from a local GPU and from a hosted
+API whose latency and price differ by an order of magnitude. Combined into a single histogram,
+"TTFT p95" is an average over whichever venues happened to answer — so the headline number
+moves when the **chain shifts**, not when performance changes, and it can never name the slow
+leg.
+
+**These queries deliberately have NO `rate()`:**
+
+```promql
+histogram_quantile(0.95, sum(medbot_ttft_seconds_bucket{venue="local-sglang"}) by (le))
+```
+
+They read the histogram **cumulatively, since the API last restarted**. The asymmetry with
+row 1 is intentional:
+
+- Row 1 asks *how are we doing NOW*, so it must be recent. `rate()` is right there.
+- Rows 1a-1d ask *which leg is slow*, which does not need to be recent to be true. Using
+  `rate()` here made every panel read NaN whenever no request landed inside the window, which
+  on a bursty dev box is most of the time.
+
+**"not served since restart"** is the no-data text, and it means exactly that: this leg has
+served nothing since the API came up. For `1c groq` and `1d openai` that is the genuinely
+useful statement **your fallbacks are untested** — run `make chain-drill` and they fill in.
+
+Counters reset when the API restarts, so "since restart" is the honest window, not a defect.
+
+## 2B.4 Row 2 — SAFETY: is it refusing what it must?
+
+| panel | query | what it proves |
+|---|---|---|
+| **Refusals by category** | `sum(rate(medbot_refusals_total[5m])) by (category)` | *which* rule fired: emergency / self_harm / dosage / diagnosis / injection. `answers_total{kind="refused"}` alone cannot tell an emergency from a dosage question, so a guardrail that silently stopped matching would look identical to one nobody triggered — which is exactly how the self-harm rule shipped broken |
+| **Answers by kind** | `sum(rate(medbot_answers_total[5m])) by (kind)` | the outcome mix. A rising `no_answer` share is a **quality** signal, not traffic |
+| **Declines by path** | `sum(rate(medbot_no_answers_total[5m])) by (path)` | `retrieval_gate` (free — the model was never called) versus `model_abstained` (**a full prompt was paid for** in order to say "I do not know"). Collapsed into one counter, a rising bill from adjacent-but-absent questions is invisible |
+| **Silent quality degradation** | `sum(rate(medbot_degradations_total[5m])) by (component, reason) or vector(0)` | the pipeline served a **worse** answer rather than failing — for example the sparse encoder died and retrieval went dense-only, losing recall. Zero is the healthy reading, and `or vector(0)` makes that visible instead of "No data" |
+
+## 2B.5 Row 3 — Where does the time actually go?
+
+| panel | query | how to read it |
+|---|---|---|
+| **Stage latency p95** | `histogram_quantile(0.95, sum(rate(medbot_stage_duration_seconds_bucket[5m])) by (le, stage))` | one line per stage: `embed`, `retrieve`, `rerank`, `generate`, `condense`. **This is the panel that tells you what to optimise.** On this hardware rerank dominates at roughly 1.3-1.9s, because a cross-encoder scores 20 passages on CPU |
+| **End-to-end p95 by outcome** | `histogram_quantile(0.95, sum(rate(medbot_request_duration_seconds_bucket[5m])) by (le, outcome))` | splits latency by grounded / refused / no_answer / degraded. Refusals are near-instant, so a mixed p95 hides the real cost of a grounded answer |
+| **Cache hit rate** | ratio of `medbot_cache_events_total{result="hit"}` to all events, per layer | two series, response cache and embedding cache. The response cache is the D10 cost lever |
+| **Cache events/sec** | `sum(rate(medbot_cache_events_total[5m])) by (layer, result)` | raw hit/miss/skip flow. `skip` matters: only GROUNDED answers are cached, refusals and no_answers never are |
+| **Tokens/sec by venue and direction** | `sum(rate(medbot_tokens_total[5m])) by (venue, direction)` | **the money panel.** `prompt` versus `completion`, split by venue. Local tokens are free, hosted tokens are an invoice. A local outage shows up here as hosted tokens climbing |
+
+## 2B.6 Row 4 — Are the parts underneath still healthy?
+
+| panel | query | how to read it |
+|---|---|---|
+| **Serving venue circuit breakers** | `medbot_venue_circuit_state` | **0 = closed (healthy), 1 = half-open (probing), 2 = OPEN (failed out)**. A leg sitting at 2 is not being tried at all. This is a gauge republished for every venue on every request, so all legs stay visible |
+| **Infra dependency circuit breakers** | `medbot_dependency_circuit_state` | same scale, for Redis and Postgres. These now publish `0` at construction — before that, a dependency that had never broken had **no series at all**, and the panel read "No data" whether Redis was perfectly healthy or the metric had been deleted |
+| **Rate limiting by scope** | `sum(rate(medbot_rate_limited_total[5m])) by (scope) or vector(0)` | requests rejected by quota. Zero is healthy |
+| **Errors by type** | `sum(rate(medbot_errors_total[5m])) by (error_type, degradable)` | `degradable=true` means the system handled it and still served something; `false` is a real failure. `conversation-not-found` appearing here is usually the UI asking for a thread it has just deleted |
+| **Answer volume by kind (cumulative)** | `sum(medbot_answers_total) by (kind)` | the one deliberately non-rate panel in rows 2-4: raw totals since restart, for a sense of scale |
+
+## 2B.7 Two dashboard-wide gotchas
+
+**The time picker changes the answer.** Every `rate()` query is evaluated across the selected
+range. A 15-minute window on a box that was idle for 14 of them shows almost nothing. If a
+panel looks empty, widen the range before concluding anything is broken.
+
+**Counters reset on restart.** Every counter starts again at zero when the API container
+restarts. `rate()` handles the reset correctly; cumulative panels (rows 1a-1d, Answer volume)
+simply restart from zero, and say so.
 
 # Part 3 — The battery, instrument by instrument
 

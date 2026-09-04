@@ -33,10 +33,18 @@ stage_duration = Histogram(
     registry=REGISTRY,
 )
 
+# WHY these three carry `venue` (D4b).
+# A failover chain serves the same endpoint from a local GPU and from a hosted API whose
+# latency and price differ by an order of magnitude. Combined into one histogram, "TTFT
+# p95" is an average over whichever venues happened to answer - so the headline NFR panel
+# moves when the CHAIN shifts, not when performance does, and it can never say WHICH venue
+# is slow. `none` is used rather than an empty string for answers that generated nothing
+# (refusals, degraded, cache hits): an absent series and a zero are different claims, and
+# this module has already been burned by conflating them twice.
 request_duration = Histogram(
     "medbot_request_duration_seconds",
     "End-to-end query latency",
-    labelnames=("outcome",),  # grounded | no_answer | refused | degraded | error
+    labelnames=("outcome", "venue"),  # grounded|no_answer|refused|degraded|error x venue
     buckets=_E2E_BUCKETS,
     registry=REGISTRY,
 )
@@ -44,6 +52,7 @@ request_duration = Histogram(
 ttft = Histogram(
     "medbot_ttft_seconds",
     "Time to first streamed token — the perceived-latency SLI (NFR p50 0.8s / p95 2.0s)",
+    labelnames=("venue",),
     buckets=(0.05, 0.1, 0.25, 0.5, 0.8, 1.2, 2.0, 3.5, 6.0),
     registry=REGISTRY,
 )
@@ -82,6 +91,7 @@ tokens_total = Counter(
 request_cost = Histogram(
     "medbot_request_cost_usd",
     "Per-request cost — makes the ≤$0.001/query NFR a dashboard, not a spreadsheet",
+    labelnames=("venue",),
     buckets=(0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05),
     registry=REGISTRY,
 )
@@ -143,8 +153,11 @@ def record_answer(
     ttft_ms: float | None = None,
     refusal_category: str | None = None,
     no_answer_path: str | None = None,
+    venue: str | None = None,
 ) -> None:
     answers_total.labels(kind=kind).inc()
+    # Normalised once, so every observation below agrees on the label value.
+    at = venue or "none"
 
     # WHICH safety rule fired, not merely that one did. `answers_total{kind="refused"}`
     # cannot tell an emergency from a dosage question, so a guardrail that silently
@@ -162,14 +175,14 @@ def record_answer(
     # invisible.
     if no_answer_path:
         no_answers_total.labels(path=no_answer_path).inc()
-    request_duration.labels(outcome=kind).observe(total_ms / 1000.0)
+    request_duration.labels(outcome=kind, venue=at).observe(total_ms / 1000.0)
 
     # ALWAYS observed, including 0.0. The old `if cost_usd:` guard skipped every
     # self-hosted request, because a local venue costs $0 by construction — so the one
     # configuration this project actually runs recorded NO cost samples at all, and the
     # "cost/request" panel read "No data" rather than the true and useful "$0.000000".
     # Absent and zero are different answers; a spend dashboard must not confuse them.
-    request_cost.observe(cost_usd)
+    request_cost.labels(venue=at).observe(cost_usd)
 
     # TTFT is the perceived-latency SLI and the headline NFR (p50 0.8s / p95 2.0s). It was
     # computed in the pipeline, carried on Answer.timings, exported from this module — and
@@ -177,7 +190,7 @@ def record_answer(
     # Streaming only: on a non-streaming call there is no "first token" to time, and
     # feeding total_ms in as a substitute would quietly redefine the SLI.
     if ttft_ms is not None:
-        ttft.observe(ttft_ms / 1000.0)
+        ttft.labels(venue=at).observe(ttft_ms / 1000.0)
 
 
 def record_circuit(venue: str, state: str) -> None:

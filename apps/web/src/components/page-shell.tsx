@@ -28,7 +28,7 @@ export function PageShell({
       </header>
       <div className="prose-page space-y-5">{children}</div>
       <p className="border-t border-line pt-5 text-sm">
-        <Link href="/" className="text-accent underline underline-offset-2">
+        <Link href="/chat" className="text-accent underline underline-offset-2">
           Ask a question
         </Link>
       </p>

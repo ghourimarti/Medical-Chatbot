@@ -26,7 +26,7 @@ const Ctx = createContext<ConversationsValue | null>(null);
 export function ConversationsProvider({ children }: { children: React.ReactNode }) {
   const {
     items, enabled, signedIn, activeId, loading,
-    setActiveId, refresh, create, rename, remove, messages, claim,
+    setActiveId, refresh, create, rename, remove, messages, claim, setPinned, search,
   } = useConversations();
 
   // Memoised on the ACTUAL values, not on the hook's return object — that object is a new
@@ -38,10 +38,10 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
   const value = useMemo(
     () => ({
       items, enabled, signedIn, activeId, loading,
-      setActiveId, refresh, create, rename, remove, messages, claim,
+      setActiveId, refresh, create, rename, remove, messages, claim, setPinned, search,
     }),
     [items, enabled, signedIn, activeId, loading,
-     setActiveId, refresh, create, rename, remove, messages, claim],
+     setActiveId, refresh, create, rename, remove, messages, claim, setPinned, search],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

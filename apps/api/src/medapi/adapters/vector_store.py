@@ -1,13 +1,12 @@
-"""Qdrant vector store (D2, D3). Implements VectorStorePort.
+"""Qdrant vector store, implementing VectorStorePort.
 
-S3 shipped dense-only. S6 adds a named SPARSE vector and performs HYBRID retrieval with
-server-side RRF fusion (Qdrant Query API `prefetch` + `FusionQuery`). Fusing in Qdrant
-rather than in Python matters: one round trip instead of two, and the fusion runs next to
-the data.
+Hybrid retrieval: a named sparse vector alongside the dense one, fused server-side with RRF
+via the Query API (`prefetch` + `FusionQuery`). Fusing in Qdrant rather than in Python is
+one round trip instead of two, and the fusion runs next to the data.
 
-DECISION GATE (D5): collection dimension comes from config (EMBEDDING_DIM = 1024), never a
-literal. Changing the schema means a NEW collection + re-index — never an in-place mutation
-of a serving index.
+The collection dimension comes from config (EMBEDDING_DIM = 1024), never a literal.
+Changing it means a new collection and a re-index, never an in-place mutation of a serving
+index.
 """
 
 from __future__ import annotations
@@ -23,9 +22,9 @@ from medcore.schema import RetrievedChunk
 
 logger = logging.getLogger("medapi.vector_store")
 
-# Qdrant point IDs must be uint or UUID. Our chunk IDs are content hashes (strings), so we
-# derive a STABLE UUID from each and keep the original id in the payload. uuid5 is
-# deterministic, so re-ingesting the same chunk overwrites rather than duplicates.
+# Qdrant point IDs must be uint or UUID, but our chunk IDs are content hashes, so derive a
+# stable UUID from each and keep the original in the payload. uuid5 is deterministic, so
+# re-ingesting the same chunk overwrites instead of duplicating.
 _POINT_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
 DENSE = "dense"
@@ -63,31 +62,30 @@ class QdrantVectorStore:
     async def verify_collection(self) -> None:
         """Read-side check: the target must already exist, with the right dimension.
 
-        P6.3.5: the API used to call `ensure_collection()` at startup, which CREATES the
-        collection when absent. On a fresh cluster that is actively harmful twice over:
+        The API used to call `ensure_collection()` at startup, which creates the collection
+        when it's absent. On a fresh cluster that's harmful twice over:
 
-          1. `QDRANT_COLLECTION` names an ALIAS (D11) — ingestion builds `gale_live_v1` and
-             repoints `gale_live` atomically. Qdrant forbids an alias and a collection
-             sharing a name, so auto-creating a COLLECTION called `gale_live` permanently
-             blocks the alias the zero-downtime swap depends on. Found by deploying to kind,
-             where Qdrant starts empty: `gale_live` existed as a collection, aliases were [].
-          2. It converts "corpus missing" into "corpus present but empty", which is the
-             worse failure: the pod reports Ready and every query fails deep in the request
-             path, far from the cause.
+          1. `QDRANT_COLLECTION` names an alias. Ingestion builds `gale_live_v1` and
+             repoints `gale_live` atomically, and Qdrant won't let an alias and a
+             collection share a name, so auto-creating a collection called `gale_live`
+             permanently blocks the alias the zero-downtime swap needs. Found on kind,
+             where Qdrant starts empty: `gale_live` existed as a collection, aliases [].
+          2. It turns "corpus missing" into "corpus present but empty", which is worse:
+             the pod reports Ready and every query fails deep in the request path.
 
-        Creation belongs to ingestion, which knows what to put in it. The read path only
-        checks, and fails loudly when the answer is no.
+        Creation belongs to ingestion, which knows what to put in it. The read path checks
+        and fails loudly when the answer is no.
         """
         if not await self._client.collection_exists(self._collection):
             raise ValueError(
-                f"'{self._collection}' does not exist in Qdrant. The API does not create it: "
-                f"'{self._collection}' is an alias that ingestion creates and repoints "
-                "(D11). Run the ingestion worker before serving traffic."
+                f"'{self._collection}' does not exist in Qdrant. The API does not create "
+                f"it: '{self._collection}' is an alias that ingestion creates and "
+                "repoints. Run the ingestion worker before serving traffic."
             )
         await self._check_dimension()
 
     async def ensure_collection(self) -> None:
-        """Idempotent create-or-validate. INGESTION ONLY — see verify_collection()."""
+        """Idempotent create-or-validate. Ingestion only; see verify_collection()."""
         if await self._client.collection_exists(self._collection):
             await self._check_dimension()
             return
@@ -103,25 +101,21 @@ class QdrantVectorStore:
         self,
         *,
         query_vector: Sequence[float],
-        query_text: str,  # noqa: ARG002 — sparse path uses sparse_vector below
+        query_text: str,  # noqa: ARG002 (sparse path uses sparse_vector below)
         top_k: int,
-        filters: Mapping[str, object] | None = None,  # noqa: ARG002 — ACL filters arrive later
+        filters: Mapping[str, object] | None = None,  # noqa: ARG002 (ACL filters, later)
         sparse_vector: models.SparseVector | None = None,
     ) -> list[RetrievedChunk]:
         """Hybrid when a sparse vector is supplied, dense-only otherwise.
 
-        RRF (Reciprocal Rank Fusion) combines the two rankings by RANK, not by score —
-        which is what makes it safe to fuse cosine similarities with BM25 weights that
-        live on completely different scales.
+        RRF combines the two rankings by rank rather than by score, which is what makes it
+        safe to fuse cosine similarities with BM25 weights living on different scales.
         """
-        # Wrapping is not cosmetic (P5.3). With Qdrant stopped, the raw client exception
-        # propagated and the API returned an opaque 500 "unexpected error" — which tells
-        # the caller nothing, tells the on-call engineer nothing, and pollutes the
-        # bug-rate signal with what is actually a dependency outage. RetrievalError is
-        # already defined as 503 + retryable + degradable; it just was never raised here.
-        #
-        # 500 means "we have a bug". 503 means "a dependency is down, retry". Conflating
-        # them makes both alerts useless.
+        # Wrapping isn't cosmetic. With Qdrant stopped the raw client exception
+        # propagated and the API returned an opaque 500, which tells the caller nothing
+        # and pollutes the bug-rate signal with a dependency outage. RetrievalError was
+        # already defined as 503 + retryable + degradable; it just wasn't raised here.
+        # 500 means we have a bug, 503 means a dependency is down.
         try:
             if sparse_vector is not None and sparse_vector.indices:
                 hits = await self._client.query_points(
@@ -183,11 +177,11 @@ class QdrantVectorStore:
         return len(points)
 
     async def ensure_alias(self, alias: str, collection: str) -> None:
-        """Point `alias` at `collection`, atomically (D11).
+        """Point `alias` at `collection`, atomically.
 
         Qdrant applies alias operations atomically, which is what makes zero-downtime
-        re-indexing possible: build a new collection alongside the live one, then repoint
-        the alias in a single operation. Readers never observe a half-ingested corpus.
+        re-indexing work: build the new collection alongside the live one, then repoint in
+        a single operation. Readers never see a half-ingested corpus.
         """
         await self._client.update_collection_aliases(
             change_aliases_operations=[
@@ -216,28 +210,24 @@ class QdrantVectorStore:
     ) -> list[str]:
         """Delete versioned collections the alias no longer points at, keeping `keep`.
 
-        I3.7: a re-ingest builds `gale_live_vN`, repoints the alias, and left every
-        previous collection in place FOREVER - five stale copies of a 7,080-chunk
-        corpus were sitting in Qdrant at ~29MB each, growing without bound on a
-        schedule nobody watches. Storage is the visible cost; the real one is that
-        `GET /collections` becomes unreadable, so the question the D11 design exists
-        to answer - WHICH collection is live? - gets harder every time you re-index.
+        A re-ingest builds `gale_live_vN` and repoints the alias, but used to leave every
+        previous collection in place: five stale copies of a 7,080-chunk corpus at ~29MB
+        each, growing on a schedule nobody watches. Storage is the visible cost; the real
+        one is that `GET /collections` becomes unreadable, so "which collection is live?"
+        gets harder every re-index.
 
-        Keeping exactly one previous version is deliberate, not a compromise:
-        rollback is then a single alias operation with no re-ingest, which is the
-        whole reason the alias indirection exists. Keeping ALL of them buys nothing
-        beyond that - you would never roll back four versions to a corpus you have
-        since re-cut twice.
+        Keeping exactly one previous version makes rollback a single alias operation with
+        no re-ingest, which is the point of the alias indirection. Keeping all of them
+        buys nothing: you'd never roll back four versions to a corpus since re-cut twice.
 
-        NEVER deletes the live target, and never deletes anything when the alias
-        cannot be resolved: an unresolvable alias means we do not know what is live,
-        and deleting collections in that state is how a re-index becomes an outage.
-        Returns the names actually removed, so the caller can log them.
+        Never deletes the live target, and never deletes anything when the alias can't be
+        resolved. An unresolvable alias means we don't know what is live, and deleting in
+        that state is how a re-index becomes an outage. Returns the names removed.
         """
         live = await self.resolve_alias(alias)
         if live is None:
             logger.warning(
-                "alias %s does not resolve; pruning NOTHING", alias
+                "alias %s does not resolve; pruning nothing", alias
             )
             return []
 
@@ -285,11 +275,11 @@ class QdrantVectorStore:
     async def health(self) -> bool:
         """Readiness must mean "can serve", not "a name resolves".
 
-        P6.3.5: this returned True for an EMPTY collection, so a freshly deployed pod
-        reported Ready while every single query failed with `retrieval returned zero
-        candidates`. Readiness that cannot distinguish an empty index from a usable one
-        sends traffic to a pod guaranteed to fail it — and the query path already treats
-        an empty index as a fault (P5.3.6), so the two disagreed about the same state.
+        This used to return True for an empty collection, so a freshly deployed pod
+        reported Ready while every query failed with `retrieval returned zero candidates`.
+        Readiness that can't tell an empty index from a usable one sends traffic to a pod
+        guaranteed to fail it, and the query path already treats an empty index as a fault,
+        so the two disagreed about the same state.
         """
         try:
             if not await self._client.collection_exists(self._collection):

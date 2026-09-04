@@ -91,6 +91,19 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "everywhere is a default that reaches production.",
             )),
             ("LOG_LEVEL", "INFO", ("DEBUG | INFO | WARNING | ERROR",)),
+            ("NFR_PROFILE", "local", (
+                "[infra] read by scripts/inspect_stack.py, not by Settings - which is why it",
+                "carries the tag: the guard scans Settings fields and web process.env only.",
+                "Chooses which latency budget the audit GATES on.",
+                "production = the Phase-1 design target (TTFT p50 0.8s / p95 2.0s), written",
+                "  for a topology that serves embeddings and reranking on GPU.",
+                "local = a user-tolerance ceiling for CPU embed+rerank (p50 2.5s / p95 3.5s).",
+                "Both are always PRINTED; this only decides which one fails the audit, and a",
+                "relaxed check still shows the production target beside it. The local numbers",
+                "come from perceived-latency thresholds, NOT from what this box measures - a",
+                "threshold copied from current behaviour can only ever pass, which makes it a",
+                "description rather than a budget.",
+            )),
         )),
         ("API — FastAPI backend", "http://localhost:5007/docs", (
             ("API_PORT", "5007", ("Host port. The container always listens on 8000.",)),
@@ -138,6 +151,11 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "torch = reference implementation. onnx = ONNX Runtime (S5.9), needed to meet",
                 "the 250ms retrieval NFR — measured: fewer candidates alone cannot get there.",
             )),
+            ("ML_RERANK_BACKEND", "", (
+                "Rerank runtime, separate from ML_BACKEND. Empty inherits it. onnx is safe to",
+                "switch alone: rerank only needs score ORDER preserved, while an embedding",
+                "swap changes vectors the index already holds.",
+            )),
             ("EMBEDDING_MODEL_ID", "BAAI/bge-large-en-v1.5", (
                 "1024-dim. The dimension is FROZEN — see the note",
                 "below.",
@@ -153,7 +171,11 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "exceeded under a burst - a 503, because without a vector there is",
                 "nothing to retrieve.",
             )),
-            ("CONDENSE_MAX_TOKENS", "64", (
+            # 256, not 64. A REASONING model spends this budget on its reasoning
+            # before emitting anything, so a small cap yields an EMPTY rewrite and
+            # the follow-up silently falls back to searching the literal pronoun.
+            # Measured on groq/openai/gpt-oss-20b: 64 -> "", 256 -> a correct rewrite.
+            ("CONDENSE_MAX_TOKENS", "256", (
                 "Budget for rewriting a follow-up into a standalone question.",
                 "A standalone question is a SENTENCE, so this is a ceiling on a model that",
                 "ignores the instruction and starts answering - not a target. Small on",
@@ -189,7 +211,11 @@ TIERS: list[tuple[str, list[Section]]] = [
     ]),
     ("INFERENCE", [
         ("SERVING CHAIN — ordered failover preference (D4b)", "first reachable leg answers", (
-            ("SERVING_CHAIN", "local-sglang,groq,openai", (
+            # Default drops local-sglang: nothing serves it here, and an in-chain leg
+            # that is DOWN is not free - every request pays a connect timeout before
+            # failing over, and its breaker sits OPEN in the dashboards. Put a local
+            # venue back the moment one is actually running.
+            ("SERVING_CHAIN", "groq,openai", (
                 "AN ORDERED PREFERENCE LIST. Comma-separated, tried left to right; a leg with",
                 "no URL or key is SKIPPED, so you can name venues before their accounts exist.",
                 "",

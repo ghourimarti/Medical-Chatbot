@@ -10,9 +10,62 @@ make cache-ls         # what is cached right now
 make audit            # the whole application, one command
 ```
 
-> For the **deep** version of every table below — all 14 metrics with exact PromQL, the
-> full anatomy of a Jaeger trace, and what each panel means — see
-> [OBSERVABILITY_DEEP.md](OBSERVABILITY_DEEP.md).
+---
+
+## Start here: how to read the four instruments
+
+You will be looking at four tools while you work through the battery below. They answer
+**four different questions**, and using the wrong one is the main reason this feels
+confusing:
+
+| tool | the question it answers | scope | port |
+|---|---|---|---|
+| **Prometheus** | *How often, how fast, how much — across ALL requests?* | aggregate numbers | 5013 |
+| **Grafana** | *The same numbers, drawn, with the targets marked* | aggregate, visual | 5014 |
+| **Jaeger** | *Where did the time go on THIS one request?* | one request, timing | 5023 |
+| **Langfuse** | *What did the model SEE and SAY on THIS one question?* | one LLM call, content | 5015 |
+
+The two sentences worth memorising:
+
+> **A slow answer is a Jaeger problem. A bad answer is a Langfuse problem.**
+>
+> **Prometheus tells you something changed. It can never tell you why.**
+
+Prometheus is a counter store: it knows 12 answers were `no_answer`, and nothing whatsoever
+about what they said. Jaeger keeps timings and deliberately carries **no** question text
+(only a `question_fp` fingerprint) because it is not a PII store. Langfuse keeps the content
+— the question, the retrieved passages, the completion, the cost — which is why it is the
+only place a *quality* problem can be diagnosed.
+
+### If you do not understand a tool yet, read this first
+
+**[OBSERVABILITY_DEEP.md](OBSERVABILITY_DEEP.md)** is the reference for all four, and it
+covers exactly the things that are usually confusing:
+
+| if you are stuck on... | read |
+|---|---|
+| what a trace even is; what the bars, indentation and numbers in the waterfall mean; why children do not add up to the parent | Part 1.1–1.2 |
+| why a streamed question produces 52 spans instead of 12 | Part 1.3 |
+| what each span (`guard`, `condense`, `embed`, `retrieve`, `rerank`, `generate`) is doing | Part 1.4 |
+| how to tell a refusal / cache hit / normal answer apart **by trace shape alone** | Part 1.5 |
+| why a fast request is sometimes missing from Jaeger entirely | Part 1.7 |
+| what Langfuse is, trace vs observation, every field on a generation, and how to tell whether *retrieval* or *the model* produced a bad answer | Part 1B |
+| every metric, its labels, and the exact PromQL to query it | Part 2 |
+| every Grafana panel — what it asks, why it exists, and what a bad value means | Part 2B |
+| the same battery below, but analysed instrument-by-instrument per query | Part 3 |
+
+### The three readings that fool everyone
+
+1. **Empty is not the same as zero.** A metric with no samples and a metric that is
+   genuinely zero look identical on a panel unless the query says otherwise. `TTFT` is
+   empty after curl testing because **curl does not stream** — that is correct, not slow.
+2. **`$0.000000` cost is correct when self-hosted.** Local venues price at $0 by
+   construction. A number *above* zero means a hosted leg served, which is either your
+   choice or an unnoticed failover.
+3. **An absent span is evidence.** A refusal has no `generate` span, and that absence is the
+   proof the guardrail fired *before* the model — costing you no tokens and no liability.
+
+---
 
 **Why you could not clear it yourself:** there is no `CACHE_NAMESPACE` variable. The
 namespace is *computed* — prompt version, corpus version, index version, collection, and a

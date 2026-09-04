@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthShell, accountsEnabled } from "@/components/auth/auth-shell";
 import { Disclaimer } from "@/components/disclaimer";
 import { SiteFooter } from "@/components/site-footer";
 import { PreferencesScript } from "@/components/preferences";
@@ -41,7 +41,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             for prose. The reading measure did not go away — it moved to the CONTENT,
             where `.answer-prose` still caps long-form answers at 68ch. */}
         <ConversationsProvider>
-          <AppShell>{children}</AppShell>
+          {/* Computed on the SERVER and passed down: a client component cannot read
+              runtime env, and reading NEXT_PUBLIC_* from one would put us straight
+              back on the build-time-inlining path this avoids. */}
+          <AppShell accountsEnabled={accountsEnabled()}>{children}</AppShell>
         </ConversationsProvider>
 
         <SiteFooter />

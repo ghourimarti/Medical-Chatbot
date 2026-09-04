@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { PanelLeft, PanelLeftClose } from "lucide-react";
 import { DensityToggle, ThemeToggle } from "@/components/preferences";
+import { AccountControls } from "@/components/auth/account-controls";
+import { usePathname } from "next/navigation";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { Sidebar } from "@/components/shell/sidebar";
 import { useSidebar } from "@/components/shell/use-sidebar";
@@ -22,8 +24,15 @@ import { cn } from "@/lib/utils";
  * bounded line length (see `.answer-prose`, 68ch); what changes is that the bound now
  * belongs to the CONTENT, not to the whole application chrome.
  */
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  accountsEnabled,
+}: {
+  children: React.ReactNode;
+  accountsEnabled: boolean;
+}) {
   const { collapsed, toggleCollapsed, drawerOpen, setDrawerOpen } = useSidebar();
+  const pathname = usePathname();
   const drawerRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLButtonElement>(null);
 
@@ -124,13 +133,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </button>
 
-            <Link href="/" className="truncate text-sm font-medium">
+            {/* Brand mark -> the front door at "/". The app is at /chat. */}
+            <Link
+              href="/"
+              className="truncate text-sm font-medium transition-colors hover:text-accent"
+            >
               Medical Reference Assistant
             </Link>
 
             <div className="ml-auto flex items-center gap-1">
               <DensityToggle />
               <ThemeToggle />
+              {/* Renders NOTHING when accounts are not configured (D24: the product is
+                  fully usable anonymously, and an e2e test pins that). It lives here so
+                  that adding a Clerk key is all it takes for sign-in to appear exactly
+                  where a user already looks for it. */}
+              <AccountControls
+                enabled={accountsEnabled}
+                onSignedIn={() => {
+                  void fetch("/api/v1/auth/claim", { method: "POST" });
+                }}
+              />
             </div>
           </div>
         </header>
@@ -144,7 +167,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             object. `--content-max` is a token so the transcript and any future surface
             cannot disagree about it. */}
         <main id="main" className="min-w-0 flex-1 px-4 py-8 sm:px-6">
-          <div className="mx-auto w-full" style={{ maxWidth: "var(--content-max)" }}>
+          {/* Keyed on the pathname so React remounts the inner wrapper on navigation and
+              the entry animation actually replays. Without the key the class is already
+              applied and moving between routes is a hard cut.
+              Deliberately SHORT (180ms): navigation should feel instant, and anything
+              longer starts to read as waiting rather than settling. */}
+          <div
+            key={pathname}
+            className="page-in mx-auto w-full"
+            style={{ maxWidth: "var(--content-max)" }}
+          >
             {children}
           </div>
         </main>

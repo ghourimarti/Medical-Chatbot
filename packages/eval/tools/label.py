@@ -1,12 +1,11 @@
-"""S19.2 — interactive labelling helper for calibration/labels.jsonl.
+"""Interactive labelling helper for calibration/labels.jsonl.
 
-The labels this writes must be a HUMAN's judgement. That is the entire point of the
-exercise: Cohen's kappa is only meaningful if the two raters are independent, and an LLM
-labelling an LLM judge measures shared blind spots, not agreement. So this tool formats and
-prompts; it never guesses, never defaults, and never fills a field you did not answer.
+Cohen's kappa only means anything if the two raters are independent, so these labels have to
+be human. An LLM labelling an LLM judge measures shared blind spots. The tool formats and
+prompts; it never guesses, defaults, or fills a field you didn't answer.
 
-Safe to stop and resume — the file is rewritten after every row, and rows that already
-carry a label are skipped rather than re-asked.
+Safe to stop and resume: the file is rewritten after every row, and already-labelled rows
+are skipped rather than re-asked.
 
     uv run python packages/eval/tools/label.py            # label the unlabelled rows
     uv run python packages/eval/tools/label.py --stats    # progress only, no prompts
@@ -23,10 +22,9 @@ from pathlib import Path
 
 DEFAULT_PATH = Path("calibration/labels.jsonl")
 
-# Which questions apply to which category, and the exact criterion for each. The wording
-# matters more than it looks: "is every claim supported" and "is the answer correct" are
-# different questions, and a rater who slides between them produces a kappa that measures
-# nothing in particular.
+# Which questions apply to which category, and the criterion for each. "Is every claim
+# supported" and "is the answer correct" are different questions; sliding between them
+# across rows makes the kappa meaningless.
 FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
     "qa": (
         ("faithful",
@@ -63,8 +61,7 @@ def load(path: Path) -> list[dict]:
 
 
 def save(path: Path, rows: list[dict]) -> None:
-    """Write via a temp file + replace so an interrupted write cannot truncate the sheet —
-    losing labels to a Ctrl-C would be a genuinely infuriating way to lose 15 minutes."""
+    """Temp file + replace, so an interrupted write can't truncate the sheet."""
     tmp = path.with_suffix(".jsonl.tmp")
     tmp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
                    encoding="utf-8")
@@ -80,9 +77,8 @@ def show(row: dict, idx: int, total: int) -> None:
     width = min(shutil.get_terminal_size((100, 24)).columns, 100)
     bar = "=" * width
     print(f"\n{bar}")
-    # The case_id is deliberately NOT shown. Planted rows are named "safety-plant-01"
-    # and printing that would tell you the answer is defective before you read it —
-    # you would be labelling the filename, not the answer.
+    # No case_id here: planted rows are named "safety-plant-01", so showing it gives away
+    # that the answer is defective before you have read it.
     print(f"  row {idx} of {total}   category={row['category']}")
     print(bar)
     print("\nQUESTION")
@@ -101,8 +97,7 @@ def show(row: dict, idx: int, total: int) -> None:
 
 
 def ask(field: str, criterion: str) -> str | None:
-    """Returns 'yes'/'no', or None to skip this row. Deliberately has no default: pressing
-    Enter re-asks rather than silently recording an opinion you did not hold."""
+    """Returns 'yes'/'no', or None to skip the row. No default: bare Enter re-asks."""
     while True:
         print(f"\n  {field.upper()} — {criterion}")
         raw = input(f"  [{field}] y / n / s=skip row / q=save+quit > ").strip().lower()

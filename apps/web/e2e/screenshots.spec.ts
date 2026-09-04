@@ -18,7 +18,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
 }
 
 async function answer(page: Page, question: string) {
-  await page.goto("/");
+  await page.goto("/chat");
   await page.getByLabel("Your question").fill(question);
   await page.getByRole("button", { name: "Ask", exact: true }).click();
   await page.locator("[data-answer-kind]").waitFor({ state: "visible", timeout: 60_000 });
@@ -30,7 +30,7 @@ for (const theme of ["light", "dark"] as const) {
   test(`screenshots - ${theme} @live`, async ({ page }) => {
     await setTheme(page, theme);
 
-    await page.goto("/");
+    await page.goto("/chat");
     await page.screenshot({ path: `${OUT}/${theme}-01-landing.png`, fullPage: true });
 
     await answer(page, "What is cancer?");

@@ -44,14 +44,14 @@ async function newConversation(page: Page) {
 
 test.describe("conversation sidebar @live", () => {
   test("is available without signing in", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await openSidebar(page);
     // No signup wall: the feature is usable before an account exists.
     await expect(sidebar(page).getByRole("button", { name: "New chat" })).toBeVisible();
   });
 
   test("creating a conversation adds it to the list", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await openSidebar(page);
     await expect(sidebar(page).getByText("No saved conversations yet")).toBeVisible();
 
@@ -63,7 +63,7 @@ test.describe("conversation sidebar @live", () => {
   });
 
   test("a conversation can be renamed", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await openSidebar(page);
     await newConversation(page);
     await openSidebar(page);
@@ -82,7 +82,7 @@ test.describe("conversation sidebar @live", () => {
   });
 
   test("deleting asks for confirmation first", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await openSidebar(page);
     await newConversation(page);
     await openSidebar(page);
@@ -100,7 +100,7 @@ test.describe("conversation sidebar @live", () => {
   });
 
   test("an answer lands in the selected conversation", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await openSidebar(page);
     await newConversation(page);
 
@@ -120,7 +120,7 @@ test.describe("conversation sidebar @live", () => {
   });
 
   test("anonymous threads say what signing in would do", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     await openSidebar(page);
     await newConversation(page);
     await openSidebar(page);
@@ -130,8 +130,31 @@ test.describe("conversation sidebar @live", () => {
 });
 
 test.describe("accounts are optional", () => {
+  /**
+   * These assert the UNCONFIGURED path, so they are meaningless once a key exists — and
+   * worse than meaningless: they would fail on a correctly configured deployment and read
+   * as a regression.
+   *
+   * Detected from the PAGE rather than from process.env, because the thing under test is
+   * what the browser receives. The key is inlined into the client bundle at build time, so
+   * the test runner's own environment says nothing about what the server actually served.
+   */
+  test.beforeEach(async ({ page }) => {
+    // networkidle, NOT load: Clerk injects its script asynchronously, so checking straight
+    // after goto reports "unconfigured" on a deployment that is configured — the same race
+    // that made the request-watching test below flaky in full-suite runs while passing in
+    // isolation.
+    await page.goto("/", { waitUntil: "networkidle" });
+    const configured = await page.evaluate(
+      () =>
+        !!document.querySelector('script[src*="clerk"]') ||
+        !!(window as unknown as { Clerk?: unknown }).Clerk,
+    );
+    test.skip(configured, "accounts ARE configured here; this covers the opposite case");
+  });
+
   test("no Clerk UI is rendered when accounts are not configured", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
     // The backend uses a DisabledVerifier when CLERK_JWKS_URL is empty. A sign-in button
     // against a backend that cannot verify tokens is a door with no room behind it.
     await expect(page.getByRole("button", { name: "Sign in" })).toHaveCount(0);
@@ -142,8 +165,72 @@ test.describe("accounts are optional", () => {
     page.on("request", (r) => {
       if (r.url().includes("clerk")) clerkRequests.push(r.url());
     });
-    await page.goto("/");
+    await page.goto("/chat");
     await page.waitForTimeout(1500);
     expect(clerkRequests, "an unconfigured deployment paid for the auth SDK").toEqual([]);
+  });
+});
+
+test.describe("thread isolation @live", () => {
+  test("a new conversation does NOT inherit the previous one's turns", async ({ page }) => {
+    // The reported bug: "the chat begins in the same window where we started previously".
+    // The transcript was reloaded from /session/history — which spans EVERY thread — after
+    // each answer, so a brand-new conversation filled with turns from the old one.
+    await page.goto("/chat");
+    await openSidebar(page);
+
+    // Thread A: ask something distinctive.
+    await newConversation(page);
+    await page.getByLabel("Your question").fill("What is cirrhosis?");
+    await page.getByRole("button", { name: "Ask", exact: true }).click();
+    await page.locator("[data-answer-kind]").waitFor({ timeout: 90_000 });
+
+    // Thread B: brand new, and it must stay ISOLATED once used.
+    await openSidebar(page);
+    await newConversation(page);
+
+    // ASKING IN B IS THE STEP THAT MATTERS. Merely creating B loads its (empty) messages,
+    // so a test that stopped here would pass against the broken build too. The corruption
+    // happened on the reload AFTER an answer, which is when the session-wide fetch ran.
+    //
+    // Let the reset settle BEFORE typing. Creating a thread resets the surface, which
+    // swaps the idle and answered branches — and because the composer lives in both, React
+    // remounts it and discards whatever had been typed. Filling mid-transition loses the
+    // text and leaves Ask permanently disabled.
+    //
+    // (That remount is a real, if narrow, UX flaw: type immediately after "New chat" and
+    // your first characters can vanish. Fixing it properly means hoisting the composer out
+    // of the branch so it renders once — noted, not done here.)
+    await page.waitForLoadState("networkidle");
+    const askButton = page.getByRole("button", { name: "Ask", exact: true });
+    await expect(askButton).toBeVisible();
+    await page.getByLabel("Your question").fill("What is asthma?");
+    await expect(askButton).toBeEnabled({ timeout: 15_000 });
+    await askButton.click();
+    await page.locator("[data-answer-kind]").waitFor({ timeout: 90_000 });
+    await page.waitForTimeout(2000);
+
+    const transcript = page.getByRole("region", { name: "Earlier in this session" });
+    await expect(
+      transcript.getByText(/cirrhosis/i),
+      "thread B inherited thread A's turns",
+    ).toHaveCount(0);
+  });
+});
+
+test.describe("composer and route hygiene @live", () => {
+  test("the question box CLEARS after asking", async ({ page }) => {
+    // Reported: "each time after the response the same query appears again in the query box,
+    // and for the next query I have to remove it with backspace". The box held the submitted
+    // text, so the composer looked pre-filled with something already answered.
+    await page.goto("/chat");
+    const box = page.getByLabel("Your question");
+    await box.fill("What is fever?");
+    await page.getByRole("button", { name: "Ask", exact: true }).click();
+
+    // Asserted on the TRANSCRIPT, not on [data-answer-kind]: grounded answers currently
+    // render without the answer-card wrapper, so that attribute is absent for them.
+    await expect(page.getByText("What is fever?").first()).toBeVisible({ timeout: 90_000 });
+    await expect(box, "the composer kept the question after sending").toHaveValue("");
   });
 });

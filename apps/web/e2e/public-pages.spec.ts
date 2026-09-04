@@ -7,6 +7,10 @@ import { expect, test } from "@playwright/test";
  * what it stores. A broken or missing one is a trust failure, not a cosmetic one.
  */
 const PAGES = [
+  // The footer-count assertion below keeps this list honest: add a page to the footer
+  // without adding it here and the test fails, which is what stops a new trust-surface
+  // page shipping with no coverage at all.
+  { path: "/about", heading: "About this assistant" },
   { path: "/how-it-works", heading: "How it works" },
   { path: "/safety", heading: "Safety and limitations" },
   { path: "/sources", heading: "Sources" },

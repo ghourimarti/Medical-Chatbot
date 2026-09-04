@@ -30,25 +30,51 @@ def value(name: str, **labels: str) -> float:
 
 def test_ttft_is_observed_on_the_streaming_path() -> None:
     """The p50 0.8s / p95 2.0s NFR is unmeasurable if this never fires."""
-    before = value("medbot_ttft_seconds_count")
-    record_answer("grounded", total_ms=1500.0, cost_usd=0.0, ttft_ms=420.0)
-    assert value("medbot_ttft_seconds_count") == before + 1
+    before = value("medbot_ttft_seconds_count", venue="local-sglang")
+    record_answer(
+        "grounded", total_ms=1500.0, cost_usd=0.0, ttft_ms=420.0, venue="local-sglang"
+    )
+    assert value("medbot_ttft_seconds_count", venue="local-sglang") == before + 1
+
+
+def test_ttft_is_attributed_to_a_venue() -> None:
+    """A chain serves the same endpoint from a local GPU and a hosted API, whose latencies
+    differ by an order of magnitude. Unlabelled, `TTFT p95` averages whichever venues
+    happened to answer - so the headline NFR moves when the CHAIN shifts rather than when
+    performance does, and no query can name the slow leg."""
+    before = value("medbot_ttft_seconds_count", venue="groq")
+    record_answer("grounded", total_ms=900.0, cost_usd=0.0, ttft_ms=310.0, venue="groq")
+    assert value("medbot_ttft_seconds_count", venue="groq") == before + 1
+
+
+def test_answers_without_a_venue_are_labelled_none_not_empty() -> None:
+    """A refusal generates nothing, so it has no venue. It still needs a label VALUE:
+    an absent series and a zero are different claims, and this module has already been
+    burned twice by conflating them."""
+    before = value("medbot_request_duration_seconds_count", outcome="refused", venue="none")
+    record_answer("refused", total_ms=12.0, cost_usd=0.0)
+    assert (
+        value("medbot_request_duration_seconds_count", outcome="refused", venue="none")
+        == before + 1
+    )
 
 
 def test_ttft_is_not_faked_on_the_non_streaming_path() -> None:
     """There is no 'first token' without a stream. Substituting total_ms would redefine
     the SLI while still looking like data."""
-    before = value("medbot_ttft_seconds_count")
-    record_answer("grounded", total_ms=1500.0, cost_usd=0.0, ttft_ms=None)
-    assert value("medbot_ttft_seconds_count") == before
+    before = value("medbot_ttft_seconds_count", venue="local-sglang")
+    record_answer(
+        "grounded", total_ms=1500.0, cost_usd=0.0, ttft_ms=None, venue="local-sglang"
+    )
+    assert value("medbot_ttft_seconds_count", venue="local-sglang") == before
 
 
 def test_zero_cost_is_recorded_not_skipped() -> None:
     """Self-hosted venues cost $0. Skipping the observation left the cost panel empty in
     the ONE configuration this project actually runs."""
-    before = value("medbot_request_cost_usd_count")
-    record_answer("grounded", total_ms=900.0, cost_usd=0.0)
-    assert value("medbot_request_cost_usd_count") == before + 1
+    before = value("medbot_request_cost_usd_count", venue="local-sglang")
+    record_answer("grounded", total_ms=900.0, cost_usd=0.0, venue="local-sglang")
+    assert value("medbot_request_cost_usd_count", venue="local-sglang") == before + 1
 
 
 @pytest.mark.asyncio
@@ -148,7 +174,10 @@ async def test_cache_hit_records_its_own_latency_not_the_one_it_avoided() -> Non
     pre = SimpleNamespace(log=SimpleNamespace(info=lambda *a, **k: None))
 
     before = value("medbot_request_duration_seconds_sum", outcome="grounded") or 0.0
-    result = await short_circuit("q", svc, pre)  # type: ignore[arg-type]
+    # A STANDALONE question, not the old "q" placeholder. One-word text is now classified
+    # as context-dependent and bypasses the cache entirely (INFRA-5), so "q" would return
+    # before the lookup and this test would assert nothing about cache latency at all.
+    result = await short_circuit("What is cirrhosis?", svc, pre)  # type: ignore[arg-type]
     after = value("medbot_request_duration_seconds_sum", outcome="grounded") or 0.0
 
     assert result is slow

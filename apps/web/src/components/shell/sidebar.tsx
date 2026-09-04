@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Check, FileDown, MessageSquarePlus, Pencil, Pin, PinOff, Search, Settings, Trash2, X,
 } from "lucide-react";
+import type { Conversation } from "@/lib/contract";
 import { Button } from "@/components/ui/button";
-import { AccountControls } from "@/components/auth/account-controls";
 import { useConversationsContext } from "@/lib/conversations-context";
 import { groupConversations } from "@/lib/conversation-groups";
 import { SettingsPanel } from "@/components/shell/settings-panel";
@@ -34,20 +35,62 @@ export function Sidebar({
   onNavigate?: () => void;
 }) {
   const convos = useConversationsContext();
+  const router = useRouter();
   const { pinnedIds, isPinned, togglePin } = usePins();
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Server search results. `null` means "no server search available", which is NOT the
+  // same as "no matches" — the empty state below says something different for each.
+  const [results, setResults] = useState<Conversation[] | null>(null);
+  const [serverSearch, setServerSearch] = useState(true);
+  const [pinOnServer, setPinOnServer] = useState(true);
+
+  // Debounced server search. 220ms: long enough that typing a word is one request rather
+  // than six, short enough that the list does not feel like it lags behind the keyboard.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults(null);
+      return;
+    }
+    let stale = false;
+    const t = setTimeout(() => {
+      void convos.search(q).then((rows) => {
+        if (stale) return;
+        // null => the endpoint is not there. Fall back to filtering titles locally and
+        // SAY SO, rather than reporting "no matches" for a search that never happened.
+        setServerSearch(rows !== null);
+        setResults(rows);
+      });
+    }, 220);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [query, convos]);
 
   // `new Date()` is read at render rather than held in state: the buckets only need to be
   // right when the list is drawn, and a ticking clock here would re-render the sidebar
   // every second for a boundary that moves once a day.
-  const groups = useMemo(
-    () => groupConversations(convos.items, { pinnedIds, query, now: new Date() }),
-    [convos.items, pinnedIds, query],
-  );
+  const groups = useMemo(() => {
+    // When the server answered, IT decided what matches — so the local title filter must
+    // be switched off, or a thread found by its message text would be filtered straight
+    // back out again for not having the word in its title.
+    const source = results ?? convos.items;
+    const localFilter = results === null ? query : "";
+    // Server `pinned` wins; the localStorage set is only consulted when the API has no
+    // pinning to report.
+    const serverPinned = source.filter((c) => c.pinned).map((c) => c.id);
+    const effectivePins = pinOnServer ? serverPinned : pinnedIds;
+    return groupConversations(source, {
+      pinnedIds: effectivePins,
+      query: localFilter,
+      now: new Date(),
+    });
+  }, [convos.items, results, pinnedIds, pinOnServer, query]);
 
   const unclaimed = convos.items.some((c) => !c.claimed);
   const matched = groups.reduce((n, g) => n + g.items.length, 0);
@@ -58,7 +101,9 @@ export function Sidebar({
     return (
       <nav aria-label="Saved conversations" className="flex flex-1 flex-col items-center gap-2 py-3">
         <button
-          onClick={() => void convos.create()}
+          onClick={() => {
+            void convos.create().then((c) => router.push(c ? `/chat/${c.id}` : "/chat"));
+          }}
           aria-label="New conversation"
           className="rounded-md p-2 text-ink-muted hover:bg-surface-raised hover:text-ink"
         >
@@ -95,36 +140,49 @@ export function Sidebar({
     // immediately, which is the landmark earning its keep rather than a test being fussy.
     <nav
       aria-label="Saved conversations"
-      className="flex flex-1 flex-col overflow-hidden"
+      // rail-content fades and slides the CONTENTS while the rail animates its width.
+      // Without it the labels sat at full width inside a 3.5rem box for a frame on
+      // collapse, which reads as a flicker instead of a fold.
+      className="rail-content flex flex-1 flex-col overflow-hidden"
+      data-collapsed="false"
     >
-      <div className="space-y-2 p-3">
-        <Button
-          variant="outline"
-          size="sm"
+      <div className="space-y-2.5 p-3.5">
+        {/* The PRIMARY action of the whole sidebar, sized like one. It was a 32px
+            secondary button indistinguishable from the filter beneath it — measured
+            against every product in this category, which gives it ~48px, a full pill and
+            an accent tint. Size IS hierarchy; a primary action that matches its
+            neighbours has no hierarchy to communicate. */}
+        <button
           onClick={() => {
-            void convos.create();
+            // Navigate to the NEW thread's own URL, so it is refreshable and linkable the
+            // moment it exists. Pushing the bare /chat would have created a conversation
+            // and then left the address bar pointing at "no thread selected".
+            void convos.create().then((c) => router.push(c ? `/chat/${c.id}` : "/chat"));
             onNavigate?.();
           }}
-          className="w-full justify-start"
+          className="flex h-11 w-full items-center gap-2.5 rounded-full border border-accent/25 bg-accent-wash px-4 text-[0.9375rem] font-medium text-accent transition-colors hover:border-accent/40 hover:bg-accent/10"
         >
-          <MessageSquarePlus className="size-3.5" aria-hidden="true" />
+          <MessageSquarePlus className="size-4" aria-hidden="true" />
           New chat
-        </Button>
+        </button>
 
         <div className="relative">
           <Search
-            className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-ink-muted"
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-muted"
             aria-hidden="true"
           />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            // "Filter by title", NOT "Search". Searching what people actually ASKED needs a
-            // backend endpoint over stored messages; this only matches titles. A box
-            // labelled "Search" that silently misses every question body would be a lie.
-            placeholder="Filter by title"
-            aria-label="Filter conversations by title"
-            className="w-full rounded-md border border-line bg-surface-raised py-1.5 pl-7 pr-2 text-sm placeholder:text-ink-muted"
+            // "Search" again, and now it IS one: S22 added an endpoint that matches
+            // message text as well as titles. The label tracks the capability — it said
+            // "Filter by title" for as long as that was the truth, and changes back
+            // automatically below if the server cannot search.
+            placeholder={serverSearch ? "Search conversations" : "Filter by title"}
+            aria-label={
+              serverSearch ? "Search conversations" : "Filter conversations by title"
+            }
+            className="h-10 w-full rounded-full border border-line bg-surface-raised pl-9 pr-3 text-sm placeholder:text-ink-muted focus:border-line-strong"
           />
         </div>
       </div>
@@ -136,21 +194,28 @@ export function Sidebar({
             together.
           </p>
         ) : matched === 0 ? (
-          <p className="px-1 py-2 text-sm text-ink-muted">
-            No conversation title matches “{query}”. Titles are set by you, so a thread you
-            never named will not appear here.
+          <p className="px-3.5 py-2 text-sm leading-relaxed text-ink-muted">
+            {serverSearch ? (
+              <>Nothing matches “{query}” in your conversations.</>
+            ) : (
+              <>
+                No conversation <em>title</em> matches “{query}”. Search is unavailable, so
+                only titles were checked — and titles are set by you, so a thread you never
+                named will not appear here.
+              </>
+            )}
           </p>
         ) : (
           groups.map((group) => (
-            <section key={group.label} className="mb-3">
-              <h2 className="px-1 pb-1 text-xs font-medium tracking-wide text-ink-muted uppercase">
+            <section key={group.label} className="mb-4">
+              <h2 className="px-3.5 pb-1.5 pt-1 text-[0.6875rem] font-semibold tracking-[0.08em] text-ink-muted uppercase">
                 {group.label}
               </h2>
               <ul className="space-y-0.5">
                 {group.items.map((c) => {
                   const active = c.id === convos.activeId;
                   const editing = c.id === editingId;
-                  const pinned = isPinned(c.id);
+                  const pinned = pinOnServer ? Boolean(c.pinned) : isPinned(c.id);
                   const label = c.title ?? "Untitled conversation";
 
                   return (
@@ -189,32 +254,57 @@ export function Sidebar({
                       ) : (
                         <div
                           className={cn(
-                            "group flex items-center rounded-md",
-                            active && "bg-accent-wash",
+                            // A full pill with an accent tint, not a faint rectangle.
+                            // "Which conversation am I in" is the question this sidebar
+                            // exists to answer, and it was answered in a shade barely
+                            // distinguishable from the surface behind it.
+                            "group flex items-center rounded-full transition-colors",
+                            active
+                              ? "bg-accent-wash text-ink"
+                              : "hover:bg-surface-raised",
                           )}
                         >
                           <button
                             onClick={() => {
                               convos.setActiveId(c.id);
+                              router.push(`/chat/${c.id}`);
                               onNavigate?.();
                             }}
                             aria-current={active ? "true" : undefined}
                             className={cn(
-                              "min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm",
-                              active ? "font-medium text-ink" : "text-ink-muted hover:text-ink",
+                              "min-w-0 flex-1 truncate px-3.5 py-2 text-left text-sm",
+                              "transition-colors duration-150",
+                              active ? "font-medium text-accent" : "text-ink-muted group-hover:text-ink",
                             )}
                           >
                             {label}
                           </button>
 
-                          {/* Row actions stay reachable by KEYBOARD at all times. A common
-                              pattern here is `opacity-0 group-hover:opacity-100`, which
-                              hides them from anyone not using a mouse. */}
-                          <div className="flex shrink-0 items-center opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+                          {/* Reveal-on-hover ONLY where hover exists.
+                              `opacity-0 group-hover:opacity-100` is the standard idiom and
+                              it is broken on touch: a phone has no hover, so pin, rename,
+                              delete and print were permanently invisible — the entire
+                              management surface unreachable on the device most people
+                              would use. The old sidebar had them always visible; this was
+                              a regression my "polish" introduced, caught by the mobile
+                              project. `@media(hover:hover)` scopes the hiding to pointers
+                              that can actually reveal it again, and focus-within keeps it
+                              reachable by keyboard on those. */}
+                          <div className="flex shrink-0 items-center [@media(hover:hover)]:opacity-0 focus-within:opacity-100 group-hover:opacity-100">
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => togglePin(c.id)}
+                              onClick={() => {
+                                const next = !pinned;
+                                void convos.setPinned(c.id, next).then((ok) => {
+                                  // The server has no pinning. Remember that, flip the
+                                  // local pin instead, and keep the control working.
+                                  if (!ok) {
+                                    setPinOnServer(false);
+                                    togglePin(c.id);
+                                  }
+                                });
+                              }}
                               aria-label={`${pinned ? "Unpin" : "Pin"} ${label}`}
                               aria-pressed={pinned}
                             >
@@ -309,13 +399,6 @@ export function Sidebar({
             devices.
           </p>
         )}
-        {/* Clerk is OPTIONAL (D24): with no publishable key this renders nothing, and
-            the sidebar stays fully usable anonymously. `claim` on sign-in is what stops
-            someone's existing threads being stranded by creating an account. */}
-        <AccountControls
-          enabled={Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY)}
-          onSignedIn={() => void convos.claim()}
-        />
         {/* A BUTTON that opens settings, not a link to a prose page wearing a gear icon.
             The previous version sent anyone looking for the theme control to
             /how-it-works, where they would reasonably conclude there were no settings. */}

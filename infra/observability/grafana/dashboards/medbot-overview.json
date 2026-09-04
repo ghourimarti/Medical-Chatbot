@@ -38,7 +38,7 @@
         "type": "prometheus",
         "uid": "medbot-prometheus"
       },
-      "description": "Time to FIRST streamed token, median. The perceived-latency SLI: it is how fast the app FEELS, not how long the answer takes.\n\nSTREAMING ONLY - non-streaming requests have no first token, so curl tests leave this empty. Empty means 'nobody streamed', not 'fast'.\n\nBad reading: on this hardware embed (~1.6s) and rerank (~2.3s) both run on CPU BEFORE generation starts, so TTFT cannot go below ~4s. The NFR and the architecture are incompatible until the reranker moves to GPU.",
+      "description": "Time to FIRST streamed token, median. The perceived-latency SLI: it is how fast the app FEELS, not how long the answer takes.\n\nSTREAMING ONLY - non-streaming requests have no first token, so curl tests leave this empty. Empty means 'nobody streamed', not 'fast'.\n\nBad reading: embed and rerank both run on CPU BEFORE generation starts, so both sit inside TTFT. MEASURED over 20 warm in-corpus questions: embed 152ms, retrieve 18ms, rerank 1270ms, generate-to-first-token 463ms, giving TTFT p50 1.90s / p95 2.65s.\n\nAn earlier version of this note said embed ~1.6s and 'TTFT cannot go below ~4s'. That was a COLD reading - the first embed after boot loads the model - taken before SGLang was given room to capture prefill CUDA graphs. The floor with a free reranker is 152+18+463 = 633ms, which is UNDER the 0.8s NFR: the target is reachable. It needs rerank cut from 1270ms to ~167ms, which means moving it off CPU. Fewer candidates and ONNX do not get there - ONNX measured only 8% faster, with identical top-4 ordering.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -369,7 +369,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(medbot_errors_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(medbot_answers_total[5m])), 0.001)",
+          "expr": "sum(rate(medbot_errors_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(medbot_answers_total[5m])), 0.001) or vector(0)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -420,13 +420,1137 @@
     },
     {
       "type": "row",
+      "title": "1a - local-sglang",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": [],
+      "id": 25
+    },
+    {
+      "type": "stat",
+      "title": "local-sglang - TTFT p50",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Time to first token for THIS venue. A local GPU and a hosted API differ by an order of magnitude; the combined panel above averages whichever venues happened to serve. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum(medbot_ttft_seconds_bucket{venue=\"local-sglang\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 26
+    },
+    {
+      "type": "stat",
+      "title": "local-sglang - TTFT p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Tail latency per venue. A chain that failed over to a slower leg shows up HERE before it shows up as a user complaint. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_ttft_seconds_bucket{venue=\"local-sglang\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2.0
+              },
+              {
+                "color": "red",
+                "value": 3.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 27
+    },
+    {
+      "type": "stat",
+      "title": "local-sglang - request p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "End-to-end p95 for this venue. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_duration_seconds_bucket{venue=\"local-sglang\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 6.0
+              },
+              {
+                "color": "red",
+                "value": 10.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 28
+    },
+    {
+      "type": "stat",
+      "title": "local-sglang - cost/req p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Self-hosted venues price at $0 by construction, so a non-zero value here names the leg that is actually costing money. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_cost_usd_bucket{venue=\"local-sglang\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 6,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.001
+              },
+              {
+                "color": "red",
+                "value": 0.01
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 29
+    },
+    {
+      "type": "row",
+      "title": "1b - local-vllm",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "panels": [],
+      "id": 30
+    },
+    {
+      "type": "stat",
+      "title": "local-vllm - TTFT p50",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Time to first token for THIS venue. A local GPU and a hosted API differ by an order of magnitude; the combined panel above averages whichever venues happened to serve. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 11
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum(medbot_ttft_seconds_bucket{venue=\"local-vllm\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 31
+    },
+    {
+      "type": "stat",
+      "title": "local-vllm - TTFT p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Tail latency per venue. A chain that failed over to a slower leg shows up HERE before it shows up as a user complaint. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 11
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_ttft_seconds_bucket{venue=\"local-vllm\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2.0
+              },
+              {
+                "color": "red",
+                "value": 3.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 32
+    },
+    {
+      "type": "stat",
+      "title": "local-vllm - request p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "End-to-end p95 for this venue. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 11
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_duration_seconds_bucket{venue=\"local-vllm\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 6.0
+              },
+              {
+                "color": "red",
+                "value": 10.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 33
+    },
+    {
+      "type": "stat",
+      "title": "local-vllm - cost/req p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Self-hosted venues price at $0 by construction, so a non-zero value here names the leg that is actually costing money. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 11
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_cost_usd_bucket{venue=\"local-vllm\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 6,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.001
+              },
+              {
+                "color": "red",
+                "value": 0.01
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 34
+    },
+    {
+      "type": "row",
+      "title": "1c - groq",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": [],
+      "id": 35
+    },
+    {
+      "type": "stat",
+      "title": "groq - TTFT p50",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Time to first token for THIS venue. A local GPU and a hosted API differ by an order of magnitude; the combined panel above averages whichever venues happened to serve. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum(medbot_ttft_seconds_bucket{venue=\"groq\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 36
+    },
+    {
+      "type": "stat",
+      "title": "groq - TTFT p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Tail latency per venue. A chain that failed over to a slower leg shows up HERE before it shows up as a user complaint. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_ttft_seconds_bucket{venue=\"groq\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2.0
+              },
+              {
+                "color": "red",
+                "value": 3.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 37
+    },
+    {
+      "type": "stat",
+      "title": "groq - request p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "End-to-end p95 for this venue. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_duration_seconds_bucket{venue=\"groq\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 6.0
+              },
+              {
+                "color": "red",
+                "value": 10.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 38
+    },
+    {
+      "type": "stat",
+      "title": "groq - cost/req p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Self-hosted venues price at $0 by construction, so a non-zero value here names the leg that is actually costing money. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_cost_usd_bucket{venue=\"groq\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 6,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.001
+              },
+              {
+                "color": "red",
+                "value": 0.01
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 39
+    },
+    {
+      "type": "row",
+      "title": "1d - openai",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "panels": [],
+      "id": 40
+    },
+    {
+      "type": "stat",
+      "title": "openai - TTFT p50",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Time to first token for THIS venue. A local GPU and a hosted API differ by an order of magnitude; the combined panel above averages whichever venues happened to serve. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum(medbot_ttft_seconds_bucket{venue=\"openai\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 41
+    },
+    {
+      "type": "stat",
+      "title": "openai - TTFT p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Tail latency per venue. A chain that failed over to a slower leg shows up HERE before it shows up as a user complaint. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_ttft_seconds_bucket{venue=\"openai\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2.0
+              },
+              {
+                "color": "red",
+                "value": 3.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 42
+    },
+    {
+      "type": "stat",
+      "title": "openai - request p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "End-to-end p95 for this venue. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_duration_seconds_bucket{venue=\"openai\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 6.0
+              },
+              {
+                "color": "red",
+                "value": 10.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 43
+    },
+    {
+      "type": "stat",
+      "title": "openai - cost/req p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "medbot-prometheus"
+      },
+      "description": "Self-hosted venues price at $0 by construction, so a non-zero value here names the leg that is actually costing money. \u2014 CUMULATIVE since the API last restarted, deliberately NOT rate()[5m] like row 1. rate() of a flat counter is 0, and histogram_quantile over all-zero buckets is NaN, so a rate-based panel reads NaN whenever no request landed inside the window \u2014 which on a bursty dev box is most of the time. Cumulative trades recency for always meaning something, and makes an empty panel mean exactly one thing: this leg has not served since the restart. Row 1 keeps rate() because it answers 'how are we doing NOW'; this row answers 'which leg is slow', which does not need to be recent to be true.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "medbot-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum(medbot_request_cost_usd_bucket{venue=\"openai\"}) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 6,
+          "mappings": [],
+          "noValue": "not served since restart",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.001
+              },
+              {
+                "color": "red",
+                "value": 0.01
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "id": 44
+    },
+    {
+      "type": "row",
       "title": "2 - SAFETY: is the product refusing what it must? (D18)",
       "id": 8,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 25
       },
       "collapsed": false,
       "panels": []
@@ -444,7 +1568,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 26
       },
       "targets": [
         {
@@ -505,7 +1629,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 26
       },
       "targets": [
         {
@@ -566,7 +1690,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 34
       },
       "targets": [
         {
@@ -627,11 +1751,11 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 34
       },
       "targets": [
         {
-          "expr": "sum(rate(medbot_degradations_total[5m])) by (component, reason)",
+          "expr": "sum(rate(medbot_degradations_total[5m])) by (component, reason) or vector(0)",
           "legendFormat": "{{component}} / {{reason}}",
           "refId": "A",
           "datasource": {
@@ -683,7 +1807,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 42
       },
       "collapsed": false,
       "panels": []
@@ -701,7 +1825,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 43
       },
       "targets": [
         {
@@ -758,7 +1882,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 43
       },
       "targets": [
         {
@@ -815,7 +1939,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 31
+        "y": 51
       },
       "targets": [
         {
@@ -882,7 +2006,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 31
+        "y": 51
       },
       "targets": [
         {
@@ -939,7 +2063,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 31
+        "y": 51
       },
       "targets": [
         {
@@ -991,7 +2115,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 59
       },
       "collapsed": false,
       "panels": []
@@ -1009,7 +2133,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 40
+        "y": 60
       },
       "targets": [
         {
@@ -1066,7 +2190,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 40
+        "y": 60
       },
       "targets": [
         {
@@ -1123,11 +2247,11 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 40
+        "y": 60
       },
       "targets": [
         {
-          "expr": "sum(rate(medbot_rate_limited_total[5m])) by (scope)",
+          "expr": "sum(rate(medbot_rate_limited_total[5m])) by (scope) or vector(0)",
           "legendFormat": "{{scope}}",
           "refId": "A",
           "datasource": {
@@ -1180,7 +2304,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 68
       },
       "targets": [
         {
@@ -1237,7 +2361,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 68
       },
       "targets": [
         {

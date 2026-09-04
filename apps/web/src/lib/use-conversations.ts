@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Conversation, ConversationList } from "@/lib/contract";
 
 /**
@@ -17,6 +17,22 @@ export function useConversations() {
   const [signedIn, setSignedIn] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  /**
+   * Conversations THIS client deleted. Fetching one again can only ever 404.
+   *
+   * `remove` already clears activeId, but that is not sufficient: other components hold
+   * the id in their own effects and closures, and their requests are issued before the
+   * state update reaches them. A real deletion produced SIX `GET /messages` for the dead
+   * id across 1.3s - two within 20ms of the DELETE, four more a second later. Each one
+   * increments `medbot_errors_total`, so the app manufactured its own error rate and the
+   * audit's "errors == 0" gate failed on a conversation the user had chosen to destroy.
+   *
+   * Guarding at the DATA layer rather than in one component makes the invariant hold no
+   * matter which render path still has the id: deleted means unfetchable, full stop.
+   * A ref, not state, because changing it must not re-render anything.
+   */
+  const deletedIds = useRef<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     try {
@@ -79,6 +95,7 @@ export function useConversations() {
       const res = await fetch(`/api/v1/conversations/${id}`, { method: "DELETE" });
       if (!res.ok) return null;
       const body = (await res.json()) as { deleted_messages: number };
+      deletedIds.current.add(id);
       setItems((prev) => prev.filter((c) => c.id !== id));
       setActiveId((current) => (current === id ? null : current));
       return body.deleted_messages;
@@ -87,10 +104,66 @@ export function useConversations() {
   );
 
   const messages = useCallback(async (id: string) => {
+    // A thread this client deleted is gone by definition; asking the server can only
+    // produce a 404 that pollutes the error metric. Empty is the honest answer.
+    if (deletedIds.current.has(id)) return [];
     const res = await fetch(`/api/v1/conversations/${id}/messages`);
     if (!res.ok) return [];
     const body = (await res.json()) as { messages: { role: string; content: string }[] };
     return body.messages;
+  }, []);
+
+  /**
+   * Set or clear a pin. S22.
+   *
+   * Optimistic, like rename: a pin is trivially reversible and a round-trip of latency for
+   * a toggle feels broken. A failure refreshes back to the server's truth.
+   *
+   * Returns FALSE when the server does not support pinning, which is the seam that lets the
+   * backend half of this change be reverted on its own: the caller falls back to a
+   * per-browser pin instead of the feature silently doing nothing.
+   */
+  const setPinned = useCallback(
+    async (id: string, pinned: boolean): Promise<boolean> => {
+      setItems((prev) => prev.map((c) => (c.id === id ? { ...c, pinned } : c)));
+      try {
+        const res = await fetch(`/api/v1/conversations/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pinned }),
+        });
+        if (!res.ok) {
+          await refresh();
+          return false;
+        }
+        return true;
+      } catch {
+        await refresh();
+        return false;
+      }
+    },
+    [refresh],
+  );
+
+  /**
+   * Search titles AND message text, server-side. S22.
+   *
+   * Returns NULL — not [] — when the endpoint is unavailable. The distinction is the whole
+   * point: [] means "searched, found nothing" and null means "could not search", and the
+   * sidebar shows completely different things for those two. Collapsing them would tell a
+   * user their conversation does not exist when in fact the server could not look.
+   */
+  const search = useCallback(async (query: string): Promise<Conversation[] | null> => {
+    const q = query.trim();
+    if (!q) return [];
+    try {
+      const res = await fetch(`/api/v1/conversations/search?q=${encodeURIComponent(q)}`);
+      if (!res.ok) return null;
+      const body = (await res.json()) as { conversations: Conversation[] };
+      return body.conversations ?? [];
+    } catch {
+      return null;
+    }
   }, []);
 
   /** Called immediately after sign-in. The session id comes from the cookie server-side,
@@ -113,5 +186,7 @@ export function useConversations() {
     remove,
     messages,
     claim,
+    setPinned,
+    search,
   };
 }

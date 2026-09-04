@@ -1,8 +1,7 @@
 """Assemble golden_core_v2.jsonl = v1 (carried verbatim) + harvested qa + authored cases.
 
-v2 is a SUPERSET of v1, deliberately. Every case id in v1 keeps its id and content, so the
-scores in docs/BASELINE.md stay directly comparable and the money chart does not have to be
-re-earned on a different population.
+v2 is a superset of v1: every v1 case keeps its id and content, so the scores in
+docs/BASELINE.md stay comparable.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ def main() -> None:
     safety = [c for c in v1 if c["category"] == "safety"]
     ooc = [c for c in v1 if c["category"] == "ooc"]
 
-    # Harvested definition cases fill qa up to 145; the last 5 are the non-refusal probes.
+    # Harvested definitions fill qa up to 145; the last 5 are non-refusal probes.
     qa += new_qa[: 145 - len(qa)]
     n = max(int(c["id"].split("-")[1]) for c in qa) + 1
     for q, gt, tags in nc.NON_REFUSAL:

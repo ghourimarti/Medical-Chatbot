@@ -1,14 +1,12 @@
-"""Aggregation of per-case scores — the single place a report's headline numbers are made.
+"""Aggregation of per-case scores. One place makes a report's headline numbers.
 
-Consolidated in S6.12a. Two identical `_aggregate` copies previously lived in runner.py
-and rescore.py, so the coverage defect below had to be fixed twice or not at all.
+There used to be two identical copies of this in runner.py and rescore.py, which meant the
+coverage problem below had to be fixed twice or not at all.
 
-The defect: aggregates are means over non-null scores. A throttled judge returns NaN,
-NaN becomes None, None is skipped — and the survivors are averaged into a value that is
-printed exactly like a full-sample result. The S6 pipeline report published
-`answer_relevancy: 0.9537` from ONE of 60 qa cases; the S1 demo baseline published
-`faithfulness: 0.6634` from 23 of 60. Neither number was wrong arithmetically; both were
-uninterpretable without an n that nothing recorded.
+Aggregates are means over non-null scores. A throttled judge returns NaN, NaN becomes
+None, None gets skipped, and the survivors are averaged into something that prints exactly
+like a full-sample result. One report published `answer_relevancy: 0.9537` off a single
+qa case out of 60. Arithmetically fine, uninterpretable without an n.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
 """HTTP clients for apps/ml-service, implementing EmbedderPort and RerankerPort.
 
-Timeouts are mandatory, not defensive habit: without them a hung ml-service would hang
-every API request holding a connection, and one slow dependency takes down the whole tier
-(D21). Failures are converted to typed domain errors so the degradation ladder can branch
-on them — a reranker outage is survivable (skip reranking), an embedder outage is not.
+Timeouts are mandatory here, not defensive habit: without them a hung ml-service hangs
+every API request holding a connection, and one slow dependency takes the whole tier down.
+Failures convert to typed domain errors so the degradation ladder can branch on them. A
+reranker outage is survivable (skip reranking); an embedder outage isn't.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ def _describe(e: Exception) -> str:
 
 
 class HttpEmbedder:
-    """EmbedderPort over HTTP. Embedding failure is fatal to a query — without a vector
-    there is nothing to retrieve — so it raises RetrievalError (degradable: cache/no-answer)."""
+    """EmbedderPort over HTTP. Embedding failure is fatal to a query, since without a
+    vector there is nothing to retrieve, so it raises RetrievalError (degradable)."""
 
     def __init__(self, base_url: str, model_id: str, dimension: int, timeout: float) -> None:
         self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
@@ -68,12 +68,12 @@ class HttpEmbedder:
         return payload["vectors"]  # type: ignore[no-any-return]
 
     async def health(self) -> bool:
-        """Can this dependency actually serve? (P6.5.4)
+        """Can this dependency actually serve?
 
-        Readiness previously checked only the vector store, so with ml-service scaled to
-        zero the API reported READY while every query failed 503 — embedding is the first
-        step of retrieval, and without a vector there is nothing to search. A pod that
-        cannot answer any request should not be in the Service's endpoint list.
+        Readiness used to check only the vector store, so with ml-service scaled to zero
+        the API reported Ready while every query failed 503. Embedding is the first step of
+        retrieval, and a pod that can't answer any request shouldn't be in the Service's
+        endpoint list.
         """
         try:
             resp = await self._client.get("/healthz", timeout=2.0)
@@ -86,8 +86,8 @@ class HttpEmbedder:
 
 
 class HttpReranker:
-    """RerankerPort over HTTP. A reranker outage is NON-fatal by design (D21): the caller
-    falls back to fusion order with a logged quality dip rather than failing the request."""
+    """RerankerPort over HTTP. A reranker outage is non-fatal: the caller falls back to
+    fusion order with a logged quality dip rather than failing the request."""
 
     def __init__(self, base_url: str, model_id: str, timeout: float) -> None:
         self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
