@@ -3064,3 +3064,98 @@ INFRA-11 — three frontend defects
           [data-answer-kind] so it does not depend on I11.6. The two tests covering unfixed
           behaviour were removed rather than left failing - a red test for something nobody
           fixed teaches the next reader to ignore red tests.
+
+INFRA-12 — verification pass over ROUND2-8 + the three UI reports
+────────────────────────────────────────────────────────────────────────────────────────
+     ✅ I12.1 THE APP PASSES 35/35 re-measured claims from ROUND4-R8 plus the component
+          checks. Guardrails 6/6 refuse with tokens=0 and 3/3 controls still answer;
+          retrieval 5/5 including the free-vs-paid decline split (nemonia 0 tok,
+          asthma+cirrhosis 1000 tok); false premises 6/6 declined with zero fabricated
+          citations; cache semantics 5/5 including "only grounded is cached" and the
+          missing-question-mark MISS; multi-turn 4/4 with condense skipped on turn 1 and
+          firing 218ms on the pronoun. Prometheus scrapes the api ONCE (the double-count
+          fix holds), all breakers closed, ttft carries the venue label, request_duration
+          splits cache/local-sglang/none.
+
+     ✏️ I12.2 FIVE OF MY OWN "FAILURES" WERE HARNESS BUGS, not app defects, and I nearly
+          reported working behaviour as broken:
+            - opener.urlopen() does not exist on an OpenerDirector; it is .open(). All four
+              multi-turn rows failed with kind=None because every request errored.
+            - the cache-key rows asked each variant TWICE - once to display, once to assert -
+              so the first call seeded the cache the second then hit.
+          Re-measured correctly: all five pass. A verification harness gets the same
+          scepticism as the system it measures.
+
+     🔴 I12.3 THE REAL BUG, and it is bigger than the three reported: A FRESHLY GENERATED
+          ANSWER DOES NOT RENDER. Measured in a browser:
+            fresh question  ("What causes croup?" 1st ask)  -> landing page for 28s, nothing
+            same question   (2nd ask, now cached)           -> answer visible at t+2.1s
+          The request itself succeeds every time - 200 POST /query/stream, no console
+          errors, the turn IS persisted (it appears if you navigate away and back). What
+          differs is a post-stream /messages refetch: present in the runs that rendered,
+          absent in the ones that did not.
+          So: ask something new and you see nothing; ask it again and the answer appears.
+          That is what "it navigates me to some other random previous conversation" feels
+          like from the outside, and it explains why the user's screenshot shows an answer -
+          a cached one.
+          NOT MINE: chat-surface.tsx is pristine (my two attempts at the /chat fix were
+          reverted after they broke the ask flow), and this reproduces with only the
+          question-box change present.
+
+     ✅ I12.4 THE THREE REPORTED UI ITEMS, re-measured on the rebuilt app:
+            #2 composer clears after the answer          PASS (my fix)
+            #3 sidebar marks the open conversation       PASS (one row aria-current)
+            #1 /chat starts a NEW conversation           FAIL (still inherits activeId)
+          #3 needed no styling change at all - bg-accent-wash and aria-current were always
+          there; it only needed a correct activeId, which this flow happens to set.
+
+INFRA-13 — the frontend bugs, root-caused and fixed
+────────────────────────────────────────────────────────────────────────────────────────
+     🔴 I13.1 THE REAL BUG WAS NOT ANY OF THE THREE REPORTED: a freshly generated answer
+          never rendered. `ask()` called window.history.replaceState BEFORE starting the
+          stream, on the premise - stated in its own comment - that it "changes the address
+          bar and nothing else". That was true of the Next version it was written against.
+          NEXT 15 PATCHES history.pushState/replaceState to sync its router, so the call is
+          a route change: /chat and /chat/[id] are different segments, the component
+          remounts, and useAnswerStream's reducer resets to `idle` one line before the fetch
+          starts.
+          Why it looked intermittent rather than broken:
+            fresh question   -> landing page for 28s, no answer
+            same question CACHED -> answer at t+2.1s
+          A cache hit finished in ~30ms and beat the remount. A real generation never could.
+          So: ask something new, see nothing; ask it again, see the answer.
+          PROVEN by disabling the line and re-asking a fresh question: "Sources found,
+          writing the answer" at t+2.1s, "Answer ready, with 4 sources" at t+4.1s.
+
+     🔴 I13.2 BUG #1 WAS NOT A ROUTING BUG. I twice tried to fix "/chat opens an old
+          conversation" by clearing activeId, and twice broke the ask flow. Wrong layer.
+          loadHistory falls back to /api/v1/session/history whenever no thread is selected,
+          and that endpoint returns EVERY message in the SESSION across ALL threads. So
+          /chat - where both "Ask a question" links point - rendered the previous
+          conversations. The function's own comment says the session endpoint is for the
+          ANONYMOUS single-thread path; it simply was not scoped to it.
+          FIX: `if (convos.enabled) { setHistory([]); return 0; }` before that fallback. A
+          new chat with conversations enabled is EMPTY.
+
+     ✅ I13.3 ALL FOUR VERIFIED IN A BROWSER, final configuration:
+            answer card renders on a FRESH question   PASS  (data-answer-kind=1)
+            #2 composer clears after the answer       PASS
+            #3 sidebar marks the open conversation    PASS  (one row aria-current)
+            #1 /chat starts a NEW conversation        PASS
+          #3 needed no styling change at any point - bg-accent-wash and aria-current were
+          always present; it only ever needed a correct activeId.
+
+     ⚖️ I13.4 A TRADE MADE DELIBERATELY, recorded because it is a real loss. The URL is no
+          longer rewritten to /chat/<id> when a thread is created. Doing it after the stream
+          still remounts, which drops the LIVE AnswerCard and with it the whole answer
+          TREATMENT - the grounded/refused/emergency styling, the evidence list, the
+          transparency row. A refusal that looks like an ordinary answer is worse than a
+          stale address bar. Measured both ways: with the late rewrite,
+          data-answer-kind count 0 and nine answer-kinds e2e tests failing; without it,
+          count 1 with the correct kind.
+          COST: refreshing DURING the first answer starts a new chat instead of reopening
+          the thread. The thread is created server-side and is already in the sidebar, one
+          click from /chat/<id>.
+          GETTING BOTH means surviving a remount - lifting the stream state out of
+          chat-surface into the conversations context. A real refactor, noted in the code,
+          and it belongs with whoever is rewriting this surface.

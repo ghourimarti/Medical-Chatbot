@@ -52,6 +52,12 @@ help:  ## Show this help
 #  traces pointing at the old one.
 # ------------------------------------------------------------------------------------------
 
+# The tiers are separate -f files under ONE project name, so every `up` of one tier sees
+# the other tiers' containers as "orphans" and warns. They are not orphans - they are the
+# rest of the stack. Silence the detection; `down` still passes --remove-orphans across
+# all four files, so real leftovers are still cleaned.
+export COMPOSE_IGNORE_ORPHANS := True
+
 DC_DATA := docker compose -f docker-compose.data.yaml
 DC_APP  := docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml
 DC_OBS  := docker compose -f docker-compose.observability.yaml
@@ -60,7 +66,27 @@ DC_FULL := docker compose -f docker-compose.data.yaml -f docker-compose.app.yaml
 GPU ?= $(shell nvidia-smi -L >/dev/null 2>&1 && echo 1 || echo 0)
 empty :=
 space := $(empty) $(empty)
+# Which single service `make reload` rebuilds. api is the default because it is the
+# one whose code changes every few minutes; ml-service and web carry the slow layers.
+SVC ?= api
 ENGINE ?= sglang
+
+# The chain `make reload` should use. Reloading CODE must not re-route TRAFFIC.
+#
+# reload used to export $(ENGINE_CHAIN) unconditionally, so it silently reset the chain to
+# the ENGINE default: after `make up-vllm`, a later `make reload` flipped serving back to
+# local-sglang, whose container was not running, so the breaker opened and every answer
+# fell through to groq. The GPU sat idle while hosted tokens were spent, and nothing said
+# so - `make which-engine` was the only way to notice.
+#
+# So: preserve whatever the container is already running, and only override when ENGINE was
+# given ON THE COMMAND LINE (`make reload ENGINE=vllm`). $(origin) is what distinguishes
+# that from the default above.
+ifeq ($(origin ENGINE),command line)
+  RELOAD_CHAIN = $(ENGINE_CHAIN)
+else
+  RELOAD_CHAIN = $(or $(shell docker exec p5-medical-chatbot-$(SVC)-1 printenv SERVING_CHAIN 2>/dev/null),$(ENGINE_CHAIN))
+endif
 ALL_ENGINE_PROFILES := --profile gpu --profile gpu-sglang --profile webui
 GPU_PROFILE := $(ENGINE_PROFILE)
 ENGINE_HINT = @echo ""; echo "  Test it:"; echo ""
@@ -227,6 +253,7 @@ vllm-down:	## Stop vLLM (weights kept)
 
 vllm-upv:	## Recreate the vLLM container from scratch (weights kept)
 	$(DC_GPU) --profile gpu rm -sf vllm
+	@docker volume create $(WEIGHTS_VOL) >/dev/null
 	$(DC_GPU) --profile gpu up -d --force-recreate vllm
 	@$(MAKE) --no-print-directory vllm-test
 
@@ -278,6 +305,7 @@ sglang-down:	## Stop SGLang (weights kept)
 
 sglang-upv:	## Recreate the SGLang container from scratch (weights kept)
 	$(DC_GPU) --profile gpu-sglang rm -sf sglang
+	@docker volume create $(WEIGHTS_VOL) >/dev/null
 	$(DC_GPU) --profile gpu-sglang up -d --force-recreate sglang
 	@$(MAKE) --no-print-directory sglang-test
 
@@ -344,6 +372,7 @@ webui:	## Chat UI for BOTH engines (ChatGPT-style, model picker)
 # ── GPU tier on its own (when you want the engines without the rest) ───────────────────
 gpu:	## Start vLLM + SGLang only (needs an NVIDIA GPU; first run pulls ~10GB)
 	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker. Aborting."; exit 1; }
+	@docker volume create $(WEIGHTS_VOL) >/dev/null
 	$(DC_GPU) --profile gpu up -d
 	@echo "  vLLM   http://localhost:$${VLLM_LOCAL_PORT:-5009}/v1/models"
 	@echo "  SGLang http://localhost:$${SGLANG_LOCAL_PORT:-5010}/v1/models"
@@ -443,6 +472,39 @@ up-app:	## APP only: ml-service, api, web - NEVER a database
 	@# while the API booted on whatever .env happened to say. A knob that reports a value
 	@# it does not apply is worse than no knob, because it is believed.
 	SERVING_CHAIN=$(ENGINE_CHAIN) $(DC_APP) up --build -d --wait ml-service api web
+
+reload:	## FAST DEV LOOP: rebuild ONE service and recreate only it. SVC=api (default)
+	@# The inner-loop command. `make up` re-evaluates five tiers, kind and the GPU engines
+	@# to redeploy one Python file; `make up-app` still rebuilds ml-service and web, whose
+	@# ~2GB torch layers are the slow part and almost never what changed.
+	@#
+	@# --no-deps is the load-bearing flag: without it compose walks depends_on and can
+	@# recreate postgres/qdrant/redis, so a one-line code change quietly restarts the data
+	@# tier - and an API rebuild that drops your Redis cache is not a fast loop.
+	@#
+	@# --wait means this returns when the container is HEALTHY, not when it is started.
+	@# Returning at "started" is how you end up testing the OLD code: the port is bound by
+	@# the previous process for a moment, so the smoke test passes against what you just
+	@# replaced.
+	@#
+	@# SERVING_CHAIN is exported for the same reason up-app exports it: .env would win over
+	@# the ENGINE= you asked for, and the container would run a chain this target did not
+	@# print. See the comment in up-app.
+	@# --force-recreate is NOT optional, and leaving it out fails SILENTLY. The image tag
+	@# never changes (medbot-api:0.1.0), so after --build compose compares the service
+	@# CONFIG, finds it identical, prints "Container ... Running" and keeps the OLD
+	@# container. Measured: image sha 7bd56880 built, container still on sha 79ad343d.
+	@# You get "Built" and "Healthy" and a container running the code you just replaced.
+	SERVING_CHAIN=$(RELOAD_CHAIN) $(DC_APP) up --build -d --no-deps --force-recreate --wait $(SVC)
+	@# Prove it, rather than trusting the log line that just lied - same idea as counting
+	@# Langfuse traces instead of reading a health check. ONE line on purpose: make runs
+	@# each recipe line in its own shell, so a multi-line block needs real continuations,
+	@# and a newline escaped into the text is a syntax error that fails the target AFTER
+	@# the reload already succeeded - a red build over a green deploy.
+	@IMG=$$(docker image inspect medbot-api:0.1.0 --format "{{.Id}}" 2>/dev/null); CON=$$(docker inspect p5-medical-chatbot-$(SVC)-1 --format "{{.Image}}" 2>/dev/null); if [ -n "$$IMG" ] && [ -n "$$CON" ] && [ "$$IMG" != "$$CON" ]; then echo "  WARNING: $(SVC) is NOT running the image just built ($$IMG vs $$CON)"; fi
+	@echo ""
+	@echo "  Reloaded: $(SVC)   chain=$(RELOAD_CHAIN)"
+	@echo "  Tests need no container at all:  uv run pytest apps/api/tests -q"
 
 down-app:	## Stop only the app services
 	$(DC_APP) stop ml-service api web
@@ -849,7 +911,7 @@ web-ci:	## The subset CI runs: everything that does NOT need a live backend
 	cd apps/web && pnpm exec playwright test --project=chromium --grep-invert "@live"
 
 web-design:	## Open the design-system gallery (needs `make web`)
-	@echo "http://localhost:$${WEB_PORT:-5008}/design
+	@echo "http://localhost:$${WEB_PORT:-5008}/design"
 
 web-e2e:	## Browser verification of the four answer kinds (needs the full stack up)
 	cd apps/web && pnpm exec playwright test --project=chromium e2e/answer-kinds.spec.ts

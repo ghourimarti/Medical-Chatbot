@@ -157,6 +157,12 @@ services:
       # "Authentication failed: password is incorrect, or there is no user with such name"
       # — after all 200+ Postgres migrations had already succeeded, so the failure looked
       # like a Langfuse bug rather than a ClickHouse one.
+    # ClickHouse sizes its thread pools from the host too, and took 982% CPU on this box
+    # while ingesting a handful of traces. It is a TRACE STORE for a local dev stack; it
+    # must never be able to starve the service it is observing. Observability that takes
+    # the application down is worse than no observability.
+    cpus: 3.0
+    mem_limit: 3g
     volumes:
       - langfuse_clickhouse:/var/lib/clickhouse
     ulimits:

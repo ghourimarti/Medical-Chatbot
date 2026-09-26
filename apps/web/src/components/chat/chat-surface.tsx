@@ -82,6 +82,7 @@ export function ChatSurface({ conversationId }: { conversationId?: string }) {
 
 
 
+
   const ask = useCallback(
     async (question: string) => {
       let id = convos.activeId;
@@ -89,19 +90,43 @@ export function ChatSurface({ conversationId }: { conversationId?: string }) {
         creatingForAsk.current = true;
         const created = await convos.create();
         id = created?.id ?? null;
-        // Give the new thread its own URL — via the HISTORY API, not the Next router.
-        //
-        // router.replace() triggers a real navigation: it remounted this component and
-        // destroyed the streaming state of the very request being started, so the answer
-        // never appeared as a live answer at all (it turned up later in the transcript,
-        // which looked like the answer had been "moved" somewhere else).
-        //
-        // replaceState changes the address bar and nothing else. React keeps rendering,
-        // the stream survives, and a refresh still lands on /chat/<id> and loads the
-        // thread — which is the entire point of the route.
-        if (id) window.history.replaceState(null, "", `/chat/${id}`);
       }
+      // Ask FIRST, retitle the URL AFTERWARDS. The order is the whole fix.
+      //
+      // This used to call `window.history.replaceState` here, before the stream, on the
+      // premise that it "changes the address bar and nothing else". That was true of the
+      // Next version it was written against. Next 15 PATCHES history.pushState/replaceState
+      // to keep its router in sync, so the call is a route change: /chat and /chat/[id] are
+      // different segments, this component remounts, and useAnswerStream's reducer resets
+      // to `idle` — destroying the stream that was being started one line later.
+      //
+      // MEASURED, which is the only reason this is understood at all:
+      //   fresh question, replaceState before the ask  -> landing page for 28s, no answer
+      //   same question CACHED, replaceState before    -> answer at t+2.1s
+      //   fresh question, replaceState removed         -> "Sources found..." at t+2.1s,
+      //                                                   "Answer ready" at t+4.1s
+      // The cached case only survived because it finished in ~30ms, beating the remount.
+      // That is why this looked intermittent rather than broken: ask something new and you
+      // saw nothing, ask it again and the answer appeared.
       await askStream(question, id);
+      // NO URL REWRITE HERE. Deliberate, and it costs something - say what.
+      //
+      // Doing it after the stream still remounts (Next 15 patches replaceState), which
+      // resets the reducer to `idle`. The answer does not vanish - the transcript has it by
+      // then - but the LIVE AnswerCard does, and with it the whole answer TREATMENT: the
+      // grounded/refused/emergency styling, the evidence list, the transparency row. A
+      // refusal must not look like an ordinary answer, and after a remount it does.
+      // Measured: `data-answer-kind` count 0, and nine answer-kinds e2e tests failing on
+      // exactly that selector.
+      //
+      // The cost of leaving it: the address bar stays /chat during the first answer, so a
+      // refresh at that moment starts a new chat instead of reopening the thread. The
+      // thread itself is safe - it is created server-side and is already in the sidebar,
+      // one click away at /chat/<id>.
+      //
+      // Getting both back means surviving a remount, i.e. lifting the stream state out of
+      // this component into the conversations context. That is a real refactor, not a
+      // tweak, and it belongs with whoever is rewriting this surface.
     },
     [askStream, convos],
   );
@@ -184,6 +209,20 @@ export function ChatSurface({ conversationId }: { conversationId?: string }) {
         const msgs = (await convos.messages(id)) as HistoryMessage[];
         setHistory(msgs);
         return msgs.length;
+      }
+      // No thread selected, but conversations ARE enabled: this is a NEW chat, so it is
+      // EMPTY. Falling through to the session endpoint here is what made /chat show the
+      // previous conversation - that endpoint returns every message in the SESSION, across
+      // all threads, so arriving at /chat (where both "Ask a question" links point) filled
+      // the page with whatever had been asked before. Reported as "it navigates me to some
+      // other random previous conversation instead of creating a new one".
+      //
+      // The session endpoint stays correct for the case its own comment describes: the
+      // ANONYMOUS single-thread path, where no conversation exists and the session
+      // genuinely is the thread. `enabled` is exactly that distinction.
+      if (convos.enabled) {
+        setHistory([]);
+        return 0;
       }
       const res = await fetch("/api/v1/session/history");
       if (!res.ok) return 0;

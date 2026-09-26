@@ -26,7 +26,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Trend, Counter, Rate } from 'k6/metrics';
 
-const BASE = __ENV.BASE_URL || 'http://localhost:1107';
+const BASE = __ENV.BASE_URL || 'http://localhost:5007';
 const TIER = __ENV.TIER || 'cache';
 const PEAK_RATE = parseInt(__ENV.PEAK_RATE || '50', 10);
 const DURATION = __ENV.DURATION || '30s';
@@ -34,6 +34,18 @@ const DURATION = __ENV.DURATION || '30s';
 const kindGrounded = new Counter('answers_grounded');
 const kindRefused = new Counter('answers_refused');
 const kindDegraded = new Counter('answers_degraded');
+// 429 is a CORRECT outcome, so tell k6 that. The iteration code already returns early on
+// one with the comment "a throttled request is a correct outcome, not a failure" - but that
+// intent was never enforced: k6's built-in http_req_failed counts every non-2xx, so the
+// rate limiter doing exactly its job scored 88.24% failed against a rate<0.02 threshold,
+// and TIER=guard could never pass at its target rate. Measured: 4504 of 5104 requests were
+// 429s at 200 RPS.
+//
+// Throttled requests stay VISIBLE via the rate_limited_429 counter and the "429s:" line in
+// the summary, so this hides nothing - it stops a defence mechanism from being reported as
+// an outage. Genuine failures (5xx, transport errors) still count.
+http.setResponseCallback(http.expectedStatuses(200, 429));
+
 const rateLimited = new Counter('rate_limited_429');
 const cacheHits = new Rate('cache_hit_rate');
 const serverLatency = new Trend('server_reported_total_ms');

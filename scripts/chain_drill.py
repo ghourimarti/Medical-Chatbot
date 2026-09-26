@@ -136,28 +136,69 @@ def ask(question):
         return 0, "(transport)", None, str(e)[:80]
 
 
-STEPS = [
-    ([], "local-sglang", "baseline: the primary leg answers"),
-    (["local-sglang"], "groq", "primary down -> first fallback takes over"),
-    (["local-sglang", "groq"], "openai", "two down -> last resort takes over"),
-    (["local-sglang", "groq", "openai"], None, "ALL down -> 503, never a fabricated answer"),
-]
+def resolve_chain():
+    """The chain the API is ACTUALLY RUNNING, read from the container.
+
+    NOT from .env, and the difference is the whole reason this function exists. `make
+    up-vllm` EXPORTS SERVING_CHAIN so it overrides .env for that invocation, and .env is
+    deliberately left alone. Read the file instead and you drill a chain nobody is running.
+
+    That is not hypothetical: with the API on `local-vllm,groq,openai` and a hardcoded
+    `local-sglang,groq,openai` list, every step blackholed a host that was not in the
+    chain. vLLM was never broken, kept answering correctly, and was scored FAIL four times
+    for it - while the failover this drill exists to prove went completely untested.
+    The script's own docstring warns about an injection that silently does nothing; this
+    was the mirror image, reporting FAIL for a chain that was never exercised.
+    """
+    raw = (sh("docker", "exec", CTR, "printenv", "SERVING_CHAIN").stdout or "").strip()
+    legs = [x.strip() for x in raw.split(",") if x.strip()]
+    unknown = [x for x in legs if x not in LEG_HOST]
+    if unknown:
+        print("  WARNING: no hostname mapping for " + ", ".join(unknown)
+              + " - those legs cannot be broken and are SKIPPED")
+    return [x for x in legs if x in LEG_HOST]
+
+
+def build_steps(legs):
+    """Break legs[:i] and expect legs[i] to answer; then break them all and expect 503."""
+    steps = []
+    for i, leg in enumerate(legs):
+        if i == 0:
+            why = "baseline: the primary leg answers"
+        elif i == 1:
+            why = "primary down -> first fallback takes over"
+        elif i == len(legs) - 1:
+            why = str(i) + " down -> last resort takes over"
+        else:
+            why = str(i) + " down -> next leg takes over"
+        steps.append((legs[:i], leg, why))
+    steps.append((list(legs), None, "ALL down -> 503, never a fabricated answer"))
+    return steps
 
 
 def main():
     print("")
     print("  FAILOVER DRILL (D4b) - breaking each leg in chain order")
     print("  " + "-" * 78)
+    legs = resolve_chain()
+    if not legs:
+        print("  CANNOT DRILL: no usable SERVING_CHAIN read from " + CTR)
+        print("  Is the api container up?   make ps")
+        return 1
+    steps = build_steps(legs)
+    primary = legs[0]
+    print("  chain under test: " + " -> ".join(legs) + "   (read from the container)")
+    print("")
     hosts_snapshot()
     results = []
     try:
-        for i, (broken, expect, why) in enumerate(STEPS):
+        for i, (broken, expect, why) in enumerate(steps):
             blackhole(broken)
             verify_blocked(broken)
             if broken:
                 time.sleep(POOL_DRAIN_SECONDS)
             clear_cache()
-            code, kind, venue, model = ask(QUESTIONS[i])
+            code, kind, venue, model = ask(QUESTIONS[i % len(QUESTIONS)])
             if expect is None:
                 ok = code == 503
                 got = "HTTP " + str(code) + " " + str(model)
@@ -185,7 +226,10 @@ def main():
         while time.time() - started < 120:
             clear_cache()
             code, kind, venue, model = ask(QUESTIONS[-1])
-            if venue == "local-sglang":
+            # The REAL primary, not a hardcoded name. Watching for a leg that is not in
+            # the chain means the loop can never succeed: it printed "breaker not closed
+            # yet" for the full 120s while the primary had never left.
+            if venue == primary:
                 back_after = round(time.time() - started)
                 break
             print("         still on " + str(venue) + " - breaker not closed yet")

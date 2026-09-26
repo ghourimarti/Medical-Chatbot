@@ -3,30 +3,31 @@
     "store": "postgres",
     "role": "system-of-record",
     "rows_before": {
-      "sessions": "2",
-      "messages": "6"
+      "sessions": "3196",
+      "messages": "6424"
     },
-    "backup_seconds": 0.17,
-    "backup_bytes": "8652",
-    "restore_seconds": 0.33,
+    "backup_seconds": 0.3,
+    "backup_bytes": "452525",
+    "restore_seconds": 0.87,
     "rows_after": {
-      "sessions": "2",
-      "messages": "6"
+      "sessions": "3196",
+      "messages": "6424"
     },
-    "partitions_restored": "6",
+    "partitions_restored": "36",
     "verified": true,
-    "rto_seconds": 0.5
+    "rto_seconds": 1.18
   },
   {
     "store": "qdrant",
     "role": "derived",
     "points_before": 7080,
-    "snapshot_seconds": 1.23,
-    "snapshot_bytes": 78171136,
-    "restore_seconds": 2.23,
+    "resolved_collection": "gale_live_v1790138622",
+    "snapshot_seconds": 5.88,
+    "snapshot_bytes": 78120960,
+    "restore_seconds": 9.68,
     "points_after": 7080,
     "verified": true,
-    "rto_seconds": 3.46
+    "rto_seconds": 15.57
   },
   {
     "store": "redis",
@@ -35,6 +36,6 @@
     "rpo_seconds": 0,
     "rto_seconds": 0,
     "verified": true,
-    "keys": "90919"
+    "keys": "18828"
   }
 ]

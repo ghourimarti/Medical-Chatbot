@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -34,7 +35,7 @@ from typing import Any
 import httpx
 
 PG_CONTAINER = "p5-medical-chatbot-postgres-1"
-QDRANT_URL = "http://localhost:1104"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:5002")
 PG_USER = "medbot"
 PG_DB = "medbot"
 RESTORE_DB = "medbot_restore_drill"
@@ -125,12 +126,49 @@ def drill_qdrant(collection: str) -> dict[str, Any]:
     result: dict[str, Any] = {"store": "qdrant", "role": "derived"}
     with httpx.Client(timeout=600.0) as c:
         info = c.get(f"{QDRANT_URL}/collections/{collection}").json()
+        if "result" not in info:
+            # Qdrant answers a missing collection with {"status":{"error":...}} and HTTP
+            # 200, so the naive info["result"] raised KeyError - a traceback that names
+            # a dict key while the real problem is a collection name nobody has used for
+            # weeks. Report what was asked for and what exists.
+            detail = (info.get("status") or {})
+            detail = detail.get("error") if isinstance(detail, dict) else str(detail)
+            print(f"  CANNOT DRILL: {detail}")
+            print(f"  asked for: {collection}")
+            names = c.get(f"{QDRANT_URL}/collections").json()
+            have = [x["name"] for x in (names.get("result") or {}).get("collections", [])]
+            print(f"  collections present: {', '.join(have) or '(none)'}")
+            print("  pass --collection <name>, or re-run ingestion")
+            result["ok"] = False
+            return result
         points = info["result"]["points_count"]
-        print(f"  live collection {collection}: {points} points")
+
+        # Resolve an ALIAS to the concrete collection before snapshotting, because Qdrant
+        # is inconsistent about it: POST /collections/<alias>/snapshots succeeds and writes
+        # the file under the RESOLVED collection's directory, while the recover call builds
+        # its path from the name you passed. Snapshot `gale_live` and the restore then asks
+        # for /qdrant/snapshots/gale_live/<file>, a directory that does not exist:
+        #   Bad request: Snapshot file "..." does not exist
+        # which reads like a broken snapshot rather than a name that was silently rewritten.
+        #
+        # Backing up the concrete collection is also the correct semantic. The alias is a
+        # POINTER (D11); what holds the vectors is `gale_live_vN`, and that is the thing
+        # whose loss costs a re-ingest.
+        aliases = c.get(f"{QDRANT_URL}/aliases").json()
+        resolved = next(
+            (a["collection_name"] for a in (aliases.get("result") or {}).get("aliases", [])
+             if a["alias_name"] == collection),
+            collection,
+        )
+        if resolved != collection:
+            print(f"  live collection {collection} -> {resolved}: {points} points")
+        else:
+            print(f"  live collection {collection}: {points} points")
         result["points_before"] = points
+        result["resolved_collection"] = resolved
 
         t0 = time.perf_counter()
-        snap = c.post(f"{QDRANT_URL}/collections/{collection}/snapshots").json()
+        snap = c.post(f"{QDRANT_URL}/collections/{resolved}/snapshots").json()
         snapshot_s = time.perf_counter() - t0
         name = snap["result"]["name"]
         size = snap["result"].get("size")
@@ -138,13 +176,13 @@ def drill_qdrant(collection: str) -> dict[str, Any]:
         result["snapshot_seconds"] = round(snapshot_s, 2)
         result["snapshot_bytes"] = size
 
-        restore_into = f"{collection}_restore_drill"
+        restore_into = f"{resolved}_restore_drill"
         c.delete(f"{QDRANT_URL}/collections/{restore_into}")
         t0 = time.perf_counter()
         # Recover from the snapshot Qdrant just wrote inside its own volume.
         resp = c.put(
             f"{QDRANT_URL}/collections/{restore_into}/snapshots/recover",
-            json={"location": f"file:///qdrant/snapshots/{collection}/{name}"},
+            json={"location": f"file:///qdrant/snapshots/{resolved}/{name}"},
         )
         restore_s = time.perf_counter() - t0
         if resp.status_code >= 400:
@@ -205,7 +243,12 @@ def drill_redis() -> dict[str, Any]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="backup/restore drill")
-    ap.add_argument("--collection", default="gale_medical_full_v1")
+    # `gale_live` is the ALIAS, and that is deliberately what gets drilled: it is the
+    # name the API reads, it survives every re-index, and it is the thing whose loss
+    # would be an outage. The old default `gale_medical_full_v1` was a concrete
+    # collection from a retired naming scheme, so this drill had been backing up a
+    # name that no longer existed.
+    ap.add_argument("--collection", default="gale_live")
     ap.add_argument("--out", default="eval-reports/backup-restore.json")
     args = ap.parse_args()
 

@@ -277,7 +277,15 @@ async def postflight(
     #
     # Never awaited and never allowed to raise: trace_answer swallows its own errors, and
     # observability must not be able to fail a medical answer.
-    _trace_to_langfuse(answer, question=question, pre=pre)
+    # NOT traced here any more. The Langfuse root is opened inside RagPipeline, because
+    # the LangChain callback handler nests each Runnable under the observation that is
+    # CURRENT while the chain runs - and postflight is, by definition, after it. Emitting
+    # from both places produced two traces per request: a deep tree and a flat orphan.
+    #
+    # Consequence worth knowing: paths that never enter the pipeline - cache hits, the
+    # kill switch, the spend cap - now produce no trace at all. That is correct. Langfuse
+    # records model calls, and those paths deliberately make none; a trace there would
+    # double-count cost for an answer that cost nothing.
 
     # Persistence is a SIDE EFFECT of answering, never a precondition (D21): a database
     # outage costs history, not availability.

@@ -4,10 +4,20 @@ FROM python:3.13-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
-# Copy only what's needed to resolve+install (better layer caching).
+# TWO syncs, and the split is the whole point of the layer order.
+#
+# Dependencies first, from the manifests ALONE. This layer is keyed only on pyproject.toml
+# and uv.lock, so it survives every source edit and the ~128 packages (torch alone is
+# 183 MB) are downloaded once instead of on every build.
 COPY pyproject.toml uv.lock ./
 COPY packages/core/pyproject.toml packages/core/
 COPY apps/api/pyproject.toml apps/api/
+RUN uv sync --frozen --no-dev --package medapi --no-install-project
+# Source second, then install only the local workspace packages against the deps above.
+# Previously the source COPY came BEFORE the single sync, so changing one line of Python
+# invalidated the dependency layer: `make reload` re-resolved and re-downloaded everything
+# and took ~6 minutes, measured, for a one-character edit. A cache key that includes the
+# files you edit most is a cache that never hits.
 COPY packages/core/ packages/core/
 COPY apps/api/ apps/api/
 RUN uv sync --frozen --no-dev --package medapi

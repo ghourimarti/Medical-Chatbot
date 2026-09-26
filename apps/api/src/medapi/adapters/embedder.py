@@ -7,12 +7,25 @@ requests. Moving this behind the HTTP ml-service is a config change, not a rewri
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from collections.abc import Sequence
 from functools import cached_property
+from typing import TYPE_CHECKING
 
-from sentence_transformers import SentenceTransformer
+if TYPE_CHECKING:  # import cost, not a circular import
+    from sentence_transformers import SentenceTransformer
+
+# sentence_transformers is imported INSIDE _model, not here, and the reason is startup
+# latency rather than tidiness. Importing it at module scope pulls in torch, which takes
+# tens of seconds in this container - and the API imports this module even when it is
+# configured to use the HTTP ml-service and will never construct a local model at all.
+#
+# That cost lands squarely inside the container healthcheck budget (start_period 30s +
+# 5 x 15s), so a perfectly healthy API can be recreated, spend its grace window importing
+# a library it is not going to use, and be marked `unhealthy` - which makes `docker
+# compose up --wait` fail, and makes every rebuild look like a broken build.
+# reranker.py already does the lazy import; this module was the outlier.
 
 # bge models recommend a query-side instruction prefix for retrieval; documents get none.
 _QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
@@ -45,6 +58,8 @@ class BgeEmbedder:
 
     @cached_property
     def _model(self) -> SentenceTransformer:
+        from sentence_transformers import SentenceTransformer
+
         model = SentenceTransformer(self._model_id, device=_device())
         # method renamed across sentence-transformers versions; support both.
         dim_fn = getattr(model, "get_embedding_dimension", None) or (

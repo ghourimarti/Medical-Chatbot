@@ -138,6 +138,12 @@ TIERS: list[tuple[str, list[Section]]] = [
             )),
         )),
         ("ML-SERVICE — embeddings + reranking", "http://localhost:5006/readyz", (
+            ("ML_NUM_THREADS", "6", (
+                "Math-thread cap for torch/OpenMP inside ml-service.",
+                "Unset, they size from the HOST core count and oversubscribe the",
+                "container: 3283% CPU on a 1600% budget made /embed time out at 60s",
+                "when it takes 0.26s warm. More threads than cores is slower, not faster.",
+            )),
             ("ML_SERVICE_PORT", "5006", (
                 "Must be up BEFORE the API: readiness checks it",
                 "the readiness probe.",
@@ -510,6 +516,15 @@ TIERS: list[tuple[str, list[Section]]] = [
                 "with below, which is what makes tracing work with no manual key copying.",
             )),
             ("LANGFUSE_SECRET_KEY", "sk-lf-medbot-local", ("SECRET.",)),
+            ("LANGFUSE_TIMEOUT", "30", (
+                "[infra] Read by the Langfuse SDK straight from the environment, not by",
+                "Settings - passing it in code would SHADOW this var (the SDK resolves",
+                "`timeout or env`), giving two knobs where the invisible one wins.",
+                "Span-export timeout in seconds. SDK default 5 LOSES spans silently:",
+                "root and children ship in different batches, so a slow ingest drops the",
+                "children and leaves a flat trace that looks like a bug in the app.",
+                "v3 fans each write to Postgres + ClickHouse + MinIO, so bursts are slow.",
+            )),
             ("LANGFUSE_HOST", "http://langfuse:3000", (
                 "Use http://localhost:5015 from the",
                 "host.",

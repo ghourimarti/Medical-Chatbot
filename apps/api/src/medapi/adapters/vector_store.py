@@ -12,6 +12,7 @@ index.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Mapping, Sequence
 
@@ -35,13 +36,46 @@ def _point_id(chunk_id: str) -> str:
     return str(uuid.uuid5(_POINT_NAMESPACE, chunk_id))
 
 
+
+def _default_timeout() -> int:
+    """Seconds. Overridable per deployment: a cold or loaded Qdrant is slower still."""
+    try:
+        return int(os.getenv("QDRANT_TIMEOUT_SECONDS", "60"))
+    except ValueError:
+        return 60
+
+
 class QdrantVectorStore:
     """VectorStorePort backed by Qdrant. One collection per corpus/index version."""
 
-    def __init__(self, url: str, collection: str, dimension: int) -> None:
+    def __init__(
+        self, url: str, collection: str, dimension: int, timeout: int | None = None
+    ) -> None:
         # check_compatibility=False: server image is pinned and the client is pinned to a
         # matching minor in pyproject; the advisory check only adds noise.
-        self._client = AsyncQdrantClient(url=url, prefer_grpc=False, check_compatibility=False)
+        #
+        # timeout is EXPLICIT because the client default of 5s is far too short for one
+        # real operation: the FIRST create_collection in a process.
+        #
+        # Measured against an idle Qdrant: the raw HTTP PUT with an identical body returns
+        # in 0.50s, while the same call through this client takes 19s from a bare script
+        # and over 30s from a pytest process. The cost is client-side and one-time - the
+        # library builds its request/response models on first use - so no amount of server
+        # headroom fixes it, and it does not reproduce on the second call.
+        #
+        # At 5s, ensure_collection() fails against a perfectly healthy Qdrant, and the
+        # error arrives as ResponseHandlingException: a name that describes the transport
+        # and says nothing about what happened. That cost a long debugging session in
+        # which the blame landed on the embedder and then on CPU starvation, because a
+        # timeout looks exactly like a slow dependency from the outside.
+        #
+        # Reads are unaffected (~0.9s); this only has to cover that first slow write.
+        self._client = AsyncQdrantClient(
+            url=url,
+            prefer_grpc=False,
+            check_compatibility=False,
+            timeout=timeout if timeout is not None else _default_timeout(),
+        )
         self._collection = collection
         self._dimension = dimension
 

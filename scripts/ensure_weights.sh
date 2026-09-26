@@ -31,6 +31,10 @@ HF_TOKEN="${HF_TOKEN:-}"
 CACHE_DIR="models--${MODEL//\//--}"
 BUSYBOX="busybox:1.37"
 
+# The volume is `external: true` in docker-compose.gpu.yaml - compose will refuse to start
+# an engine until it exists. Idempotent: a no-op when it is already there.
+docker volume create "$DEST_VOL" >/dev/null
+
 say() { printf '  %s\n' "$*"; }
 
 # A model is usable when its snapshot has real weight files and no partials are pending.

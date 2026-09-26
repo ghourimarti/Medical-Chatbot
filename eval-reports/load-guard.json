@@ -1,18 +1,18 @@
 {
   "tier": "guard",
-  "target_peak_rps": 40,
-  "achieved_rps": 19.61835394319755,
-  "requests": 1177,
+  "target_peak_rps": 200,
+  "achieved_rps": 97.61456079520845,
+  "requests": 5857,
   "failed_rate": 0,
-  "rate_limited": 0,
+  "rate_limited": 5400,
   "latency_ms": {
-    "med": 5.5077,
-    "p95": 10.481240000000007,
-    "p99": 17.83978
+    "med": 2.6412,
+    "p95": 20.292659999999994,
+    "p99": 82.02476399999838
   },
   "answers": {
     "grounded": 0,
-    "refused": 1177,
+    "refused": 457,
     "degraded": 0
   },
   "cache_hit_rate": 0

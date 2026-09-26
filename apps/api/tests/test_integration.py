@@ -25,6 +25,7 @@ from medcore.schema import Completion, Message, RetrievedChunk
 pytestmark = pytest.mark.integration
 
 
+
 async def _qdrant_reachable(url: str) -> bool:
     import httpx
 

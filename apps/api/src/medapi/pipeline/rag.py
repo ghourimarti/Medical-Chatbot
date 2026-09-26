@@ -16,11 +16,12 @@ import inspect
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.runnables.config import RunnableConfig
 
 from medapi.guardrails import (
     _MESSAGES,
@@ -28,9 +29,11 @@ from medapi.guardrails import (
     classify_input,
     contains_dosage_instruction,
 )
+from medapi.observability import llm_trace
 from medapi.observability.metrics import degradations_total
 from medapi.observability.tracing import question_fingerprint, set_attrs, stage_span
 from medapi.pipeline.context import build_context
+from medapi.pricing import cost_usd
 from medcore.config import Settings
 from medcore.errors import RerankerError, RetrievalError
 from medcore.ports import EmbedderPort, ModelPort, RerankerPort, VectorStorePort
@@ -159,6 +162,19 @@ def is_context_dependent(question: str) -> bool:
     # this far and still referring outward does so with a pronoun.
     return bool(_PRONOUN_RE.search(question))
 
+
+def _lf_config() -> RunnableConfig:
+    """LCEL config carrying the Langfuse callback, or an empty config when tracing is off.
+
+    This is what makes every Runnable in the chain show up as its own observation - the
+    guard / condense / embed / retrieve / rerank / build_context / generate tree, rather
+    than one summary node with the durations buried in metadata.
+    """
+    handler = llm_trace.langchain_handler()
+    config: RunnableConfig = {"callbacks": [handler]} if handler is not None else {}
+    return config
+
+
 class RagPipeline:
     def __init__(
         self,
@@ -208,10 +224,28 @@ class RagPipeline:
 
         Span attributes are PII-FREE by construction (see observability/tracing.py):
         a question fingerprint, never the question.
+
+        TWO tracers, on purpose, because they answer different questions: the OTel span
+        goes to Jaeger ("where did the 12 seconds go") and the Langfuse observation builds
+        the tree that sits beside the prompt and completion ("what did the model see at
+        this step"). Both hang off this one wrapper for the reason the paragraph above
+        gives - a stage added later is instrumented in BOTH by construction, instead of
+        being remembered in one and forgotten in the other.
         """
+        # Langfuse observation types are semantic: it groups, filters and charts on them,
+        # so a retrieval step typed `span` is invisible to every retrieval-quality view.
+        lf_type = {
+            "embed": "embedding",
+            "retrieve": "retriever",
+            "guard": "guardrail",
+            "condense": "chain",
+        }.get(name, "span")
 
         async def _run(state: PipelineState) -> PipelineState:
-            with stage_span(name, question_fp=question_fingerprint(state.question)) as span:
+            with (
+                stage_span(name, question_fp=question_fingerprint(state.question)) as span,
+                llm_trace.stage(name, lf_type),
+            ):
                 out = await fn(state)
                 set_attrs(
                     span,
@@ -227,11 +261,50 @@ class RagPipeline:
     async def answer(
         self, question: str, history: Sequence[Message] | None = None
     ) -> Answer:
-        state: PipelineState = await self._chain.ainvoke(
-            PipelineState(question=question, history=list(history or []))
+        # The Langfuse root is opened HERE rather than in postflight, and the reason is
+        # structural: the LangChain callback handler nests each Runnable under whatever
+        # observation is current, so the root has to be open while the chain runs. A
+        # postflight emitter can only ever produce one flat node after the fact.
+        with llm_trace.rag_trace(question, n_history=len(history or [])) as root:
+            state: PipelineState = await self._chain.ainvoke(
+                PipelineState(question=question, history=list(history or [])),
+                config=_lf_config(),
+            )
+            assert state.answer is not None
+            self._trace_generation(root, state.answer, n_contexts=len(state.chunks))
+            return state.answer
+
+    def _trace_generation(self, root: Any, answer: Answer, *, n_contexts: int) -> None:
+        """Attach the LLM call to the root and close it out.
+
+        Cost is recomputed here from the same pure pricing function postflight uses, so
+        the two cannot disagree; it is not yet on the Answer at this point.
+        """
+        if root is None:
+            return
+        spend = answer.usage.cost_usd or cost_usd(answer.model_id or "", answer.usage)
+        llm_trace.emit_generation(
+            root,
+            model_id=answer.model_id,
+            venue=getattr(answer, "venue", None),
+            prompt_tokens=answer.usage.prompt_tokens,
+            completion_tokens=answer.usage.completion_tokens,
+            cost_usd=spend,
+            duration_ms=answer.timings.generate_ms,
+            output_text=answer.text,
+            kind=answer.kind.value,
+            n_contexts=n_contexts,
         )
-        assert state.answer is not None
-        return state.answer
+        llm_trace.close_root(
+            root,
+            answer_text=answer.text,
+            kind=answer.kind.value,
+            model_id=answer.model_id,
+            prompt_version=self._answer_prompt.version,
+            prompt_sha=self._answer_prompt.sha256[:12],
+            total_ms=answer.timings.total_ms,
+        )
+
 
     async def answer_verbose(self, question: str) -> tuple[Answer, list[str]]:
         """Answer plus the FULL text of the passages the model saw.
@@ -255,8 +328,34 @@ class RagPipeline:
         equivalent. Only the generate stage differs.
         """
         t_start = time.perf_counter()
+        # The browser uses THIS path for every question, so the tree has to be built here
+        # too. Tracing only answer() would mean the one path real users take is the one
+        # path with no trace - the same asymmetry that left the output dosage guardrail
+        # covering only the path nobody uses.
+        with llm_trace.rag_trace(question, n_history=len(history or [])) as _root:
+            inner = self._stream_traced(question, history, t_start, _root)
+            # aclose() in a finally, NOT a bare `async for`. Delegating with `async for`
+            # alone leaves the inner generator to the garbage collector when the CONSUMER
+            # walks away, so its own finally - the one that closes the provider stream -
+            # runs late or never, and we keep paying for tokens nobody will read. Caught
+            # by test_early_consumer_exit_cancels_provider_stream, which is exactly the
+            # regression this wrapper would otherwise have introduced silently.
+            try:
+                async for _ev in inner:
+                    yield _ev
+            finally:
+                await inner.aclose()
+
+    async def _stream_traced(
+        self,
+        question: str,
+        history: Sequence[Message] | None,
+        t_start: float,
+        root: Any,
+    ) -> AsyncGenerator[SourcesEvent | TokenEvent | DoneEvent]:
         state: PipelineState = await self._prep_chain.ainvoke(
-            PipelineState(question=question, history=list(history or []))
+            PipelineState(question=question, history=list(history or [])),
+            config=_lf_config(),
         )
 
         # No-answer gate fired during prep: emit an empty source set and finish.
@@ -315,6 +414,11 @@ class RagPipeline:
             stream_kwargs["on_venue"] = _record_venue
         if "on_usage" in stream_params:
             stream_kwargs["on_usage"] = _record_usage
+        # generate_ms was never recorded on the streaming path. The consequence was not
+        # cosmetic: it is the single largest stage, so the trace showed 11.4s total with
+        # ~1.6s of visible children and no node for the missing 9.8s. Timed from the call
+        # that opens the provider stream to the last token.
+        t_gen = time.perf_counter()
         provider_stream = self._model.stream(
             messages=messages,
             max_tokens=self._s.llm_max_output_tokens,
@@ -350,7 +454,11 @@ class RagPipeline:
                 await aclose()
 
         timings_now = state.timings.model_copy(
-            update={"ttft_ms": ttft_ms, "total_ms": (time.perf_counter() - t_start) * 1000}
+            update={
+                "ttft_ms": ttft_ms,
+                "generate_ms": (time.perf_counter() - t_gen) * 1000,
+                "total_ms": (time.perf_counter() - t_start) * 1000,
+            }
         )
         if blocked:
             yield DoneEvent(
@@ -367,7 +475,11 @@ class RagPipeline:
 
         text = "".join(parts)
         timings = state.timings.model_copy(
-            update={"ttft_ms": ttft_ms, "total_ms": (time.perf_counter() - t_start) * 1000}
+            update={
+                "ttft_ms": ttft_ms,
+                "generate_ms": (time.perf_counter() - t_gen) * 1000,
+                "total_ms": (time.perf_counter() - t_start) * 1000,
+            }
         )
         # Same abstention rule as the non-streaming path (S3 finding).
         if _is_abstention(text):
@@ -381,6 +493,10 @@ class RagPipeline:
                 timings=timings,
             )
             return
+        self._trace_stream_generation(
+            root, text=text, kind=AnswerKind.GROUNDED.value, served=served,
+            usage=usage_seen, timings=timings, n_contexts=len(state.chunks),
+        )
         yield DoneEvent(
             kind=AnswerKind.GROUNDED,
             text=text,
@@ -390,6 +506,33 @@ class RagPipeline:
             usage=usage_seen,
             timings=timings,
         )
+
+    def _trace_stream_generation(
+        self, root: Any, *, text: str, kind: str, served: dict[str, str | None],
+        usage: Usage, timings: StageTimings, n_contexts: int,
+    ) -> None:
+        if root is None:
+            return
+        model_id = served.get("model_id")
+        llm_trace.emit_generation(
+            root,
+            model_id=model_id,
+            venue=served.get("venue"),
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cost_usd=usage.cost_usd or cost_usd(model_id or "", usage),
+            duration_ms=timings.generate_ms,
+            output_text=text,
+            kind=kind,
+            n_contexts=n_contexts,
+        )
+        llm_trace.close_root(
+            root, answer_text=text, kind=kind, model_id=model_id,
+            venue=served.get("venue"), ttft_ms=timings.ttft_ms,
+            total_ms=timings.total_ms,
+            prompt_version=self._answer_prompt.version,
+        )
+
 
     async def _guard(self, state: PipelineState) -> PipelineState:
         """Input guardrail, and the first stage, before any expensive or model-driven work.

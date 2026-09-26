@@ -17,6 +17,27 @@ services:
     env_file: [.env]
     environment:
       HF_HOME: /models
+      # Bound the math thread pools. Left alone, torch/OpenMP size themselves from the
+      # HOST core count (24 here) while the container is limited to 16, and every request
+      # spawns more threads than there are cores to run them. Measured: 3283% CPU on a
+      # 1600% budget, ml-service stuck on "Batches: 0%", and /embed - 0.26s when warm and
+      # idle - timing out past 60s. The API then reports `retrieval-unavailable`, so a
+      # thread-count default surfaces as a broken retriever.
+      # Oversubscription does not make embedding faster; it makes it thrash.
+      OMP_NUM_THREADS: "${ML_NUM_THREADS:-6}"
+      MKL_NUM_THREADS: "${ML_NUM_THREADS:-6}"
+      TORCH_NUM_THREADS: "${ML_NUM_THREADS:-6}"
+      TOKENIZERS_PARALLELISM: "false"
+      # torch's INTER-op pool is separate from the intra-op one and does not read
+      # OMP_NUM_THREADS; it defaults to the core count independently.
+      TORCH_NUM_INTEROP_THREADS: "2"
+    # A HARD bound, because the environment variables above are advisory: they constrain
+    # only the libraries that choose to read them. Measured with OMP_NUM_THREADS=6 applied
+    # and torch.get_num_threads() correctly reporting 6, this container still drew 2122%
+    # CPU while loading weights - the cap was real and something else was not honouring it.
+    # A limit the kernel enforces cannot be ignored by a library, and this service must not
+    # be able to starve the API that depends on it.
+    cpus: 8.0
     ports:
       - "${ML_SERVICE_PORT:-5006}:8001"
     volumes:

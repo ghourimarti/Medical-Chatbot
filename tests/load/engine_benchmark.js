@@ -12,7 +12,7 @@
  * that made D4b cheap to build.
  *
  * Usage:
- *   k6 run -e BASE_URL=http://localhost:1110/v1 -e MODEL=Qwen/Qwen2.5-7B-Instruct-AWQ \
+ *   k6 run -e BASE_URL=http://localhost:5009/v1 -e MODEL=Qwen/Qwen2.5-7B-Instruct-AWQ \
  *          -e LABEL=local-vllm tests/load/engine_benchmark.js
  *   k6 run -e BASE_URL=https://api.groq.com/openai/v1 -e MODEL=llama-3.1-8b-instant \
  *          -e API_KEY=$GROQ_API_KEY -e LABEL=groq tests/load/engine_benchmark.js
@@ -21,7 +21,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Trend, Counter, Rate } from 'k6/metrics';
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:1110/v1';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:5009/v1';
 const MODEL = __ENV.MODEL || 'Qwen/Qwen2.5-7B-Instruct-AWQ';
 const API_KEY = __ENV.API_KEY || '';
 const LABEL = __ENV.LABEL || 'unlabelled';

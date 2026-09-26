@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -28,7 +29,7 @@ from typing import Any
 
 import httpx
 
-API = "http://localhost:1107"
+API = os.getenv("MEDBOT_API", "http://localhost:5007")
 
 # Every probe MUST be a cache miss, or the drill proves nothing.
 #

@@ -144,5 +144,10 @@ services:
 
 volumes:
   # NOT in the Makefile's DATA_VOLS list, and that omission is the point.
+  # EXTERNAL: scripts/ensure_weights.sh creates and fills it with plain `docker run`, so it
+  # never carries compose labels. external stops compose warning about that AND makes
+  # `down -v` physically unable to delete it - only `make clean-models` can.
   vllm-hf-cache:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:-p5-medical-chatbot}_vllm-hf-cache
   open_webui_data:
