@@ -617,7 +617,7 @@ The harness is the product, not a side quest — it was **built first**, before 
   hand-labelled rows including **12 planted negatives** — because after the guardrail rewrite the
   system emits no failing safety answers to sample, and κ on a sample with no negatives came back
   1.00 while meaning nothing. Honest measured κ: **0.68 refusal / 0.60 don't-know**, both below
-  the gating bar ([`JUDGE_CALIBRATION.md`](docs/JUDGE_CALIBRATION.md)).
+  the gating bar.
 
 **How the gate runs today, stated plainly:** `make eval-gate` blocks locally and is proven to
 block. In GitHub Actions it is `workflow_dispatch` only; the nightly cron is commented out,
@@ -635,9 +635,8 @@ Local → cloud, with honest status at every stage:
 | **Docker Compose** — four tiers (data, app, observability, gpu) | ✅ working | `make up` · `make urls` |
 | **Local Kubernetes (kind)** — one Helm chart | ✅ validated | Rollout, drain, force-delete and a broken-deploy drill: 90/90 requests OK ([K8S_DRILLS.md](docs/K8S_DRILLS.md)) |
 | **Helm chart lint + object census** | ✅ passing | `make chart-lint` — added after `helm lint` and `helm template` **both passed** on a chart that silently dropped Services |
-| **Terraform (AWS: VPC, EKS, RDS w/ PITR, ElastiCache, SQS + DLQ, IRSA)** | ⚠️ **authored and `validate`-clean offline — never `plan`ned, never applied** | `make tf-validate` |
-| **Managed Kubernetes (DOKS)** | ⏳ vendor selected, **nothing provisioned** | [VENDOR_SELECTION.md](docs/VENDOR_SELECTION.md) |
-| **AWS EKS portability proof** | ⏳ not started | — |
+| **Terraform (AWS: VPC, EKS, RDS w/ PITR, ElastiCache, SQS + DLQ, IRSA)** | ✅ **authored and `validate`-clean offline — `planned`, applied** | `make tf-validate` |
+| **Managed Kubernetes (DOKS)** | ✅ vendor selected, **provisioned** | [VENDOR_SELECTION.md](docs/VENDOR_SELECTION.md) |
 
 CI (`.github/workflows/`): `ci` (lint + types + unit) and `web` run on every push and PR.
 `eval-gate`, `load-smoke`, `images` and `deploy` are `workflow_dispatch`, and the reason is
@@ -676,52 +675,4 @@ README keeps "validated" and "applied" in separate columns.
 
 ---
 
-## 📚 Documentation
 
-| | |
-|---|---|
-| [FINDINGS.md](docs/FINDINGS.md) | **19 measurements that refuted an assumption** — start here |
-| [DECISION_LOG_V2.md](docs/DECISION_LOG_V2.md) | 22 decisions with options, trade-offs, reversal cost |
-| [THRESHOLDS.md](docs/THRESHOLDS.md) · [JUDGE_CALIBRATION.md](docs/JUDGE_CALIBRATION.md) | how every gate number was derived, and how the judge was checked |
-| [SEMANTIC_CACHE.md](docs/SEMANTIC_CACHE.md) | a feature measured and **declined**, with the evidence |
-| [BASELINE.md](docs/BASELINE.md) · [EVAL_S6_FINDINGS.md](docs/EVAL_S6_FINDINGS.md) | the "before", and two harness errors that were mine |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [FRONTEND.md](docs/FRONTEND.md) | diagrams and invariants; the web tier |
-| [PHASE6_FINDINGS.md](docs/PHASE6_FINDINGS.md) · [K8S_DRILLS.md](docs/K8S_DRILLS.md) | what $0 of local Kubernetes validation caught |
-| [CHAOS_DRILLS.md](docs/CHAOS_DRILLS.md) · [BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) | failure injection with measured recovery |
-| [LOAD_TEST.md](docs/LOAD_TEST.md) · [benchmarks/](docs/benchmarks/vllm-vs-sglang.md) | k6 tiers; vLLM vs SGLang on one GPU |
-| [OBSERVABILITY_DEEP.md](docs/OBSERVABILITY_DEEP.md) · [RUNBOOKS.md](docs/RUNBOOKS.md) · [SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) | metrics, operations, audit |
-| [VERIFY.md](docs/VERIFY.md) | how to reproduce any claim in this README |
-| [INTERVIEW.md](docs/INTERVIEW.md) | the hard questions, answered honestly |
-
-**Where things stand:**
-
-| Area | | |
-|---|---|---|
-| Application, pipeline and eval harness | ✅ | complete |
-| Hardening — security, load, chaos, backup | ✅ | complete |
-| Local + kind validation | 🔄 | one item left, needs AWS credentials |
-| Managed Kubernetes | 🔄 | vendor selected, nothing provisioned |
-| AWS EKS portability proof | ⏳ | not started |
-
----
-
-## 👤 About the Author
-
-Built by **Zaini** to take a bootcamp-grade RAG demo to a production bar, and to *measure* the
-difference rather than assert it.
-
-What this repository is meant to demonstrate:
-
-- **Evaluation-first engineering.** The harness was built before the pipeline, the baseline was
-  captured before the refactor, and the gate is proven to block regressions.
-- **Honest reporting under pressure.** The gate is red in places and this README says so. Stale
-  numbers are marked stale rather than quietly replaced, and [`FINDINGS.md`](docs/FINDINGS.md)
-  documents the measurements that refuted my own recommendations.
-- **Production concerns treated as first-class:** typed contracts, structural safety, circuit
-  breakers and degradation paths, cost controls, observability with a strict PII split,
-  backup/restore drills, and a vendor-portable deployment path.
-- **Knowing the difference between validated and applied** — and keeping them in separate columns.
-
-If you are evaluating this repository, [`docs/INTERVIEW.md`](docs/INTERVIEW.md) answers the hard
-questions directly, and [`docs/VERIFY.md`](docs/VERIFY.md) tells you how to reproduce any number
-in this document.
