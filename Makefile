@@ -622,14 +622,33 @@ kind-start:	## Start (or create) the kind cluster and refresh kubeconfig
 	  docker start $(KIND_NODES) >/dev/null 2>&1 || true; \
 	  echo "  kind cluster '$(KIND_CLUSTER)' nodes started"; \
 	fi
+	@# STRIP kind's restart policy. kind creates its nodes with --restart=on-failure:1,
+	@# which is why they came back BY THEMSELVES after a reboot: shutting the machine down
+	@# kills them with 137, the daemon replays restart policies at next boot, sees a
+	@# non-zero exit on an on-failure container, and starts all three. Nothing in this
+	@# project asked for them and no compose file owns them, so they appear unexplained
+	@# minutes after login and hold RAM and ports 8080/8443 against whatever else wants them.
+	@#
+	@# Done HERE rather than once by hand because `kind create cluster` re-applies the
+	@# policy every time the cluster is recreated - a one-off `docker update` would be
+	@# silently undone by the next `make downv` + `make up`.
+	@#
+	@# These nodes now move ONLY when this Makefile says so: up/upv start them, down/downv
+	@# stop them, and a reboot does nothing.
+	@docker update --restart=no $(KIND_NODES) >/dev/null 2>&1 || true
 	@# ALWAYS re-export: a restarted control-plane gets a new API-server port, and the
 	@# stale kubeconfig then fails with "current-context is not set" - which reads like a
 	@# broken cluster rather than a stale pointer at a healthy one.
 	@kind export kubeconfig --name $(KIND_CLUSTER) >/dev/null 2>&1 || true
 
 kind-stop:	## Stop the kind nodes, PRESERVING the cluster and its state
+	@# --restart=no BEFORE the stop, so this holds even if the nodes were created outside
+	@# `make kind-start` (a bare `kind create cluster`, or a cluster made before this fix).
+	@# Without it a killed container is restarted by the daemon at the next boot, and
+	@# `make down` only looks like it worked until the machine is rebooted.
+	@docker update --restart=no $(KIND_NODES) >/dev/null 2>&1 || true
 	@docker stop $(KIND_NODES) >/dev/null 2>&1 || true
-	@echo "  kind nodes stopped (cluster preserved - 'make downv' deletes it)"
+	@echo "  kind nodes stopped and pinned down (no restart policy; 'make up' brings them back)"
 
 kind-status:	## Nodes and pods, or a clear reason why not
 	@if ! kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
