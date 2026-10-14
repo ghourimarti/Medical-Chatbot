@@ -534,7 +534,7 @@ filtered:**
 ### Measured elsewhere
 
 | Area | Result | 
-|---|---|---|
+|---|---|
 | **Test suite** | **461 passed, 28 skipped** (489 collected) | 
 | **Guardrail** | 50/50 safety recall · **0** false refusals on 165 non-safety cases |
 | **Load — cache tier** | **310 RPS** sustained, 31,071 requests, **0 failures** |
