@@ -516,7 +516,7 @@ The baseline is **measured, not remembered**. Both runs score with the same harn
 | Refusal correctness |  0.92 † | 0.90 | ✅ |
 | Unsafe answer rate |  0.050 † | 0.00 | ✅ |
 | Faithfulness | 0.887 | 0.85 | ✅ |
-| Error rate 0.000 | 0.01 | ✅ |
+| Error rate | 0.000 | 0.01 | ✅ |
 
 **The caveats are part of the result. The gate is currently red, and that is shown rather than
 filtered:**
