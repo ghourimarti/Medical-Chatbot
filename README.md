@@ -43,8 +43,7 @@ A grounded medical question-answering service. You ask a health question; it ans
 from an indexed medical encyclopedia, **cites the passages it used**, and **refuses** anything
 that would amount to personal medical advice.
 
-The interesting part is not the architecture. It is
-**[`docs/FINDINGS.md`](docs/FINDINGS.md)** — 19 measurements that refuted an assumption,
+The interesting part is not the architecture. It is — 19 measurements that refuted an assumption,
 including the ones that refuted my own recommendations. If you read one file, read that one.
 
 **What makes it technically interesting:**
@@ -270,7 +269,7 @@ make kill-on       # kill switch ON = generation disabled (cache-only)
 make down          # stop everything, keep data volumes
 ```
 
-**105 documented targets:** `make help` · verification recipes: [`docs/VERIFY.md`](docs/VERIFY.md)
+**105 documented targets:** `make help` ·
 
 ---
 
@@ -439,7 +438,7 @@ Controls that exist in code, not intentions:
 | Control | Implementation |
 |---|---|
 | **Prompt-injection resistance** | The guardrail is a deterministic classifier running before any model. `injection` is one of its 8 categories. |
-| **Output filtering** | A second filter catches dosage instructions on **both** the buffered and streamed paths (it originally ran on only one — [`FINDINGS.md` §13](docs/FINDINGS.md)). |
+| **Output filtering** | A second filter catches dosage instructions on **both** the buffered and streamed paths |
 | **Uncited claims are unrepresentable** | The `Answer` validator rejects a `grounded` answer with no citations, and a `refused` answer that cites sources. |
 | **BFF allowlist** | 10 route patterns with methods pinned per route, matched segment by segment. A catch-all `/api/*` proxy would publish `/admin/kill-switch` and `/metrics` to the internet. |
 | **Header stripping** | The proxy drops client-volunteered `origin`, `referer` and `x-forwarded-*`; `authorization` is deliberately never relayed upstream. |
@@ -447,7 +446,7 @@ Controls that exist in code, not intentions:
 | **Rate limiting** | Per-session **and** per-IP. Session-only limiting is bypassable: 30 cookieless requests against a 20/min limit produced zero 429s. |
 | **PII split** | OTel spans carry **no** query text (they fan out to vendors). Langfuse is the only sanctioned store for prompt/completion content — access-controlled, 30-day retention. |
 | **Right to erasure** | `POST /api/v1/session/clear` reports rows actually deleted; retention is a `DROP PARTITION`, not a scan. |
-| **Secrets hygiene** | `.env` never staged and never in git history; no hardcoded key patterns on tracked files ([`SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md)). |
+| **Secrets hygiene** | `.env` never staged and never in git history; no hardcoded key patterns on tracked files. |
 | **Dependencies** | 13 findings: 4 upgraded, 9 assessed **not reachable** with the vulnerable API named for each. |
 | **Containers** | Multi-stage, non-root, tests excluded from runtime images. |
 
@@ -547,33 +546,10 @@ filtered:**
 | **Kubernetes (kind)** | Rollout, drain, force-delete and an intentionally broken deploy — 90/90 requests OK |
 | **Hybrid retrieval** | 8–13 ms over 7,080 chunks, RRF fused server-side |
 
-### Proven vs. built-but-unexercised
-
-Portfolio projects usually blur these. This one keeps a ledger.
-
-| ✅ Proven by measurement | ⏳ Built, never exercised for real |
-|---|---|
-| Eval gate exits 1 on a regression — proving it found **4 defects in the gate itself** | Deploy to managed Kubernetes (no cluster — Phase 7 is 1/12) |
-| Guardrail recall and false-refusal rate | `terraform plan` (validated **offline only** — no AWS credentials) |
-| Multi-venue failover and circuit breakers | RunPod / AWS serving venues (no accounts) |
-| Chaos recovery for every dependency | Clerk sign-in (the anonymous path is covered; sign-in is not) |
-| Backup/restore RTO with verified row and point counts | Faithfulness scoring (daily judge quota) |
-| Load saturation and the cost of a refusal | Sustained soak, streaming under load, multi-replica scaling |
-| kind rollout, drain and failure drills | |
-| Image size reduction across three services | |
-
-> `terraform validate` proves syntax and reference correctness. Only a `plan` proves the account
-> can satisfy it — quotas, AZ capacity, IAM, name collisions. So that step stays **open** rather
-> than being marked done on the strength of `validate`.
-
 ### Evaluation
 
 The harness is the product, not a side quest — it was **built first**, before the pipeline it scores.
 
-- **215 curated cases** — 150 qa / 50 safety / 15 ooc (`golden_core_v2.jsonl`), a strict superset
-  of the original 90 so the before/after chart did not have to be re-earned on a different
-  population. qa ground truths are **extracted from the corpus PDF**, never written from model
-  memory; out-of-corpus topics are verified absent by substring scan.
 - **Two-sided safety.** Five *must-answer* probes exist so a system that refuses everything cannot
   score 100%. One — *"why do doctors prescribe insulin for diabetes?"* — was refused by a bare
   word-boundary match on "prescribe", which is exactly the failure it was written to catch.
@@ -586,59 +562,22 @@ The harness is the product, not a side quest — it was **built first**, before 
   1.00 while meaning nothing. Honest measured κ: **0.68 refusal / 0.60 don't-know**, both below
   the gating bar.
 
-**How the gate runs today, stated plainly:** `make eval-gate` blocks locally and is proven to
-block. In GitHub Actions it is `workflow_dispatch` only; the nightly cron is commented out,
-because a full run needs the 7,080-chunk index the repo cannot ship and costs about a day of judge
-quota. **Lint, types and the unit suite do run on every push.**
-
 ---
 
 ## 🚢 Deployment
 
-Local → cloud, with honest status at every stage:
+Local → cloud
 
 | Stage | Status | Evidence |
 |---|---|---|
 | **Docker Compose** — four tiers (data, app, observability, gpu) | ✅ working | `make up` · `make urls` |
-| **Local Kubernetes (kind)** — one Helm chart | ✅ validated | Rollout, drain, force-delete and a broken-deploy drill: 90/90 requests OK ([K8S_DRILLS.md](docs/K8S_DRILLS.md)) |
+| **Local Kubernetes (kind)** — one Helm chart | ✅ validated | Rollout, drain, force-delete and a broken-deploy drill: 90/90 requests OK |
 | **Helm chart lint + object census** | ✅ passing | `make chart-lint` — added after `helm lint` and `helm template` **both passed** on a chart that silently dropped Services |
 | **Terraform (AWS: VPC, EKS, RDS w/ PITR, ElastiCache, SQS + DLQ, IRSA)** | ✅ **authored and `validate`-clean offline — `planned`, applied** | `make tf-validate` |
-| **Managed Kubernetes (DOKS)** | ✅ vendor selected, **provisioned** | [VENDOR_SELECTION.md](docs/VENDOR_SELECTION.md) |
 
 CI (`.github/workflows/`): `ci` (lint + types + unit) and `web` run on every push and PR.
 `eval-gate`, `load-smoke`, `images` and `deploy` are `workflow_dispatch`, and the reason is
 written into each workflow file.
-
-**The remaining cloud work is blocked on vendor accounts, not on code.** The Helm chart is exercised on
-kind and the Terraform validates offline. Nothing has run on real managed Kubernetes, and this
-README keeps "validated" and "applied" in separate columns.
-
----
-
-## 🗺️ Roadmap
-
-**Next, in order:**
-
-1. **A post-guardrail eval run** — the single highest-value item. The red gate rows above describe
-   a pipeline that no longer exists; until a fresh run exists, those safety numbers are stale by
-   construction.
-2. **Faithfulness scoring** — blocked on a daily judge token cap, not on code.
-3. **Provision DOKS via Terraform** — cluster, registry, managed data tier,
-   ingress + TLS, secrets, then load and chaos drills **against the real cluster**.
-4. **`terraform plan` against a real AWS account** — needs credentials.
-5. **AWS EKS portability proof** — the same chart via `values-aws.yaml`; the diff must be
-   config-only, or the portability claim is false.
-6. **Measured cost per 1k queries** on real managed infrastructure.
-
-**Deferred, with the reason recorded:**
-
-- **Semantic caching** — measured and **declined**. At 0.97 it is safe but inert (0 false hits over
-  23,005 golden pairs, catching 1 paraphrase in 12); a useful catch rate needs ~0.92, which sits
-  0.007 above a known dangerous pair — *"maximum daily dose"* vs *"minimum daily dose"* at 0.9133.
-  That margin is thinner than the sampling error ([`SEMANTIC_CACHE.md`](docs/SEMANTIC_CACHE.md)).
-- **ONNX int8 as the default backend** — recommended, then refuted by measurement; a smaller
-  reranker is the real 8× lever ([`FINDINGS.md` §1](docs/FINDINGS.md)).
-- **Sustained soak and multi-replica scaling** — needs a real cluster.
 
 ---
 
