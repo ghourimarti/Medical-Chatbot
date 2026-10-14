@@ -545,7 +545,7 @@ filtered:**
 | **Engines** | vLLM vs SGLang on one RTX 3060: SGLang wins p95 (735 vs 902 ms), **vLLM wins p99** (1034 vs 2504 ms) and throughput (58 vs 52 tok/s) | 
 | **Images** | 26.18 GB → **6.59 GB** (−75%) across three services |
 | **Kubernetes (kind)** | Rollout, drain, force-delete and an intentionally broken deploy — 90/90 requests OK |
-| **Hybrid retrieval** | 8–13 ms over 7,080 chunks, RRF fused server-side | [EVAL_S6_FINDINGS.md](docs/EVAL_S6_FINDINGS.md) |
+| **Hybrid retrieval** | 8–13 ms over 7,080 chunks, RRF fused server-side |
 
 ### Proven vs. built-but-unexercised
 
